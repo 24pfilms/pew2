@@ -130,6 +130,24 @@ export function buildTaskXml(options: InstallOptions = {}): string {
         <StopAtDurationEnd>false</StopAtDurationEnd>
       </Repetition>
     </LogonTrigger>
+    <!-- The logon trigger alone leaves the keepalive unarmed for this whole
+         session: a logon has already happened by the time anyone runs
+         pew2 setup, so it never fires again and NextRunTime stays empty.
+         A daemon that then died at midday stayed dead until the machine was
+         logged into again. This starts the same repetition from a boundary
+         already in the past, so the clock is running the moment the task
+         exists; StartWhenAvailable is what picks up a boundary that has
+         been and gone. IgnoreNew makes the extra trigger free - while the
+         daemon is up, every repeat of both triggers is discarded. -->
+    <TimeTrigger>
+      <Enabled>true</Enabled>
+      <StartBoundary>2020-01-01T00:00:00</StartBoundary>
+      <Repetition>
+        <Interval>PT1M</Interval>
+        <Duration>P3650D</Duration>
+        <StopAtDurationEnd>false</StopAtDurationEnd>
+      </Repetition>
+    </TimeTrigger>
   </Triggers>
   <Principals>
     <Principal id="Author">

@@ -321,3 +321,18 @@ test("the browse allowlist reaches the service, or an external disk is invisible
 
   expect(xml).toContain("set &quot;PEW2_BROWSE_ROOTS=L:\\&quot;");
 });
+
+test("the keepalive is armed at install, not only at the next logon", () => {
+  // The repetition used to hang off the logon trigger alone. A logon has
+  // already happened by the time anyone runs `pew2 setup`, so that trigger
+  // never fires again in the session that installed it and the repetition is
+  // never armed: `NextRunTime` reads empty, and a daemon that dies at midday
+  // stays dead until the machine is logged into again. A boundary trigger
+  // carrying the same repetition starts the clock the moment the task exists.
+  const xml = buildTaskXml();
+
+  expect(xml).toContain("<TimeTrigger>");
+  // Both triggers repeat, so neither a fresh logon nor a mid-session install
+  // leaves the daemon without a supervisor.
+  expect(xml.match(/<Repetition>/g)).toHaveLength(2);
+});
