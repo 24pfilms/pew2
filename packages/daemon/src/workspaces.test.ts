@@ -12,7 +12,7 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, realpath, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { discoverRepos, listDirectory, resolveBrowsePath } from "./workspaces.js";
+import { browsableRoots, discoverRepos, listDirectory, resolveBrowsePath } from "./workspaces.js";
 
 /**
  * A home directory with a few projects in it.
@@ -208,4 +208,31 @@ test("the scan is bounded, so an enormous home cannot hang the daemon", async ()
   // even when almost nothing matches.
   const found = await discoverRepos({ roots, scanLimit: 5 });
   expect(found.length).toBeLessThanOrEqual(5);
+});
+
+const WIN = process.platform === "win32";
+
+test.if(WIN)("a Windows drive path survives PEW2_BROWSE_ROOTS", () => {
+  // The separator was a hardcoded ":", which is also what every Windows path
+  // carries after its drive letter: `L:\\code` split into "L" and "\\code", so
+  // the allowlist gained two nonsense entries and lost the drive the user
+  // actually named — browsing an external disk silently found nothing.
+  // Windows separates a list of paths with ";", exactly as PATH does.
+  const roots = browsableRoots({ PEW2_BROWSE_ROOTS: "L:\\" }, "C:\\Users\\ada");
+
+  expect(roots).toContain("L:\\");
+});
+
+test.if(WIN)("several Windows roots still split, on ';'", () => {
+  const roots = browsableRoots({ PEW2_BROWSE_ROOTS: "L:\\code;D:\\work" }, "C:\\Users\\ada");
+
+  expect(roots).toContain("L:\\code");
+  expect(roots).toContain("D:\\work");
+});
+
+test.if(!WIN)("POSIX roots still split on ':'", () => {
+  const roots = browsableRoots({ PEW2_BROWSE_ROOTS: "/mnt/a:/mnt/b" }, "/home/ada");
+
+  expect(roots).toContain("/mnt/a");
+  expect(roots).toContain("/mnt/b");
 });

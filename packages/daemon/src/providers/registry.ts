@@ -58,8 +58,42 @@ function platformOf(env: NodeJS.ProcessEnv): Platform {
  * because the registry value is conventionally uppercase and the files on disk
  * are not.
  */
+/**
+ * Read an environment variable the way Windows itself does: by name, ignoring
+ * case.
+ *
+ * Windows variable names are case-insensitive, and the block a process is
+ * handed conventionally spells this one `Path`. Node hides that behind a
+ * case-insensitive proxy, so `process.env.PATH` reads `Path` and every lookup
+ * written in uppercase looks correct. The moment that proxy is **spread** —
+ * which is how a caller adds or drops a single variable — the result is an
+ * ordinary, case-*sensitive* object, `env.PATH` is undefined, and the search
+ * runs over no directories at all.
+ *
+ * That is not theoretical: Git Bash exports an uppercase `PATH`, so every
+ * interactive run resolved agents correctly, while the daemon started by a
+ * Windows service was given `Path` and reported every provider it had —
+ * `ggcoder`, `npx`, all of them — as "not found on PATH".
+ *
+ * POSIX names are genuinely case-sensitive, so the fallback scan is Windows
+ * only; `PATH` and `Path` are two different variables there.
+ */
+export function envValue(
+  env: NodeJS.ProcessEnv,
+  name: string,
+  windows: boolean,
+): string | undefined {
+  const direct = env[name];
+  if (direct !== undefined || !windows) return direct;
+  const lower = name.toLowerCase();
+  const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === lower);
+  return key === undefined ? undefined : env[key];
+}
+
+// Only ever called once the platform is known to be Windows, so the lookup is
+// unconditionally case-insensitive.
 function windowsExtensions(env: NodeJS.ProcessEnv): string[] {
-  const raw = env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD";
+  const raw = envValue(env, "PATHEXT", true) ?? ".COM;.EXE;.BAT;.CMD";
   return raw.split(";").map((ext) => ext.trim().toLowerCase()).filter(Boolean);
 }
 
@@ -147,7 +181,10 @@ export function findOnPath(
     : // Windows resolves the current directory before PATH, and a user who
       // installed an agent into the folder they are standing in should not be
       // told it is missing.
-      [...(windows ? [process.cwd()] : []), ...(env.PATH ?? "").split(sep).filter(Boolean)]
+      [
+        ...(windows ? [process.cwd()] : []),
+        ...(envValue(env, "PATH", windows) ?? "").split(sep).filter(Boolean),
+      ]
         // PATH entries are conventionally quoted on Windows when they contain
         // spaces; the quotes are syntax, not part of the directory name.
         .map((dir) => dir.replace(/^"(.*)"$/, "$1"));

@@ -23,7 +23,7 @@
  */
 import { readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, resolve, sep } from "node:path";
 
 /** A directory the user could start a conversation in. */
 export interface WorkspaceEntry {
@@ -89,7 +89,10 @@ export function browsableRoots(
   home: string = homedir(),
 ): string[] {
   const roots = [resolve(home)];
-  for (const extra of (env.PEW2_BROWSE_ROOTS ?? "").split(":")) {
+  // `delimiter`, not a literal ":" — that is the character every Windows path
+  // carries after its drive letter, so `L:\code` was split into "L" and
+  // "\code" and the disk the user named was never on the allowlist at all.
+  for (const extra of (env.PEW2_BROWSE_ROOTS ?? "").split(delimiter)) {
     if (extra.trim()) roots.push(resolve(extra.trim()));
   }
   return roots;

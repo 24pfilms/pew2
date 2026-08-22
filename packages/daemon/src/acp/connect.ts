@@ -8,7 +8,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { Readable, Writable } from "node:stream";
 import { client, ndJsonStream, type ClientConnection } from "@agentclientprotocol/sdk";
-import { findOnPath, type LoadedProvider } from "../providers/registry.js";
+import { envValue, findOnPath, type LoadedProvider } from "../providers/registry.js";
 import { humanError } from "../errors.js";
 import type { StoredAttachment } from "../attachments.js";
 import { promptBlocks, type PromptCapabilities } from "./promptBlocks.js";
@@ -497,7 +497,7 @@ export function launchSpec(
   // outer quotes mean exactly "strip these two", which is what the line is
   // built to expect.
   return {
-    command: env.COMSPEC ?? "cmd.exe",
+    command: envValue(env, "COMSPEC", true) ?? "cmd.exe",
     args: ["/d", "/s", "/c", `"${line}"`],
     windowsVerbatimArguments: true,
   };

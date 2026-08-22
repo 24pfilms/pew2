@@ -179,8 +179,9 @@ test("the task keeps running on battery, which is the normal case", () => {
 test("the task runs as the user, not elevated", () => {
   // A real Windows service would need Administrator and run in session 0, away
   // from the user's environment — where their agents' credentials live.
-  const xml = buildTaskXml();
+  const xml = buildTaskXml({ env: { USERDOMAIN: "WORKSTATION", USERNAME: "ada" } });
 
+  expect(xml.match(/<UserId>WORKSTATION\\ada<\/UserId>/g)).toHaveLength(2);
   expect(xml).toContain("<LogonType>InteractiveToken</LogonType>");
   expect(xml).toContain("<RunLevel>LeastPrivilege</RunLevel>");
 });
@@ -193,8 +194,13 @@ test("a path with a space is quoted in the task's command line", async () => {
 });
 
 test("environment and log redirection are carried, since a task has neither", () => {
-  const xml = buildTaskXml({ port: 9001, experimental: true });
+  const xml = buildTaskXml({
+    port: 9001,
+    experimental: true,
+    env: { PATH: "C:\\Program Files\\Agent;C:\\Users\\ada\\AppData\\Roaming\\npm" },
+  });
 
+  expect(xml).toContain('set &quot;PATH=C:\\Program Files\\Agent;C:\\Users\\ada\\AppData\\Roaming\\npm&quot;');
   expect(xml).toContain('set &quot;PEW2_PORT=9001&quot;');
   expect(xml).toContain('set &quot;PEW2_EXPERIMENTAL=1&quot;');
   expect(xml).toContain("daemon.log");
@@ -219,10 +225,10 @@ test("the task file is written as Unicode, which schtasks requires", async () =>
   const home = await mkdtemp(join(tmpdir(), "pew2-task-"));
   await installScheduledTask({ home }, recorder());
 
-  // A plain UTF-8 file is rejected with a bare "The task XML is malformed".
-  // Read as bytes: `.text()` decodes and strips the very mark being asserted.
+  // schtasks requires UTF-16LE; even UTF-8 with a Unicode BOM is rejected with
+  // a bare "The task XML is malformed". Read bytes so decoding cannot hide it.
   const bytes = new Uint8Array(await Bun.file(taskXmlPath(home)).arrayBuffer());
-  expect([bytes[0], bytes[1], bytes[2]]).toEqual([0xef, 0xbb, 0xbf]);
+  expect([bytes[0], bytes[1]]).toEqual([0xff, 0xfe]);
 });
 
 test("a task that was never created reads as not-installed", async () => {
@@ -296,4 +302,22 @@ test("a sleeping machine is not woken to run the daemon", () => {
   // It would drain a closed laptop for a daemon nobody is talking to; the logon
   // trigger picks it up when the machine is next in use.
   expect(buildTaskXml()).toContain("<WakeToRun>false</WakeToRun>");
+});
+
+test("the task starts somewhere an agent can actually write", () => {
+  // Without this the task inherits C:\WINDOWS\system32 as its cwd, and an agent
+  // that treats cwd as a project root fails there — GG Coder's capability probe
+  // died on `EPERM: mkdir 'C:\WINDOWS\system32\.gg'`, which took its whole
+  // session history off the phone.
+  const xml = buildTaskXml({ home: "C:\Users\ada" });
+
+  expect(xml).toContain("<WorkingDirectory>C:\Users\ada</WorkingDirectory>");
+});
+
+test("the browse allowlist reaches the service, or an external disk is invisible", () => {
+  // A task inherits no environment, so a user whose code lives on another
+  // volume loses the only setting that lets them browse to it.
+  const xml = buildTaskXml({ env: { PEW2_BROWSE_ROOTS: "L:\\" } });
+
+  expect(xml).toContain("set &quot;PEW2_BROWSE_ROOTS=L:\\&quot;");
 });

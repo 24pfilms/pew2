@@ -337,8 +337,8 @@ test("canSelfUpdate answers for the platform without touching the network", () =
   expect(canSelfUpdate({ ...darwinCompiled })).toBe(true);
   expect(canSelfUpdate({ ...darwinCompiled, compiled: false })).toBe(false);
   expect(canSelfUpdate({ ...darwinCompiled, supervised: false })).toBe(false);
-  expect(canSelfUpdate({ platform: "linux", arch: "x64", compiled: true })).toBe(false);
-  expect(canSelfUpdate({ platform: "win32", arch: "x64", compiled: true })).toBe(false);
+  expect(canSelfUpdate({ platform: "linux", arch: "x64", compiled: true, supervised: false })).toBe(false);
+  expect(canSelfUpdate({ platform: "win32", arch: "x64", compiled: true, supervised: false })).toBe(false);
 });
 
 test("this build refuses to update itself, because it is a source checkout", async () => {

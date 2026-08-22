@@ -253,3 +253,65 @@ test("windows: COMSPEC is honoured when set", async () => {
   const spec = launchSpec("agent", [], win(dir, { COMSPEC: "C:\\Windows\\System32\\cmd.exe" }));
   expect(spec.command).toBe("C:\\Windows\\System32\\cmd.exe");
 });
+
+// --- variable-name casing ---------------------------------------------------
+//
+// Windows environment variable names are case-insensitive, and the block it
+// hands a process conventionally spells this one `Path`. Node papers over that
+// with a case-insensitive proxy, so `process.env.PATH` reads `Path` and every
+// lookup here looked correct. Spreading that proxy — which `launchSpec` does to
+// drop a single key — produces an ordinary object, and ordinary objects are
+// case-*sensitive*: `env.PATH` is then undefined, the search runs over no
+// directories at all, and every agent falls back to a bare name that libuv
+// cannot resolve.
+//
+// Git Bash exports an uppercase `PATH`, which is exactly why this survived
+// every interactive run and only appeared once the daemon was started by a
+// Windows service — where it reported every single provider, `ggcoder` and
+// `npx` alike, as "not found on PATH" while they sat on the PATH it was given.
+
+test("windows: `Path` is the same variable as `PATH`", async () => {
+  const dir = await bin();
+  await npmShim(dir, "agent");
+
+  expect(findOnPath("agent", { PEW2_FAKE_PLATFORM: "win32", Path: dir })).toBe(
+    join(dir, "agent.cmd"),
+  );
+});
+
+test("windows: PATHEXT is matched regardless of how it is spelled", async () => {
+  const dir = await bin();
+  await writeFile(join(dir, "agent.myext"), "");
+
+  // The fallback list contains .CMD, so a mis-cased PATHEXT reads as "absent"
+  // and still resolves the common case — hiding the bug for anything unusual.
+  expect(
+    findOnPath("agent", { PEW2_FAKE_PLATFORM: "win32", Path: dir, PathExt: ".MYEXT" }),
+  ).toBe(join(dir, "agent.myext"));
+});
+
+test("windows: a service-supplied env still reaches the batch shim", async () => {
+  const dir = await bin();
+  await npmShim(dir, "agent");
+
+  // The end-to-end shape of the failure: a plain object spelling the variable
+  // the way Task Scheduler does must still produce the cmd.exe launch, not the
+  // bare name that spawns as ENOENT.
+  const spec = launchSpec("agent", ["acp"], { PEW2_FAKE_PLATFORM: "win32", Path: dir });
+
+  expect(spec.command).not.toBe("agent");
+  expect(spec.args.at(-1)).toContain(join(dir, "agent.cmd"));
+});
+
+test("windows: ComSpec is honoured whatever its casing", async () => {
+  const dir = await bin();
+  await npmShim(dir, "agent");
+
+  const spec = launchSpec("agent", [], {
+    PEW2_FAKE_PLATFORM: "win32",
+    Path: dir,
+    ComSpec: "C:\\Windows\\System32\\cmd.exe",
+  });
+
+  expect(spec.command).toBe("C:\\Windows\\System32\\cmd.exe");
+});

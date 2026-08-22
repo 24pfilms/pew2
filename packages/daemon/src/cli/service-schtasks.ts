@@ -32,9 +32,10 @@
  * otherwise terminate a long-lived daemon on a schedule.
  */
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { logDir } from "../logs.js";
+import { envValue } from "../providers/registry.js";
 import {
   LABEL,
   programArguments,
@@ -82,15 +83,26 @@ export function buildTaskXml(options: InstallOptions = {}): string {
   const program = programArguments(options.bunPath);
   const logs = logDir(options.env);
   const port = options.port ?? Number(options.env?.PEW2_PORT ?? 8787);
+  const username = options.env?.USERNAME ?? userInfo().username;
+  const userId = options.env?.USERDOMAIN ? `${options.env.USERDOMAIN}\\${username}` : username;
 
   // A task carries no environment of its own, and unlike launchd and systemd
   // there is no per-variable field to set. So the daemon is started through
   // `cmd /c` with the variables assigned inline, which is also what lets stdout
   // be redirected to the log files the daemon rotates.
   const assignments = [`set "PEW2_PORT=${port}"`];
+  // Case-insensitively, because a Windows env block spells this `Path` and the
+  // whole point of carrying it is that a task inherits none of the user's own.
+  const inheritedPath = options.env ? envValue(options.env, "PATH", true) : undefined;
+  if (inheritedPath) assignments.unshift(`set "PATH=${inheritedPath}"`);
   if (options.experimental) assignments.push(`set "PEW2_EXPERIMENTAL=1"`);
   if (options.env?.PEW2_HOME) assignments.push(`set "PEW2_HOME=${options.env.PEW2_HOME}"`);
   if (options.env?.PEW2_RELAY) assignments.push(`set "PEW2_RELAY=${options.env.PEW2_RELAY}"`);
+  // Without this the service browses only the home directory, and a user whose
+  // code lives on another volume — the whole reason the variable exists — finds
+  // nothing to start a session in.
+  if (options.env?.PEW2_BROWSE_ROOTS)
+    assignments.push(`set "PEW2_BROWSE_ROOTS=${options.env.PEW2_BROWSE_ROOTS}"`);
 
   const start = program.map(quoteArgument).join(" ");
   const line =
@@ -98,8 +110,8 @@ export function buildTaskXml(options: InstallOptions = {}): string {
     `>> ${quoteArgument(join(logs, "daemon.log"))} ` +
     `2>> ${quoteArgument(join(logs, "daemon.error.log"))}`;
 
-  // UTF-16 is what `schtasks /create /xml` expects, and the declaration has to
-  // say so even though the file is written as UTF-8 with a BOM below.
+  // UTF-16LE is what `schtasks /create /xml` expects, and the declaration must
+  // agree with the BOM and encoding used by `installScheduledTask` below.
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
@@ -109,6 +121,7 @@ export function buildTaskXml(options: InstallOptions = {}): string {
   <Triggers>
     <LogonTrigger>
       <Enabled>true</Enabled>
+      <UserId>${escapeXml(userId)}</UserId>
       <!-- Retried for ever, so the daemon comes back after it exits to update.
            Duration must exceed Interval or Windows rejects the definition. -->
       <Repetition>
@@ -120,6 +133,7 @@ export function buildTaskXml(options: InstallOptions = {}): string {
   </Triggers>
   <Principals>
     <Principal id="Author">
+      <UserId>${escapeXml(userId)}</UserId>
       <LogonType>InteractiveToken</LogonType>
       <RunLevel>LeastPrivilege</RunLevel>
     </Principal>
@@ -157,6 +171,9 @@ export function buildTaskXml(options: InstallOptions = {}): string {
     <Exec>
       <Command>cmd.exe</Command>
       <Arguments>/c ${escapeXml(line)}</Arguments>
+      <!-- Otherwise the task starts in C:\WINDOWS\system32, and an agent that
+           treats its cwd as a project root tries to write there. -->
+      <WorkingDirectory>${escapeXml(options.home ?? homedir())}</WorkingDirectory>
     </Exec>
   </Actions>
 </Task>
@@ -178,9 +195,9 @@ export async function installScheduledTask(
   const path = taskXmlPath(home);
   await mkdir(dirname(path), { recursive: true });
   await mkdir(logDir(options.env), { recursive: true });
-  // A BOM, because schtasks reads the file as UTF-16/Unicode and rejects a
-  // plain UTF-8 one with a bare "The task XML is malformed".
-  await writeFile(path, `\ufeff${buildTaskXml(options)}`, "utf8");
+  // A UTF-16LE BOM, because schtasks rejects UTF-8 XML with a bare
+  // "The task XML is malformed" even when it carries a Unicode BOM.
+  await writeFile(path, `\ufeff${buildTaskXml(options)}`, "utf16le");
 
   // `/f` overwrites an existing registration, so re-running install picks up a
   // changed definition instead of failing on a name clash.

@@ -11,6 +11,27 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { parse } from "node:path";
+import { envValue } from "./providers/registry.js";
+
+/**
+ * Is `dir` the Windows directory, or inside it?
+ *
+ * Compared segment by segment rather than by string prefix, so `C:\WINDOWSX`
+ * is not mistaken for a child of `C:\WINDOWS`; case-insensitively and across
+ * both separators, because that is how Windows itself compares paths and the
+ * variable arrives spelled `SystemRoot` or `windir` depending on who set it.
+ */
+function insideSystemRoot(dir: string, env: NodeJS.ProcessEnv): boolean {
+  const root = envValue(env, "SystemRoot", true) ?? envValue(env, "windir", true);
+  if (!root) return false;
+
+  const segments = (path: string) =>
+    path.toLowerCase().split(/[/\\]/).filter(Boolean);
+  const rootParts = segments(root);
+  const dirParts = segments(dir);
+  if (rootParts.length === 0 || dirParts.length < rootParts.length) return false;
+  return rootParts.every((part, i) => dirParts[i] === part);
+}
 
 /**
  * Resolve the working directory for a spawned agent.
@@ -30,7 +51,17 @@ export function resolveWorkspace(
   // A filesystem root is never a sane project directory. It is exactly what
   // launchd hands the daemon, and spawning an agent there writes its state
   // into `/` or fails trying.
-  if (daemonCwd !== parse(daemonCwd).root && existsSync(daemonCwd)) return daemonCwd;
+  if (daemonCwd === parse(daemonCwd).root) return home;
+
+  // The same failure wearing a Windows coat, and the reason the root check was
+  // not enough. A Scheduled Task starts in `C:\WINDOWS\system32` — a real,
+  // existing directory that no user ever picked — and GG Coder's probe died
+  // there on `EPERM: mkdir 'C:\WINDOWS\system32\.gg'`. Writability is not the
+  // test to apply either: `access(W_OK)` reports `C:\WINDOWS` as writable and
+  // creating a directory in it still fails.
+  if (insideSystemRoot(daemonCwd, env)) return home;
+
+  if (existsSync(daemonCwd)) return daemonCwd;
   return home;
 }
 

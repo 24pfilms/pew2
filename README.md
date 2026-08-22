@@ -67,9 +67,10 @@ app. Done.
 You do not need Node, Bun, Docker, a GitHub account or a copy of this repo. It is
 one file that runs on its own.
 
-On macOS it also sets itself to start again after a reboot. On Windows and Linux
-that part is not built yet, so you start it yourself after restarting. Everything
-else is identical.
+`pew2 setup` installs a per-user background service on macOS, Linux and Windows.
+It starts at login, keeps running on battery, and restarts after a clean exit or
+reboot. Windows uses Task Scheduler without Administrator access; Linux uses a
+systemd user service.
 
 > Want to read the script before you run it? Sensible.
 > [install.sh](install.sh) and [install.ps1](install.ps1) are short on purpose.
@@ -181,6 +182,8 @@ leaked before you first used it. Full detail in [SECURITY.md](SECURITY.md).
 pew2 setup             # find agents, start the service, show the QR
 pew2 pair              # pair another phone (unpairs the current one)
 pew2 doctor            # what is broken, and how to fix it
+pew2 service           # background service status
+pew2 service restart   # reload it after a local code or config change
 pew2 providers list    # what is installed and what is missing
 pew2 registry sync     # add every agent in the public ACP registry
 ```
@@ -228,6 +231,21 @@ npx eas-cli@latest build --profile device --platform ios      # signed for your 
 npx eas-cli@latest build --profile simulator --platform ios   # no signing, no account
 ```
 
+For a standalone Android build on a local Windows machine, do not install the
+development client from `npx expo run:android`—it requires Metro and otherwise
+stays on the P2 splash. Build and update-install the embedded release instead:
+
+```bash
+cd packages/app
+npx expo prebuild --platform android
+cd android
+NODE_ENV=production EXPO_NO_METRO_WORKSPACE_ROOT=1 ./gradlew.bat app:assembleRelease
+adb install -r app/build/outputs/apk/release/app-release.apk
+```
+
+`EXPO_NO_METRO_WORKSPACE_ROOT=1` works around Expo CLI 54 resolving the app entry
+from the monorepo root during release export.
+
 Builds run on Expo's machines, so no local Xcode or NDK needed. `eas init` comes
 first because nobody's Expo account is committed here. Put what it gives you in
 `packages/app/eas-project.json`, which is gitignored:
@@ -244,7 +262,15 @@ the background on a schedule, which normally needs a computer awake on your
 network at the right moment. pew2 already requires exactly that.
 
 **Android needs no developer account, ever.** A signed APK installs once and
-keeps working.
+keeps working. To update a directly installed build without losing its pairing
+or app data, sign the replacement APK with the same key and use:
+
+```bash
+adb install -r path/to/pew2.apk
+```
+
+Android rejects a differently signed replacement. Do not uninstall the old app
+to work around that unless you intend to erase its pairing and local state.
 
 ### Layout
 
@@ -276,9 +302,7 @@ Being straight with you:
 1. **No forward secrecy, no per-device revocation.** One key lasts the life of a
    pairing, so a key leaked tomorrow decrypts traffic captured today, and
    removing one device means re-pairing all of them.
-2. **Autostart is macOS only.** On Windows and Linux the daemon does not come
-   back by itself after a reboot yet.
-3. **`pty` transport is reserved but unimplemented.** `verify` skips it.
+2. **`pty` transport is reserved but unimplemented.** `verify` skips it.
 
 ---
 
