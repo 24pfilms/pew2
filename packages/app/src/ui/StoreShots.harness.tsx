@@ -12,10 +12,13 @@
  * `simctl io screenshot` without anything needing to be tapped.
  *
  * Not reachable from the app. Point index.ts here, build to a simulator,
- * capture, then put index.ts back.
+ * capture, then put index.ts back. `index.ts` also holds the splash open for
+ * `App` to hide, which this never does — so swap that call for `hideAsync()`
+ * while it is pointed here, or every capture is of the launch screen.
  */
 import { useEffect, useRef, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -159,7 +162,7 @@ function Conversation({ drawerOpen }: { drawerOpen: boolean }) {
         machineLabel="studio.local"
         machineRemote
         connectionStatus="online"
-        onUnpair={() => {}}
+        onOpenConnection={() => {}}
       />
 
       <View
@@ -229,23 +232,28 @@ export default function StoreShotsHarness() {
   }, []);
 
   return (
-    <SafeAreaProvider>
-      <StatusBar style="light" />
-      {/* Nothing is drawn over these poses — not even a debug marker.
+    // The same root the real app mounts under. Without it every posed component
+    // built on `GestureDetector` — the drawer, the sheet — throws on mount, and
+    // a harness that cannot mount them is not photographing the app.
+    <GestureHandlerRootView style={styles.root}>
+      <SafeAreaProvider>
+        <StatusBar style="light" />
+        {/* Nothing is drawn over these poses — not even a debug marker.
 
-          There was one: a small pose digit in the bottom-left corner, to tell
-          the poses apart while capturing. The comment beside it claimed the
-          crop to 6.5" removed it. It did not. Going from 1320x2868 to
-          1284x2778 only takes six pixels off each edge, and the digit was
-          about fifteen tall, so it survived into all three screenshots that
-          went up on the product page.
+            There was one: a small pose digit in the bottom-left corner, to tell
+            the poses apart while capturing. The comment beside it claimed the
+            crop to 6.5" removed it. It did not. Going from 1320x2868 to
+            1284x2778 only takes six pixels off each edge, and the digit was
+            about fifteen tall, so it survived into all three screenshots that
+            went up on the product page.
 
-          Poses are told apart by sampling the render instead, which costs
-          nothing and cannot end up in the picture. */}
-      {pose === 0 && <Conversation drawerOpen={false} />}
-      {pose === 1 && <Conversation drawerOpen />}
-      {pose === 2 && <ProjectPicker />}
-    </SafeAreaProvider>
+            Poses are told apart by sampling the render instead, which costs
+            nothing and cannot end up in the picture. */}
+        {pose === 0 && <Conversation drawerOpen={false} />}
+        {pose === 1 && <Conversation drawerOpen />}
+        {pose === 2 && <ProjectPicker />}
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
 

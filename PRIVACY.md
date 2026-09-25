@@ -1,84 +1,117 @@
 # Privacy Policy
 
-Last updated: 5 August 2026
+Last updated: 20 September 2026
 
 pew2 is an app for controlling coding agents that run on your own computer. This
 policy covers the pew2 iOS app and the pew2 command line tool.
 
-The short version: pew2 has no accounts, no analytics, and no servers that store
-your data. Nothing you type or receive is readable by anyone but you.
+The short version: pew2 has no accounts, advertising, or analytics. Conversation
+traffic between the phone and your computer is encrypted end to end. Optional
+push notifications take a separate path through Expo and Apple, which can read
+their contents. The coding agents you choose have their own data practices.
 
-## What is collected
+## What the developer collects
 
-Nothing.
+pew2 does not maintain a developer-operated database of users or conversations.
+There is no account to create, analytics SDK, crash reporter, or advertising
+identifier in the app. The transport and notification services described below
+handle data needed to deliver the service.
 
-There is no account to create, no email address to hand over, no analytics SDK,
-no crash reporter, no advertising identifier, and no tracking of any kind. The
-developer of pew2 has no database of users, because there is no way to become
-one.
+If you enable notifications, your computer holds a push delivery address for
+your phone in memory. The daemon does not write it to disk. It is cleared when
+the daemon stops, and the app can register it again when reconnecting.
 
 ## Where your data lives
 
-Your conversations, your code, your files, and your agent API keys stay on the
-computer running the pew2 command line tool. That is your machine. The app is a
-window onto it.
+Your computer runs the agent and holds its conversation history, project files,
+and agent credentials. The app receives conversation text and images to display
+them, and holds session state and unsent messages in memory. It does not save a
+persistent conversation archive on the phone.
 
-The app itself stores very little on your phone, and all of it in the iOS
-keychain: the details needed to reconnect to your computer, an identifier for
-this device so your computer can tell it apart from your other ones, and which
-agent you used last. Your conversations are not copied onto the phone; they are
-read from your computer each time you open the app. Deleting the app removes
-everything it stored.
+The app stores pairing details, a device identifier, the last selected agent,
+and cached agent information in the iOS Keychain. Keychain entries can survive
+uninstalling the app. Use **Forget** in the app to remove its saved pairing and
+cached agent list; this does not remove agent history on your computer or all
+Keychain preferences. To invalidate an old pairing, rotate the pairing token on
+your computer using `pew2 pair --rotate`.
+
+Images you attach, share, or save can create temporary files on your phone.
+Images you choose to save to Photos remain there until you delete them. Data
+shared with another app is subject to that app's handling. Agent history and
+files on your computer remain under your control and the agent's own retention
+settings.
 
 ## How the connection works
 
-When your phone and your computer are on the same Wi-Fi, they talk directly and
-nothing else is involved.
+The app can connect directly to your computer or through a relay. A relay may
+still be used on the same Wi-Fi, depending on the pairing address. Session
+frames are encrypted end to end using XChaCha20-Poly1305, with a pairing key
+held by your devices. The key is carried in the fragment of the pairing link,
+which is not included in the connection request sent to the relay. Keep the
+complete pairing link and QR code private: anyone with them can pair.
 
-When they are not, traffic passes through a relay so the two can find each
-other. Everything is encrypted end to end before it leaves your phone, using
-XChaCha20-Poly1305, with a key created during pairing that never leaves your two
-devices. The pairing key travels in the fragment of the pairing link, the part
-of a URL that browsers and servers never send onward.
-
-The relay therefore cannot read your messages. It sees encrypted blobs, their
-size, their timing, and a room identifier derived one way from your pairing
-token so that it cannot be reversed back into the token. It stores none of it.
-If you run your own relay, which pew2 supports, even that goes to a server you
-control.
+The relay cannot read encrypted session messages. It can observe connection IP
+addresses, frame sizes and timing, device and session identifiers, message
+counters, and a room identifier derived from the pairing token. The relay application does not persist messages
+or conversation history. The hosted relay runs on Cloudflare; infrastructure
+metadata handling is subject to Cloudflare's policies. You can also run your own
+relay.
 
 ## Permissions the app asks for
 
-Each of these is used only for the thing it says, and everything they produce
-goes to your own computer over the encrypted connection described above.
+- **Camera.** To scan the pairing code and take a photo to send to an agent.
+- **Photos.** To attach an image or save one an agent sends you.
+- **Microphone and speech recognition.** To dictate a message while holding the
+  microphone button. On iOS, the app requires on-device recognition rather than
+  sending audio to Apple for transcription. The resulting text is sent to your
+  chosen agent when you send the message.
+- **Notifications.** To alert you about agent activity. See below for the
+  separate push-delivery path.
 
-- **Camera.** To scan the pairing code shown by your computer, and to take a
-  photo to send to an agent.
-- **Photos.** To attach an image to a message, and to save an image an agent
-  sends you.
-- **Microphone and speech recognition.** To dictate a message, while the
-  microphone button is held. On iOS the app requires Apple's on-device
-  recogniser, so the audio is turned into text on the phone itself and is not
-  sent to Apple for transcription.
-- **Notifications.** To tell you when an agent has finished or is waiting on
-  you. Notifications are generated by your own computer, and are delivered
-  locally rather than through a push service.
+You can refuse these permissions and continue using the app's other features.
 
-You can refuse any of these and the rest of the app still works.
+## Notifications
+
+When remote notifications are enabled and registered, your computer sends
+finished-turn notifications to Expo's push service, which passes them to Apple
+Push Notification service (APNs). This happens even while the app is open;
+the phone decides whether to show a banner. Local alerts can also be generated
+from events received over the encrypted session connection.
+
+Remote notification payloads are not end-to-end encrypted. Expo and Apple can
+read the project or agent name, a short excerpt from the agent's final message,
+a session identifier used to open the conversation, and the device's push
+delivery address. The excerpt can contain private information from that
+conversation. The full conversation is not sent as a push payload.
+
+Expo states that notification contents are held in memory and queues only as
+needed for delivery, not in databases, and may be visible to staff during
+active debugging. Apple's delivery handling is subject to its own policies.
+
+Turning notifications off in iOS stops banners, but does not immediately remove
+a push address already registered with your computer. To stop the daemon from
+sending further push payloads for that phone, disable notifications and restart
+the daemon (`pew2 service restart`). The app will not register a new push address while
+notification permission is denied.
+
+## Third parties
+
+pew2 has no analytics, advertising, or crash reporting SDKs. Delivery services
+include [Expo](https://expo.dev/privacy), [Apple](https://www.apple.com/legal/privacy/),
+and [Cloudflare](https://www.cloudflare.com/privacypolicy/), as described above.
+Opening the privacy policy or support links contacts GitHub in your browser;
+[GitHub's privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement)
+applies to that visit. Do not post private conversations, credentials, or other
+sensitive information in public issues.
+
+The coding agents you connect to pew2 are separate programs under their own
+terms and privacy policies. They may send your prompts, code, or attachments to
+their providers. pew2 passes your messages to the agent you choose; it does not
+make those providers' processing local-only.
 
 ## Children
 
 pew2 is a developer tool and is not directed at children.
-
-## Third parties
-
-pew2 has no third party SDKs and shares nothing with anyone, because it collects
-nothing to share.
-
-The coding agents you connect to pew2 are separate programs, run by you, on your
-computer, under their own terms and their own privacy policies. What you send to
-Claude Code, Codex, Gemini, or any other agent is governed by whoever makes that
-agent. pew2 passes your words to the agent you chose and does not keep a copy.
 
 ## Changes
 

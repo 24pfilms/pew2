@@ -26,6 +26,7 @@ import { deviceId } from "../pairing";
 import { QrScanner } from "./QrScanner";
 import { CircleButton } from "./controls";
 import { Glass } from "./Glass";
+import { PrivacyLink } from "./PrivacyLink";
 import { verifyPairing } from "../verifyPairing";
 
 interface Props {
@@ -218,6 +219,11 @@ export function PairingScreen({ onPaired, onBack, notice }: Props) {
 
       <Text style={styles.footnote}>This is your password link. Keep safe.</Text>
 
+      {/* On this screen and not only in the drawer: the drawer is behind a
+          pairing, and anyone who cannot pair — a reviewer without a daemon
+          running — would otherwise never reach the policy at all. */}
+      <PrivacyLink style={styles.privacy} />
+
       <QrScanner
         visible={scanning}
         error={scanError}
@@ -337,4 +343,5 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     marginTop: theme.space(8),
   },
+  privacy: { marginTop: theme.space(4), alignSelf: "flex-start" },
 });

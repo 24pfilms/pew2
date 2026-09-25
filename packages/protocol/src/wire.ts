@@ -690,11 +690,10 @@ export const ErrorMessage = z.object({
 /**
  * A sealed message. Everything with user content travels as one of these.
  *
- * `sid` and `seq` are readable on purpose, and only because the relay keeps the
- * ordered log that lets a reconnecting phone catch up — the daemon does not
- * replay. They are bound into the AEAD as associated data, so the relay may
- * *read* them to order its log but cannot alter them without every recipient
- * rejecting the frame.
+ * `sid` and `seq` are cleartext headers bound into the AEAD as associated data,
+ * so changing either invalidates the frame. The relay neither stores nor replays
+ * session events. The daemon owns the ordered session log and answers a
+ * reconnecting phone's cursors itself.
  *
  * The definitive shape lives in `crypto.ts`, which is what actually seals and
  * opens these; this mirror exists so a message can be validated on arrival

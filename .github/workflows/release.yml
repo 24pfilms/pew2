@@ -150,6 +150,12 @@ jobs:
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
+          # Handoff to the release job, nothing more: once it has attached these
+          # to the GitHub Release they are dead weight, and release assets are
+          # stored separately from artifacts. Left on the default 90-day
+          # retention these builds exhausted the account's artifact storage
+          # quota, which silently blocked artifact uploads across every repo.
+          retention-days: 1
           name: ${{ matrix.asset }}
           path: |
             ${{ matrix.asset }}

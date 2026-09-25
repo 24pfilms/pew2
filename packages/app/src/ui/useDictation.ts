@@ -89,6 +89,9 @@ export function useDictation({ draft, onDraftChange, onMessage }: UseDictationOp
 
     void startDictation({
       onTranscript: (transcript) => {
+        // An empty final result can arrive when the recogniser stops. Keep the
+        // words already in the draft instead of resetting to the starting text.
+        if (!transcript.trim()) return;
         const next = applyTranscript(state.current, transcript);
         state.current = next.state;
         changeRef.current(next.draft);
