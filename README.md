@@ -15,6 +15,10 @@
   <a href="https://skool.com/kenkai"><img src="https://img.shields.io/badge/Skool-Community-7C3AED?style=for-the-badge" alt="Skool"></a>
 </p>
 
+> **Private Windows fork.** Tracks [KenKaiii/pew2](https://github.com/KenKaiii/pew2) and adds Windows daemon
+> fixes, a phone chat-list refresh fix and Windows helper tools. See [windows/README.md](windows/README.md) for
+> what differs, building the Android app on Windows, the GG Coder crash guard, safe restarts and upgrading.
+
 ---
 
 Claude Code, Codex, Gemini and about ten others already run on your computer.
