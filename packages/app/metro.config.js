@@ -23,6 +23,14 @@ config.resolver.nodeModulesPaths = [
 // a hook-order crash, not a slow build.
 config.resolver.disableHierarchicalLookup = true;
 
+// Bundle from the app folder even though the workspace root is watched above.
+// `expo export:embed` (what gradle runs for a release build) otherwise takes the
+// watched workspace root as Metro's server root and resolves the default entry
+// against it — looking for `<repo>/index.ts` and failing with "Unable to resolve
+// module ./index.ts". Module resolution stays workspace-wide through
+// watchFolders/nodeModulesPaths; only the entry's base moves to this package.
+config.server = { ...(config.server || {}), unstable_serverRoot: projectRoot };
+
 /**
  * Evaluate each module the first time it is actually used, not at startup.
  *
