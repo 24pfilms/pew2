@@ -39,6 +39,7 @@ import {
   type Activity,
   type TurnReceipt,
 } from "./activity";
+import { CapabilityProbes } from "./capabilityProbes";
 import { advance, alreadySeen, type Cursors } from "./cursors";
 import { findDuplicateError } from "./errorDedup";
 import { isEmptyChunk, readChunk } from "./chunks";
@@ -676,8 +677,10 @@ export function useDaemon(
   // a reopen on the laptop pulled every other device onto it.
   const awaitingResume = useRef(false);
   // Providers already asked for capabilities, so a reconnect's repeat provider
-  // announcement does not spawn another probe for each one.
-  const probed = useRef(new Set<string>());
+  // announcement does not spawn another probe for each one. Cleared when the
+  // socket drops: what it remembers describes one connection, and outliving it
+  // froze the chat list for the whole life of the app.
+  const probed = useRef(new CapabilityProbes());
   // Capability requests in flight, keyed by provider. One slow or broken agent
   // must not keep another provider's already-loaded history behind a skeleton.
   const pendingCapabilities = useRef(new Set<string>());
@@ -1513,13 +1516,9 @@ export function useDaemon(
               setState((s) => ({ ...s, busy: true, loadingSession: true }));
             }
           }
-          for (const provider of message.providers ?? []) {
-            if (!provider.available || probed.current.has(provider.id)) continue;
-            probed.current.add(provider.id);
-            pendingCapabilities.current.add(provider.id);
-            ws.send(
-              JSON.stringify(secure.seal({ t: "provider.capabilities", providerId: provider.id })),
-            );
+          for (const providerId of probed.current.take(message.providers ?? [])) {
+            pendingCapabilities.current.add(providerId);
+            ws.send(JSON.stringify(secure.seal({ t: "provider.capabilities", providerId })));
           }
 
           // Anything typed while there was no signal goes now. Here rather than
@@ -1962,6 +1961,14 @@ export function useDaemon(
         // already open; without this guard it would mark us offline and open a
         // duplicate connection that keeps dispatching state updates.
         if (!alive.current || socket.current !== ws) return;
+        // This connection is over, so what was asked over it no longer counts.
+        // Without this the chat list is whatever the daemon had at launch: an
+        // agent asked once was never asked again, and a project created at the
+        // desk stayed invisible until the app was force-quit. The in-flight set
+        // goes with it — a request cut off mid-flight is never answered, and
+        // leaving it behind kept a skeleton in the drawer for ever.
+        probed.current.disconnected();
+        pendingCapabilities.current.clear();
         // A refusal the daemon explained is not a blip. Retrying a rotated key
         // or a version mismatch every few seconds forever would never succeed,
         // would keep the radio awake, and would bury the explanation under a
