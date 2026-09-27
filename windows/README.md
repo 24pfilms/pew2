@@ -11,6 +11,9 @@ and what was learned getting it solid.
 | Four Windows fixes for a supervised daemon (case-insensitive `Path`, workspace never `C:\WINDOWS\system32`, `PEW2_BROWSE_ROOTS` split on `;`, browse roots passed to the service) | `packages/daemon` | Only failed once the daemon ran from Task Scheduler instead of a shell. |
 | Arm the Windows keepalive at install, not only at next logon | `packages/daemon/src/cli/service-schtasks.ts` | A daemon that died mid-session otherwise stayed dead until the next login. |
 | Phone re-asks every agent for its history after a reconnect | `packages/app/src/capabilityProbes.ts` | The list was frozen at app launch: a project started at the desk never appeared on the phone. |
+| Pull the drawer's chat list down to refresh it | `packages/app/src/listRefresh.ts`, `ui/Sidebar.tsx` | Forces the agent to re-read its history instead of waiting for the daemon's one-minute cache, then re-asks the chosen project. |
+| A forced refresh that fails keeps the last list | `packages/daemon/src/index.ts` (`refreshedCapabilities`) | An agent that failed to boot mid-pull answered "no projects" and blanked the phone's list. |
+| `PEW2_IMAGE_ROOTS` split on `;` | `packages/daemon/src/images.ts` | Same drive-letter bug as `PEW2_BROWSE_ROOTS`: an extra image folder on `L:\` was never allowed. |
 | Metro server root pinned to the app package | `packages/app/metro.config.js` | Release bundling (`expo export:embed`) otherwise resolves `index.ts` from the repo root. Same effect as upstream's `EXPO_NO_METRO_WORKSPACE_ROOT=1`. |
 | GG Coder crash guard + safe restart script | `windows/` | See below. |
 
@@ -26,6 +29,10 @@ phone app ──(wss, encrypted)──► your Cloudflare relay ◄──── 
   `%USERPROFILE%\.pew2\logs\daemon.log` and `daemon.error.log`.
 - **Projects on another drive:** set `PEW2_BROWSE_ROOTS` (semicolon-separated, e.g. `L:\`) before `pew2 setup`
   so the service inherits it.
+- **Pictures on the phone:** an agent's image shows in the chat when the agent returns it from a tool, or names
+  the file in its reply (`![](path/to/shot.png)`). The daemon only reads files inside the conversation's project
+  folder and the temp folder. To allow another folder (say, where screenshots are saved), set `PEW2_IMAGE_ROOTS`
+  (semicolon-separated) the same way as `PEW2_BROWSE_ROOTS`. Formats: png, jpg, gif, webp, bmp, heic, up to 8 MB.
 - **Relay:** the phone is paired with a relay link, so it always connects through the relay — on home Wi-Fi and
   on mobile data alike. A direct same-Wi-Fi link would need a re-pair and an app built with cleartext `ws://`
   allowed; the relay is the better default.
