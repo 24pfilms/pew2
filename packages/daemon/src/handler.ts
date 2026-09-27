@@ -144,9 +144,10 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
         // `capabilitiesFor`, not `probeProvider`: the probe is the agent's own
         // answer, and what the app has to render is the state a new session will
         // actually open in — the agent's list at this user's remembered values.
-        const capabilities = await daemon.capabilitiesFor(providerId, {
-          refresh: message.refresh === true,
-        });
+        const capabilities =
+          message.refresh === true
+            ? await daemon.refreshedCapabilities(providerId)
+            : await daemon.capabilitiesFor(providerId);
         reply({ t: "provider.capabilities", providerId, ...capabilities });
         break;
       }

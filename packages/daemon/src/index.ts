@@ -1712,6 +1712,19 @@ export class Daemon {
   }
 
   /**
+   * A re-probe a client asked for, such as pulling the drawer down.
+   *
+   * A failed refresh answers with what was serving before, exactly as the
+   * background one does by staying silent. Answering with the empty result
+   * instead would hand the phone an agent with no projects the moment it failed
+   * to boot, which is the opposite of what asking for fresh data should do.
+   */
+  async refreshedCapabilities(providerId: string): Promise<ProviderCapabilities> {
+    const fresh = await this.capabilitiesFor(providerId, { refresh: true });
+    return fresh === EMPTY_CAPABILITIES ? this.capabilitiesFor(providerId) : fresh;
+  }
+
+  /**
    * Tell every client what a new conversation with this provider will now use.
    *
    * Sent whenever a provider-level preference is written — from the empty state

@@ -556,6 +556,33 @@ test("capabilities are answered at the values in force now, not the ones probed"
   }
 });
 
+test("a refresh the phone asked for keeps the last answer when the agent fails", async () => {
+  // Pulling the drawer down forces a re-probe. An agent that cannot boot makes
+  // that probe come back empty, and replying with it would wipe the project
+  // list the phone was showing. No provider named "test" exists, so the forced
+  // probe here fails the same way a crashing agent does.
+  const { daemon } = daemonWithCollector();
+  const served = {
+    configOptions: [],
+    sessions: [{ sessionId: "kept", title: "Still here", cwd: "/work/api" }],
+    canResume: true,
+    projects: [{ path: "/work/api", name: "api", sessions: 1 }],
+    commands: [],
+  };
+  (daemon as any).probes.set("test", Promise.resolve(served));
+
+  const home = process.env.PEW2_HOME;
+  process.env.PEW2_HOME = await mkdtemp(join(tmpdir(), "pew2-refresh-failure-"));
+  try {
+    const answer = await daemon.refreshedCapabilities("test");
+    expect(answer.projects).toEqual(served.projects);
+    expect(answer.sessions).toEqual(served.sessions);
+  } finally {
+    if (home === undefined) delete process.env.PEW2_HOME;
+    else process.env.PEW2_HOME = home;
+  }
+});
+
 test("a selector the agent changes by itself reaches the app", async () => {
   // The option set is model-dependent: Claude Code advertises a thinking-level
   // selector only while a model that supports one is current, and announces its
