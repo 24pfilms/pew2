@@ -19,10 +19,17 @@
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
-  [int]$Port = 8787,
+  [int]$Port,
   [string]$TaskName = 'dev.pew2.daemon'
 )
 $ErrorActionPreference = 'Stop'
+
+# The port the task actually starts the daemon on, so moving it (for example off
+# a port a dead process still holds) never leaves this script watching the old one.
+if (-not $Port) {
+  $taskXml = schtasks /query /tn $TaskName /xml | Out-String
+  $Port = if ($taskXml -match 'PEW2_PORT=(\d+)') { [int]$Matches[1] } else { 8787 }
+}
 
 # Command lines of agents pew2 launches (see %USERPROFILE%\.pew2\providers).
 $AgentPattern = 'codex-acp|ggcoder-guard|ggcoder\\dist\\cli\.js"?\s+acp|claude-code-acp|opencode(\.cmd)?"?\s+acp|hermes"?\s+acp'

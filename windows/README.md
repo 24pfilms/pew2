@@ -118,6 +118,7 @@ format changed, rebuild the app before the phone reconnects to the new daemon. U
 
 | Symptom | Likely cause | Fix |
 | --- | --- | --- |
+| Restart fails: "Port … is still held by PID N" and PID N no longer exists | A process that exited kept its listening socket registered (seen 2026-09-27 with no child left holding it) | Move the daemon to a free port: edit `PEW2_PORT` in the task (`schtasks /query /tn dev.pew2.daemon /xml`, change, `schtasks /create /tn dev.pew2.daemon /xml <file> /f`). The phone uses the relay, so it is unaffected. A reboot frees the old port. |
 | Phone: "code did not connect… running pew2?" | Daemon down, or port 8787 stuck | `Restart-Pew2Daemon.ps1`; check `daemon.error.log` for `EADDRINUSE` |
 | GG Coder list stale / "ACP connection closed" | GG Coder self-update crash | Install the guard (above) |
 | Projects on another drive missing | `PEW2_BROWSE_ROOTS` not reaching the service | Set it, re-run `pew2 setup` |
