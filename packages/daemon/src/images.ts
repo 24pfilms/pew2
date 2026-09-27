@@ -15,7 +15,7 @@
 import { open, realpath } from "node:fs/promises";
 import { constants } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { isAbsolute, resolve, sep, extname } from "node:path";
+import { delimiter, isAbsolute, resolve, sep, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
@@ -108,7 +108,11 @@ function isInside(path: string, root: string): boolean {
 export function allowedImageRoots(cwd: string, env: NodeJS.ProcessEnv = process.env): string[] {
   const roots = [resolve(cwd), resolve(tmpdir())];
   if (env.PEW2_IMAGE_ROOTS) {
-    for (const extra of env.PEW2_IMAGE_ROOTS.split(":")) {
+    // `delimiter`, not a literal ":", for the same reason `browsableRoots` uses
+    // it: a Windows path carries ":" after its drive letter, so `L:\shots` was
+    // split into "L" and "\shots" and the folder the user named was never
+    // allowed.
+    for (const extra of env.PEW2_IMAGE_ROOTS.split(delimiter)) {
       if (extra.trim()) roots.push(resolve(extra.trim()));
     }
   }

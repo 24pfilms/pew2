@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { POSIX_PATHS } from "./testing/platform.js";
 import {
+  allowedImageRoots,
   historyImages,
   imageMimeType,
   loadImage,
@@ -190,4 +191,23 @@ test("a windows drive letter is a path, not a URI scheme", () => {
   // Drive-relative: a path on C:'s *current directory*, wherever that is. Not
   // something an agent means, and it would resolve outside the session's cwd.
   expect(toLocalPath("C:notes.png", "/work")).toBeUndefined();
+});
+
+const WIN = process.platform === "win32";
+
+test.if(WIN)("a Windows drive path survives PEW2_IMAGE_ROOTS", () => {
+  // Same split bug `browsableRoots` had: a literal ":" cut `L:\\shots` into "L"
+  // and "\\shots", so a screenshot folder on another drive was never allowed
+  // and every picture saved there stayed a blank box on the phone.
+  const roots = allowedImageRoots("C:\\work", { PEW2_IMAGE_ROOTS: "L:\\shots;D:\\renders" });
+
+  expect(roots).toContain("L:\\shots");
+  expect(roots).toContain("D:\\renders");
+});
+
+test.if(!WIN)("POSIX image roots still split on ':'", () => {
+  const roots = allowedImageRoots("/work", { PEW2_IMAGE_ROOTS: "/mnt/shots:/mnt/renders" });
+
+  expect(roots).toContain("/mnt/shots");
+  expect(roots).toContain("/mnt/renders");
 });
