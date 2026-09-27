@@ -16,6 +16,7 @@ import {
   Easing,
   FlatList,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -83,6 +84,13 @@ interface SidebarProps {
    * a false empty state on machines with plenty of history.
    */
   historyLoading?: boolean;
+  /**
+   * Pull the list down to ask the agent again for what it holds, for work done
+   * at the desk since the list was drawn. Absent means the list does not pull.
+   */
+  onRefresh?: () => void;
+  /** A pull is waiting on the agent's answer. */
+  refreshing?: boolean;
   /** Honor the phone's Reduce Motion accessibility preference. */
   reduceMotion?: boolean;
 }
@@ -304,6 +312,8 @@ function SidebarView({
   onOpenConnection,
   update,
   historyLoading = false,
+  onRefresh,
+  refreshing = false,
   reduceMotion = false,
 }: SidebarProps) {
   const insets = useSafeAreaInsets();
@@ -487,6 +497,20 @@ function SidebarView({
             maxToRenderPerBatch={18}
             windowSize={9}
             removeClippedSubviews
+            refreshControl={
+              onRefresh ? (
+                <RefreshControl
+                  refreshing={refreshing}
+                  onRefresh={() => {
+                    haptics.tap();
+                    onRefresh();
+                  }}
+                  tintColor={theme.color.accent}
+                  colors={[theme.color.accent]}
+                  progressBackgroundColor={theme.color.surfaceRaised}
+                />
+              ) : undefined
+            }
             ListEmptyComponent={
               historyLoading ? (
                 <HistorySkeleton />

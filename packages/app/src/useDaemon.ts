@@ -43,6 +43,7 @@ import {
   type TurnReceipt,
 } from "./activity";
 import { CapabilityProbes } from "./capabilityProbes";
+import { ListRefresh } from "./listRefresh";
 import { advance, alreadySeen, type Cursors } from "./cursors";
 import { findDuplicateError } from "./errorDedup";
 import { isEmptyChunk, readChunk } from "./chunks";
@@ -288,6 +289,16 @@ const LOADING_SESSION_TIMEOUT = 20_000;
  * where the user has already decided the app is broken.
  */
 const CONNECT_TIMEOUT = 10_000;
+
+/**
+ * How long a pull-to-refresh spinner may run before it gives up.
+ *
+ * A pull boots the agent on the computer and has it list every conversation,
+ * which is several seconds for a well-used agent on a cold start. Anything past
+ * forty-five is an agent that is not going to answer, and the list it would
+ * have replaced is still on screen.
+ */
+const LIST_REFRESH_TIMEOUT = 45_000;
 
 /**
  * `WebSocket.CONNECTING`, by value.
@@ -705,6 +716,11 @@ export function useDaemon(
   // choosing a project shows the loading skeleton rather than the empty state
   // it is about to replace.
   const pendingProjectSessions = useRef(new Set<string>());
+  // A pull-to-refresh of the drawer, from the pull to the answer that ends it.
+  // Apart from `pendingCapabilities` on purpose: that one swaps the list for a
+  // skeleton, and a pull must keep the list on screen under its spinner.
+  const listRefresh = useRef(new ListRefresh());
+  const [refreshingList, setRefreshingList] = useState(false);
   // The directory listing the picker is currently waiting for. Only the newest
   // request may write to state: tapping down two levels quickly produces two
   // listings in flight, and the slower one must not land last and rewind the
@@ -1592,6 +1608,20 @@ export function useDaemon(
         if (message.t === "provider.sessions") {
           pendingProjectSessions.current.delete(`${message.providerId}:${message.cwd}`);
         }
+        const refreshStep = listRefresh.current.answered(message);
+        if (refreshStep.kind === "sessions") {
+          ws.send(
+            JSON.stringify(
+              secure.seal({
+                t: "provider.sessions",
+                providerId: refreshStep.providerId,
+                cwd: refreshStep.cwd,
+              }),
+            ),
+          );
+        } else if (refreshStep.kind === "done") {
+          setRefreshingList(false);
+        }
         // A daemon older than this app rejects `provider.sessions` outright, and
         // the rejection names no request. Dropping every in-flight key is the
         // safe read: the alternative is a set that never empties, so choosing
@@ -2044,6 +2074,9 @@ export function useDaemon(
         // leaving it behind kept a skeleton in the drawer for ever.
         probed.current.disconnected();
         pendingCapabilities.current.clear();
+        // A pull cut off with the socket is never answered either.
+        listRefresh.current.cancel();
+        setRefreshingList(false);
         // A refusal the daemon explained is not a blip. Retrying a rotated key
         // or a version mismatch every few seconds forever would never succeed,
         // would keep the radio awake, and would bury the explanation under a
@@ -2927,6 +2960,36 @@ export function useDaemon(
     setState((s) => ({ ...s, loadingProject: key }));
   }, [post, state.status, effectiveProviderId, openProjectPath]);
 
+  /**
+   * Pull-to-refresh on the drawer: re-ask the agent on screen what it holds.
+   *
+   * Forced past the daemon's cache, because the reason to pull is work done at
+   * the desk since the list was drawn. The project chosen, if any, is asked for
+   * again once that answer lands (see `ListRefresh`).
+   */
+  const refreshList = useCallback(() => {
+    if (!effectiveProviderId) return;
+    if (!listRefresh.current.start(effectiveProviderId, openProjectPath)) return;
+    const sent = post({ t: "provider.capabilities", providerId: effectiveProviderId, refresh: true });
+    if (!sent) {
+      listRefresh.current.cancel();
+      return;
+    }
+    setRefreshingList(true);
+  }, [post, effectiveProviderId, openProjectPath]);
+
+  // An agent that hangs while booting never answers, and the daemon has no
+  // reply to send for it. The spinner stops rather than spinning on a list that
+  // is already on screen, and the next pull is allowed to try again.
+  useEffect(() => {
+    if (!refreshingList) return;
+    const timer = setTimeout(() => {
+      listRefresh.current.cancel();
+      setRefreshingList(false);
+    }, LIST_REFRESH_TIMEOUT);
+    return () => clearTimeout(timer);
+  }, [refreshingList]);
+
   return {
     ...state,
     ...actions,
@@ -2938,6 +3001,8 @@ export function useDaemon(
     configOptions,
     commands,
     loadingSessions,
+    refreshingList,
+    refreshList,
     images,
   };
 }
