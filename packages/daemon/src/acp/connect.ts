@@ -6,6 +6,7 @@
  * the same way, and resolved later by id when the phone answers.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { existsSync } from "node:fs";
 import { Readable, Writable } from "node:stream";
 import { client, ndJsonStream, type ClientConnection } from "@agentclientprotocol/sdk";
 import { envValue, findOnPath, type LoadedProvider } from "../providers/registry.js";
@@ -503,6 +504,31 @@ export function launchSpec(
   };
 }
 
+/**
+ * The sentence for an agent that could not be started.
+ *
+ * ENOENT from `spawn` names two different failures: the program is missing, or
+ * the directory it was asked to start in is. The second is the common one — a
+ * project moved or deleted at the desk stays in the agent's history, and
+ * opening it from the phone reported "'npx' was not found on PATH" for a
+ * perfectly installed agent. So the directory is checked before the program is
+ * blamed.
+ */
+export function spawnFailure(
+  error: NodeJS.ErrnoException,
+  command: string,
+  cwd: string,
+  exists: (path: string) => boolean = existsSync,
+): Error {
+  if (error.code !== "ENOENT") return error;
+  if (!exists(cwd)) {
+    return new Error(`The project folder '${cwd}' no longer exists. It may have been moved or deleted.`);
+  }
+  return new Error(
+    `'${command}' was not found on PATH. Install it, or point the manifest at an absolute path.`,
+  );
+}
+
 export async function connectProvider(options: ConnectOptions): Promise<AcpSessionHandle> {
   const { provider, cwd } = options;
 
@@ -537,13 +563,7 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
   const spawned = new Promise<void>((resolve, reject) => {
     child.once("spawn", resolve);
     child.once("error", (error: NodeJS.ErrnoException) => {
-      reject(
-        error.code === "ENOENT"
-          ? new Error(
-              `'${provider.command}' was not found on PATH. Install it, or point the manifest at an absolute path.`,
-            )
-          : error,
-      );
+      reject(spawnFailure(error, provider.command, cwd));
     });
   });
   await spawned;

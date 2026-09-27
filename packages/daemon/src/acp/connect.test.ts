@@ -23,6 +23,7 @@ import {
   connectProvider,
   HANDSHAKE_TIMEOUT_MARKER,
   restoreMethodFor,
+  spawnFailure,
   withTimeout,
 } from "./connect.js";
 import type { LoadedProvider } from "../providers/registry.js";
@@ -171,4 +172,22 @@ posixTest("a spawned agent is its own process group, and close() ends the group"
     if (previousHome === undefined) delete process.env.PEW2_HOME;
     else process.env.PEW2_HOME = previousHome;
   }
+});
+
+test("a project folder that is gone is named, not blamed on the agent's launcher", () => {
+  // A spawn into a missing directory fails with ENOENT, exactly like a missing
+  // program. A project deleted at the desk stays in the agent's history, and
+  // opening it reported "'npx' was not found on PATH" for an installed agent.
+  const enoent = Object.assign(new Error("spawn cmd.exe ENOENT"), { code: "ENOENT" });
+
+  const moved = spawnFailure(enoent, "npx", "/work/deleted", () => false);
+  expect(moved.message).toContain("/work/deleted");
+  expect(moved.message).toContain("no longer exists");
+  expect(moved.message).not.toContain("npx");
+
+  const missing = spawnFailure(enoent, "npx", "/work/api", () => true);
+  expect(missing.message).toContain("'npx' was not found on PATH");
+
+  const other = Object.assign(new Error("spawn EACCES"), { code: "EACCES" });
+  expect(spawnFailure(other, "npx", "/work/api", () => false)).toBe(other);
 });
