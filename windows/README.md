@@ -13,6 +13,7 @@ and what was learned getting it solid.
 | Phone re-asks every agent for its history after a reconnect | `packages/app/src/capabilityProbes.ts` | The list was frozen at app launch: a project started at the desk never appeared on the phone. |
 | Pull the drawer's chat list down to refresh it | `packages/app/src/listRefresh.ts`, `ui/Sidebar.tsx` | Forces the agent to re-read its history instead of waiting for the daemon's one-minute cache, then re-asks the chosen project. |
 | A forced refresh that fails keeps the last list | `packages/daemon/src/index.ts` (`refreshedCapabilities`) | An agent that failed to boot mid-pull answered "no projects" and blanked the phone's list. |
+| Pinch-zoom and rotation in the image viewer (Android) | `packages/app/src/ui/ImageViewer.tsx` | React Native's zoom is iOS-only. Uses `react-native-zoom-toolkit` (pinch, drag, double-tap) and `expo-screen-orientation` so only the viewer turns with the phone; tap hides the controls. |
 | `PEW2_IMAGE_ROOTS` split on `;` | `packages/daemon/src/images.ts` | Same drive-letter bug as `PEW2_BROWSE_ROOTS`: an extra image folder on `L:\` was never allowed. |
 | Metro server root pinned to the app package | `packages/app/metro.config.js` | Release bundling (`expo export:embed`) otherwise resolves `index.ts` from the repo root. Same effect as upstream's `EXPO_NO_METRO_WORKSPACE_ROOT=1`. |
 | GG Coder crash guard + safe restart script | `windows/` | See below. |
