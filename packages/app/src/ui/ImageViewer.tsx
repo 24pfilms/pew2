@@ -9,11 +9,19 @@
  *
  * A real `Modal`, unlike `ConfigPicker`: this *is* leaving the conversation for
  * a moment, and the keyboard should drop.
+ *
+ * On Android the viewer is the one screen that turns with the phone: a wide
+ * screenshot is unreadable held upright. The rest of the app stays portrait —
+ * its layout is built for it — so rotation is released on open and taken back
+ * on close.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 // Share expo-image's original source cache with the transcript.
 import { Image } from "expo-image";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
+import * as ScreenOrientation from "expo-screen-orientation";
+import { fitContainer, ResumableZoom } from "react-native-zoom-toolkit";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { theme } from "../theme";
@@ -53,6 +61,10 @@ export function ImageViewer({
   const insets = useSafeAreaInsets();
   const [busy, setBusy] = useState<"save" | "share" | undefined>(undefined);
   const [feedback, setFeedback] = useState<Feedback | undefined>(undefined);
+  // Tapping the picture hides the close and save controls, so it can have the
+  // whole screen — most of all when the phone is on its side.
+  const [chromeHidden, setChromeHidden] = useState(false);
+  const toggleChrome = useCallback(() => setChromeHidden((hidden) => !hidden), []);
 
   // Reopening is a fresh attempt: a stale "Saved" from last time would read as
   // confirmation of a save that has not happened yet.
@@ -60,7 +72,25 @@ export function ImageViewer({
     if (!visible) {
       setFeedback(undefined);
       setBusy(undefined);
+      setChromeHidden(false);
     }
+  }, [visible]);
+
+  // Turning with the phone, while open. `unlockAsync` hands the choice back to
+  // the phone, so its own auto-rotate setting still decides; closing locks the
+  // app back to the portrait its manifest declares.
+  useEffect(() => {
+    if (Platform.OS !== "android" || !visible) return;
+    ScreenOrientation.unlockAsync().catch((error: unknown) => {
+      console.warn("[ImageViewer] could not release screen rotation", error);
+    });
+    return () => {
+      ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(
+        (error: unknown) => {
+          console.warn("[ImageViewer] could not restore portrait", error);
+        },
+      );
+    };
   }, [visible]);
 
   const run = useCallback(
@@ -91,7 +121,9 @@ export function ImageViewer({
       onRequestClose={onClose}
       statusBarTranslucent
     >
-      <View style={styles.backdrop}>
+      {/* Its own gesture root: a Modal is a separate native window on Android,
+          outside the one App.tsx sets up, and pinch would otherwise never fire. */}
+      <GestureHandlerRootView style={styles.backdrop}>
         {/* Tapping the surround dismisses, matching every other overlay here. */}
         <Pressable
           style={StyleSheet.absoluteFill}
@@ -100,6 +132,18 @@ export function ImageViewer({
           onPress={onClose}
         />
 
+        {Platform.OS === "ios" ? (
+          <IosViewerImage key={resolvedSrc} uri={resolvedSrc} alt={image.alt || "Image from the agent"} />
+        ) : (
+          <ZoomableImage
+            key={resolvedSrc}
+            uri={resolvedSrc}
+            alt={image.alt || "Image from the agent"}
+            onTap={toggleChrome}
+          />
+        )}
+
+        {!chromeHidden && (
         <View style={[styles.closeRow, { top: insets.top + theme.headerInset }]}>
           <Pressable
             accessibilityRole="button"
@@ -111,10 +155,19 @@ export function ImageViewer({
             <Ionicons name="close" size={20} color={theme.color.text} />
           </Pressable>
         </View>
+        )}
 
-        <ViewerImage key={resolvedSrc} uri={resolvedSrc} alt={image.alt || "Image from the agent"} />
-
-        <View style={[styles.actions, { paddingBottom: insets.bottom + theme.space(4) }]}>
+        {!chromeHidden && (
+        <View
+          style={[
+            styles.actions,
+            // Over the picture on Android rather than beneath it: the picture
+            // fills the screen there, so hiding these gives it all back without
+            // resizing it — and resetting the zoom — under the user's fingers.
+            Platform.OS !== "ios" && styles.overlayActions,
+            { paddingBottom: insets.bottom + theme.space(4) },
+          ]}
+        >
           {!!feedback && (
             <Text
               style={[
@@ -167,17 +220,87 @@ export function ImageViewer({
             </Pressable>
           </View>
         </View>
-      </View>
+        )}
+      </GestureHandlerRootView>
     </Modal>
   );
 }
 
+/**
+ * Pinch, drag and double-tap zoom for Android.
+ *
+ * React Native's ScrollView zooms on iOS only, which left an Android picture
+ * impossible to enlarge. The zoom library measures its bounds against the child,
+ * so the picture is sized to fit this box at its own aspect ratio — and re-fitted
+ * when the box changes, which is what turning the phone does.
+ *
+ * `allowDownscaling` off: the bitmap otherwise shrinks to the fitted size, and
+ * zooming would only enlarge that blur.
+ */
+function ZoomableImage({ uri, alt, onTap }: { uri: string; alt: string; onTap: () => void }) {
+  const [box, setBox] = useState<{ width: number; height: number } | undefined>(undefined);
+  const [resolution, setResolution] = useState<{ width: number; height: number } | undefined>(
+    undefined,
+  );
+  const fitted =
+    box && resolution && resolution.width > 0 && resolution.height > 0
+      ? fitContainer(resolution.width / resolution.height, box)
+      : undefined;
+  const cachePolicy = uri.startsWith("data:") ? "memory" : "memory-disk";
+
+  return (
+    <View
+      style={StyleSheet.absoluteFill}
+      onLayout={({ nativeEvent: { layout } }) => setBox({ width: layout.width, height: layout.height })}
+    >
+      {fitted && box ? (
+        // Keyed on the box so a rotation starts from a clean fit rather than a
+        // zoom computed for the other orientation.
+        <ResumableZoom
+          key={`${box.width}x${box.height}`}
+          maxScale={MAX_ZOOM}
+          extendGestures
+          onTap={onTap}
+        >
+          <Image
+            accessible
+            accessibilityRole="image"
+            accessibilityLabel={alt}
+            source={{ uri }}
+            contentFit="contain"
+            allowDownscaling={false}
+            cachePolicy={cachePolicy}
+            transition={0}
+            style={fitted}
+          />
+        </ResumableZoom>
+      ) : (
+        // Loaded once at full size to learn its dimensions; the zoomable copy
+        // above then comes straight from the memory cache.
+        <Image
+          accessible
+          accessibilityRole="image"
+          accessibilityLabel={alt}
+          source={{ uri }}
+          contentFit="contain"
+          cachePolicy={cachePolicy}
+          transition={0}
+          style={styles.imageFill}
+          onLoad={({ source }) => setResolution({ width: source.width, height: source.height })}
+        />
+      )}
+    </View>
+  );
+}
+
+/** Same ceiling as the iOS viewer, so a detail is as reachable on either. */
+const MAX_ZOOM = 8;
+
 /** iOS supplies native pinch/pan; a tap is a single-pointer zoom alternative. */
-function ViewerImage({ uri, alt }: { uri: string; alt: string }) {
+function IosViewerImage({ uri, alt }: { uri: string; alt: string }) {
   const scroll = useRef<ScrollView>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [zoomed, setZoomed] = useState(false);
-  const canZoom = Platform.OS === "ios";
   const toggleZoom = () => {
     const scale = zoomed ? 1 : 3;
     scroll.current?.scrollResponderZoomTo({
@@ -190,7 +313,7 @@ function ViewerImage({ uri, alt }: { uri: string; alt: string }) {
   };
   const picture = (
     <Image
-      accessible={!canZoom}
+      accessible={false}
       accessibilityRole="image"
       accessibilityLabel={alt}
       source={{ uri }}
@@ -203,7 +326,6 @@ function ViewerImage({ uri, alt }: { uri: string; alt: string }) {
       style={styles.imageFill}
     />
   );
-  if (!canZoom) return <View style={styles.image} pointerEvents="none">{picture}</View>;
   return (
     <View style={styles.image} onLayout={({ nativeEvent: { layout } }) => {
       setSize({ width: layout.width, height: layout.height });
@@ -258,6 +380,13 @@ const styles = StyleSheet.create({
   },
   image: { flex: 1, width: "100%" },
   imageFill: { flex: 1, width: "100%" },
+  overlayActions: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(0,0,0,0.55)",
+  },
   actions: {
     paddingHorizontal: theme.gutter,
     paddingTop: theme.space(3),
