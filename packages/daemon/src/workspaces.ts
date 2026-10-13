@@ -21,7 +21,7 @@
  * pairing token is a bearer secret over a public relay: a stolen one must not
  * become "enumerate this person's entire filesystem".
  */
-import { readdir, realpath, stat } from "node:fs/promises";
+import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 
@@ -266,6 +266,49 @@ async function modifiedAt(path: string): Promise<string | undefined> {
  * submodules and vendored copies are not what the user meant, and skipping them
  * is most of what keeps this fast.
  */
+/**
+ * The folders the phone's suggestions are looked for in: the ones the user has
+ * already added — GG Coder's own project list (`~/.gg/projects.json`) and the
+ * folders pew2 has been pointed at (`known-projects.json`). Nothing else.
+ *
+ * Scanning the whole home folder for repositories reached into Documents,
+ * Desktop, Downloads, Photos and Music, and macOS asked permission for each
+ * one, every time the picker opened. These folders are the user's own choice,
+ * and macOS asks about them at most once. Browsing to any other folder by hand
+ * is unchanged, and asks only when that folder is opened.
+ *
+ * Only `path` is read from GG Coder's file: it holds credentials too, and those
+ * never leave this function.
+ */
+export async function suggestionRoots(
+  knownProjects: readonly string[],
+  ggCoderProjectsFile: string = join(homedir(), ".gg", "projects.json"),
+): Promise<string[]> {
+  const candidates: string[] = [...knownProjects];
+  try {
+    const parsed = JSON.parse(await readFile(ggCoderProjectsFile, "utf8")) as Record<string, unknown>;
+    for (const entry of Object.values(parsed ?? {})) {
+      const path = (entry as { path?: unknown } | null)?.path;
+      if (typeof path === "string" && isAbsolute(path)) candidates.push(path);
+    }
+  } catch {
+    // No GG Coder projects file: suggestions come from pew2's own list alone.
+  }
+  const seen = new Set<string>();
+  const roots: string[] = [];
+  for (const candidate of candidates) {
+    const path = resolve(candidate);
+    if (seen.has(path)) continue;
+    seen.add(path);
+    try {
+      if ((await stat(path)).isDirectory()) roots.push(path);
+    } catch {
+      // Moved or deleted since it was added: nothing to suggest from it.
+    }
+  }
+  return roots;
+}
+
 export async function discoverRepos(
   options: { roots?: string[]; depth?: number; limit?: number; scanLimit?: number } = {},
 ): Promise<WorkspaceEntry[]> {

@@ -14,6 +14,7 @@ import { handleMessage } from "./handler.js";
 import { SessionLog } from "./session/log.js";
 import type { AcpSessionHandle } from "./acp/connect.js";
 import type { LoadedProvider } from "./providers/registry.js";
+import { fileURLToPath } from "node:url";
 
 async function until<T>(read: () => T | undefined, what: string, ms = 8000): Promise<T> {
   const deadline = Date.now() + ms;
@@ -155,7 +156,7 @@ const ggProvider: LoadedProvider = {
   } as unknown as LoadedProvider["manifest"],
   source: "<test>",
   command: "bun",
-  args: ["run", new URL("./testing/gg-agent.ts", import.meta.url).pathname],
+  args: ["run", fileURLToPath(new URL("./testing/gg-agent.ts", import.meta.url))],
   missingEnv: [],
   commandMissing: false,
 };

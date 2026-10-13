@@ -16,10 +16,11 @@ import { humanError } from "./errors.js";
 import { loadImage } from "./images.js";
 import { workspaceStatus } from "./git.js";
 import { resolveWorkspace } from "./workspace.js";
-import { discoverRepos, listDirectory } from "./workspaces.js";
+import { suggestionRoots, discoverRepos, listDirectory } from "./workspaces.js";
 import { wire } from "@pew2/protocol";
 import { pushFinishedTurn } from "./push.js";
 import { storeGoalFiles } from "./goalFiles";
+import { readKnownProjects } from "./known-projects.js";
 
 const NOT_A_GOAL = "Open or create a goal first.";
 
@@ -362,7 +363,11 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
         if (!message.path) {
           // Opening view: the good guesses. Walking down from home on a
           // touchscreen is the thing this exists to avoid.
-          const suggestions = await discoverRepos();
+          // Only the folders the user has added (GG Coder's list and pew2's own),
+          // so opening this never reaches into folders macOS guards.
+          const suggestions = await discoverRepos({
+            roots: await suggestionRoots(await readKnownProjects()),
+          });
           // Recorded so that choosing one is recognised. A browsed directory has
           // no sessions yet, so it is not a "known project", and without this the
           // composer would name the agent's previous project while working in

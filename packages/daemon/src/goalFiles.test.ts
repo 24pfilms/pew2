@@ -20,18 +20,22 @@ test("phone files are written under pew2's home, owner-only, in order", async ()
   expect(await readFile(paths[0]!, "utf8")).toBe("# spec");
   // A name off a phone is a label: it can't climb out of the goal's folder.
   expect(paths[1]!.includes("..")).toBe(false);
-  expect((await stat(paths[0]!)).mode & 0o777).toBe(0o600);
+  // Owner-only is a Unix permission; Windows has no equivalent to check.
+  if (process.platform !== "win32") expect((await stat(paths[0]!)).mode & 0o777).toBe(0o600);
 });
 
 test("nothing to store writes nothing", async () => {
-  expect(await storeGoalFiles([], "/nonexistent")).toEqual([]);
+  expect(await storeGoalFiles([], join(tmpdir(), "never-created"))).toEqual([]);
 });
 
 test("the attachment ceilings apply", async () => {
   const big = "A".repeat(12 * 1024 * 1024);
-  await expect(storeGoalFiles([{ name: "big.bin", mimeType: "application/octet-stream", data: big }], "/tmp")).rejects.toThrow();
+  await expect(
+    storeGoalFiles([{ name: "big.bin", mimeType: "application/octet-stream", data: big }], tmpdir()),
+  ).rejects.toThrow();
 });
 
 test("lives under PEW2_HOME, never the tempdir", () => {
-  expect(goalFilesRoot({ PEW2_HOME: "/x/home" } as NodeJS.ProcessEnv)).toBe("/x/home/goal-files");
+  // Built with join on both sides, so the separator is the platform's own.
+  expect(goalFilesRoot({ PEW2_HOME: join("x", "home") } as NodeJS.ProcessEnv)).toBe(join("x", "home", "goal-files"));
 });
