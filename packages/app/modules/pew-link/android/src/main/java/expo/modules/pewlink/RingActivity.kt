@@ -14,6 +14,7 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 
@@ -68,6 +69,16 @@ class RingActivity : Activity() {
         setBackgroundColor(Color.parseColor("#111111"))
         setPadding(dp(32), dp(48), dp(32), dp(48))
       }
+    // The Scarlet orca, from Orca Master Theming (canonical/assets/orca-scarlet-icon.png).
+    root.addView(
+      ImageView(this).apply {
+        setImageResource(R.drawable.pew2_ring_orca)
+        adjustViewBounds = true
+        contentDescription = null
+        layoutParams = LinearLayout.LayoutParams(dp(150), dp(150))
+      },
+    )
+    root.addView(spacer(20))
     root.addView(label("Incoming from your agents", 15f, "#9A9AA0"))
     root.addView(spacer(12))
     root.addView(label(title, 30f, "#F2F2F3", bold = true))
