@@ -17,6 +17,10 @@ and what was learned getting it solid.
 | `PEW2_IMAGE_ROOTS` split on `;` | `packages/daemon/src/images.ts` | Same drive-letter bug as `PEW2_BROWSE_ROOTS`: an extra image folder on `L:\` was never allowed. |
 | Metro server root pinned to the app package | `packages/app/metro.config.js` | Release bundling (`expo export:embed`) otherwise resolves `index.ts` from the repo root. Same effect as upstream's `EXPO_NO_METRO_WORKSPACE_ROOT=1`. |
 | GG Coder crash guard + safe restart script | `windows/` | See below. |
+| Connection watch: handshake timeout, 20 s ping with 5 s pong deadline, reconnect on a verified daemon hello, on network change and on resume; "online" only after the first sealed frame | `packages/app/src/connectionWatch.ts`, `useDaemon.ts`, `networkChange.ts` | The phone showed "online" over a dead socket after a daemon restart, and sat on dead links after Wi-Fi ↔ mobile switches. |
+| Relay watchdog: abandon a relay socket that goes silent, time out stuck connects; LAN pong; timestamped log lines | `packages/daemon/src/relay-client.ts`, `server.ts`, `log-time.ts` | The daemon side of the same dead-link problem, and logs that could be lined up with the phone's. |
+| Background link + ringing (Android): `connectedDevice` foreground service, call-style ring with a full-screen `RingActivity` over the lock screen, Phone setup checklist and switches | `packages/app/modules/pew-link`, `src/linkSettings.ts`, `src/ui/useBackgroundLink.ts`, `src/ui/PhoneSetup.tsx` | Android pauses a backgrounded app's socket and timers. A separate ring activity is needed because a full-screen intent aimed at the app opens it, which counts as "seen" and cancels the ring. |
+| OrcaCoder branding: app name, Scarlet orca mark, launcher icon, splash | `packages/app/app.json`, `assets/orcacoder-*`, `src/ui/OrcaMark.tsx` | `android/` is generated and gitignored, so the icon and splash live in `app.json` and its assets; `expo prebuild` recreates them. Slug and URL scheme stay `pew2` so pairing links keep working. |
 
 ## How the setup fits together
 
@@ -111,7 +115,8 @@ git push mine main                                # mine = this private repo
 ```
 
 Usual conflict spots: `bun.lock` (take upstream's, then `bun install`), `packages/app/package.json` (keep both
-sides' dependencies), `packages/app/src/useDaemon.ts`. Check whether `packages/protocol` changed: if the wire
+sides' dependencies), `packages/app/src/useDaemon.ts`, `README.md` (keep the OrcaCoder header, take upstream's
+guide below it). Check whether `packages/protocol` changed: if the wire
 format changed, rebuild the app before the phone reconnects to the new daemon. Upgrade the APK only when
 `packages/app` changed.
 

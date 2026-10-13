@@ -1,25 +1,59 @@
-# 📱 pew2
-
 <p align="center">
-  <img src="docs/icon.png" alt="pew2" width="160">
+  <img src="docs/orcacoder-banner.png" alt="OrcaCoder: your coding agents on your phone" width="100%">
 </p>
 
 <p align="center">
-  <strong>Your coding agents. On your phone. From anywhere.</strong>
-</p>
-
-<p align="center">
-  <a href="https://github.com/KenKaiii/pew2/releases/latest"><img src="https://img.shields.io/github/v/release/KenKaiii/pew2?style=for-the-badge&label=CLI&color=d97757" alt="Latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL%203.0-blue.svg?style=for-the-badge" alt="AGPL-3.0 License"></a>
-  <a href="https://youtube.com/@kenkaidoesai"><img src="https://img.shields.io/badge/YouTube-FF0000?style=for-the-badge&logo=youtube&logoColor=white" alt="YouTube"></a>
-  <a href="https://skool.com/kenkai"><img src="https://img.shields.io/badge/Skool-Community-7C3AED?style=for-the-badge" alt="Skool"></a>
+  <img src="https://img.shields.io/badge/Phone-Android-3DDC84?style=for-the-badge&logo=android&logoColor=white" alt="Android">
+  <img src="https://img.shields.io/badge/PC-Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Windows">
+  <a href="https://github.com/KenKaiii/pew2"><img src="https://img.shields.io/badge/Built%20on-pew2-d97757?style=for-the-badge" alt="Built on pew2"></a>
 </p>
 
-> **Private Windows fork.** Tracks [KenKaiii/pew2](https://github.com/KenKaiii/pew2) and adds Windows daemon
-> fixes, a phone chat-list refresh fix and Windows helper tools. See [windows/README.md](windows/README.md) for
-> what differs, building the Android app on Windows, the GG Coder crash guard, safe restarts and upgrading.
+# OrcaCoder
+
+**OrcaCoder is a private build of [pew2](https://github.com/KenKaiii/pew2)** that runs your coding agents on your
+Windows PC and puts them in your pocket. Send a request from your Android phone, put the phone away, and it
+**rings you like a phone call** when an agent finishes or needs your approval.
+
+Your PC does the work. Your phone is how you talk to it. Nothing runs in the cloud, and no API keys leave your PC.
+
+## ✨ What OrcaCoder adds to pew2
+
+| | Feature | What it means for you |
+| --- | --- | --- |
+| 📶 | **A connection you can trust** | The phone notices a dead link within seconds and reconnects. It reconnects when you switch between Wi-Fi and mobile data, and when the PC restarts its side. It never shows "online" while nothing is getting through. |
+| 🔋 | **Stays connected in the background** | A quiet notification keeps the link open with the screen locked. The **Phone setup** checklist on the connection screen walks through the Android settings it needs (battery, auto launch, full-screen ringing), with a button for each. |
+| 📞 | **Rings like a phone call** | When an agent needs approval or finishes while OrcaCoder isn't on screen, the phone rings with a full-screen call over the lock screen: **Open** jumps to that chat, **Close** silences it. Each kind of ring has its own on/off switch. |
+| 🐋 | **The OrcaCoder look** | The Scarlet orca appears on the home screen, the launcher icon, the startup screen and the ring screen. The GG Coder agent is listed as *OrcaCoder*. |
+| 🪟 | **Solid on Windows** | Daemon fixes for running under Task Scheduler, a crash guard for GG Coder's self-updater, a safe restart script, pull-to-refresh chat lists and pinch-zoom images. Details in [windows/README.md](windows/README.md). |
+
+## 🗺️ Coming next: talk to OrcaCoder
+
+- **Voice call mode:** tap call and just talk. It repeats your request back in one line, hands it to the agent in
+  the right project, and tells you when it's done. Built on OpenAI Realtime; the API key stays on the PC.
+- **Call me when done:** answering a ring goes straight into a call that starts with a short summary, or with
+  the one question the agent needs answered.
+- **Hands-free start:** begin a request from your earphones without taking the phone out.
+
+## 🛠️ Running it
+
+OrcaCoder runs the pew2 daemon from this repository on a Windows PC and a locally built Android app. Building the
+app, installing it over an existing copy (never uninstall: that loses the pairing), restarting the daemon safely
+and taking upstream updates are all in **[windows/README.md](windows/README.md)**. Everything in the pew2 guide
+below still applies.
+
+## 🙏 Credits
+
+- [KenKaiii/pew2](https://github.com/KenKaiii/pew2), the foundation: daemon, relay, end-to-end encryption and
+  the app. AGPL-3.0, like this build.
+- [riazmohamed/pew2](https://github.com/riazmohamed/pew2): its Android call service showed the way for the
+  background link and ringing.
 
 ---
+
+# 📱 The pew2 guide
+
+*The rest of this page is pew2's own guide, kept as it is upstream.*
 
 Claude Code, Codex, Gemini and about ten others already run on your computer.
 They just can't leave the room. pew2 puts them in your pocket.
