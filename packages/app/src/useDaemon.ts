@@ -44,6 +44,7 @@ import {
 } from "./activity";
 import { CapabilityProbes } from "./capabilityProbes";
 import { ListRefresh } from "./listRefresh";
+import { ConnectionWatch, isGenuineDaemonHello, PING_FRAME } from "./connectionWatch";
 import { advance, alreadySeen, type Cursors } from "./cursors";
 import { findDuplicateError } from "./errorDedup";
 import { isEmptyChunk, readChunk } from "./chunks";
@@ -279,16 +280,6 @@ const STALLED_ATTEMPTS = 4;
  * to appear with a message saying it failed.
  */
 const LOADING_SESSION_TIMEOUT = 20_000;
-
-/**
- * How long a socket may stay in CONNECTING before it is treated as dead.
- *
- * Ten seconds is well past any real handshake, including a relay cold start,
- * and well short of the operating system's own connect timeout — which is the
- * point. The platform does eventually give up; it just does so on a timescale
- * where the user has already decided the app is broken.
- */
-const CONNECT_TIMEOUT = 10_000;
 
 /**
  * How long a pull-to-refresh spinner may run before it gives up.
@@ -647,6 +638,11 @@ export function useDaemon(
     if (!active) streamBoundary.current?.();
   }, []);
   const socket = useRef<WebSocket | null>(null);
+  /**
+   * Whether the live socket is actually working, not merely open. One per
+   * socket, replaced with it. See `connectionWatch.ts`.
+   */
+  const watch = useRef<ConnectionWatch | null>(null);
   /** Encryption state for the live socket. Rebuilt on every reconnect. */
   const channel = useRef<SecureChannel | null>(null);
   /** Set once the daemon has refused this device for a reason retrying cannot fix. */
@@ -953,6 +949,58 @@ export function useDaemon(
       const secure = new SecureChannel(e2e.fromHex(pairingKey), "app");
       channel.current = secure;
 
+      // Owns the deadline that used to cover only CONNECTING: it now runs until
+      // the first sealed frame, because an open socket the daemon never answers
+      // is the same failure as one that never opens.
+      const watcher = new ConnectionWatch({
+        sendPing: () => {
+          if (socket.current === ws && ws.readyState === WebSocket.OPEN) ws.send(PING_FRAME);
+        },
+        reconnect: (reason) => {
+          if (!alive.current || socket.current !== ws) return;
+          console.log(`[pew2] replacing connection: ${reason}`);
+          // A handshake that never completed is a failed attempt like any
+          // other, and counts towards the backoff and "can't reach". Everything
+          // else is a working path that just went stale, and is retried at once.
+          if (reason === "handshake-timeout") {
+            ws.close();
+            return;
+          }
+          replaceNow();
+        },
+        onProven: () => {
+          if (socket.current !== ws) return;
+          attempts.current = 0;
+          // Online only now. The socket opened earlier, but nothing had shown
+          // that the daemon accepted this phone until a sealed frame opened.
+          setState((s) => ({ ...s, status: "online", unreachable: false }));
+        },
+        timers: {
+          set: (callback, ms) => setTimeout(callback, ms),
+          clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+        },
+      });
+      watch.current = watcher;
+
+      // Retire this socket and open the next one immediately, without backoff.
+      // Its handlers go first, so the close cannot schedule a second reconnect
+      // beside this one.
+      const replaceNow = () => {
+        watcher.stop();
+        ws.onopen = null;
+        ws.onmessage = null;
+        ws.onclose = null;
+        ws.onerror = null;
+        ws.close();
+        forgetConnection();
+        if (retry.current) {
+          clearTimeout(retry.current);
+          retry.current = null;
+        }
+        attempts.current = 0;
+        connect();
+      };
+
       /**
        * Deliver everything typed while there was nowhere to send it.
        *
@@ -1065,8 +1113,6 @@ export function useDaemon(
       };
 
       ws.onopen = () => {
-        clearTimeout(deadline);
-        attempts.current = 0;
         // A request written to the socket that died is never answered, and its
         // entry would hold the drawer in a skeleton forever. Dropping them here
         // also lets the open project be asked for again.
@@ -1079,9 +1125,6 @@ export function useDaemon(
         awaitingResume.current = false;
         setState((s) => ({
           ...s,
-          status: "online",
-          // Whatever it was, it is reachable now.
-          unreachable: false,
           // Turns end while the phone is asleep and the socket is dead, and
           // `session.idle` is not replayed — only `session.event` is persisted.
           // So anything believed to be working across a drop is a guess, and
@@ -1118,13 +1161,24 @@ export function useDaemon(
         } catch {
           return;
         }
+        // Anything at all — a pong, the relay's `ready`, a sealed frame — shows
+        // the path is alive, whatever it turns out to say.
+        watcher.heard();
 
-        // A cleartext frame from the daemon or the relay. Only two are acted on,
-        // and neither carries user content: a version mismatch, and the refusal
-        // that follows a proof the daemon would not accept. Both have to be
-        // readable *before* anything can be decrypted, which is exactly why they
-        // are the ones left in the open.
+        // A cleartext frame from the daemon or the relay. Only three are acted
+        // on, and none carries user content: a version mismatch, the refusal
+        // that follows a proof the daemon would not accept, and the daemon's own
+        // `hello` when it reconnects to the relay. All have to be readable
+        // *before* anything can be decrypted, which is exactly why they are the
+        // ones left in the open.
         const kind = (frame as { t?: unknown } | null)?.t;
+        if (kind === "hello") {
+          // The daemon came back with a fresh channel that has never seen this
+          // phone, and this socket can no longer talk to it in either
+          // direction. Only acted on when the proof opens under the pairing key.
+          watcher.daemonHello(isGenuineDaemonHello(secure, frame));
+          return;
+        }
         if (kind === "error") {
           const code = (frame as { code?: unknown }).code;
           // `device-refused` joins these: the pairing is already claimed by
@@ -1163,9 +1217,14 @@ export function useDaemon(
 
         const message: any = secure.open(frame);
         // Undecryptable: a stray frame, a replay, or traffic from a pairing this
-        // phone no longer holds the key for. Silently ignored — there is nothing
-        // useful to show and nothing safe to act on.
-        if (message === undefined) return;
+        // phone no longer holds the key for. Nothing useful to show and nothing
+        // safe to act on — but several in a row mean the channel itself is
+        // broken, which the watch turns into a reconnect.
+        if (message === undefined) {
+          watcher.rejected();
+          return;
+        }
+        watcher.sealed();
 
         // Only authenticated, visible prose may wait. Control/replay/background
         // frames flush before any notification or state transition below.
@@ -2065,18 +2124,8 @@ export function useDaemon(
         // already open; without this guard it would mark us offline and open a
         // duplicate connection that keeps dispatching state updates.
         if (!alive.current || socket.current !== ws) return;
-        resetStream();
-        // This connection is over, so what was asked over it no longer counts.
-        // Without this the chat list is whatever the daemon had at launch: an
-        // agent asked once was never asked again, and a project created at the
-        // desk stayed invisible until the app was force-quit. The in-flight set
-        // goes with it — a request cut off mid-flight is never answered, and
-        // leaving it behind kept a skeleton in the drawer for ever.
-        probed.current.disconnected();
-        pendingCapabilities.current.clear();
-        // A pull cut off with the socket is never answered either.
-        listRefresh.current.cancel();
-        setRefreshingList(false);
+        watcher.stop();
+        forgetConnection();
         // A refusal the daemon explained is not a blip. Retrying a rotated key
         // or a version mismatch every few seconds forever would never succeed,
         // would keep the radio awake, and would bury the explanation under a
@@ -2101,33 +2150,34 @@ export function useDaemon(
         retry.current = setTimeout(connect, delay);
       };
 
-      // A socket that never finishes connecting, and never fails either.
-      //
-      // The handshake reaches out over whatever the phone last had, and a
-      // network that changed underneath it — wifi to cellular, a captive
-      // portal, a VPN coming up — leaves the TCP connection half open: nothing
-      // is coming back, but nothing has been refused, so `onclose` and
-      // `onerror` are never called and the backoff below never runs. iOS will
-      // eventually time it out on its own schedule, which is measured in
-      // minutes and looks exactly like the app having given up silently. This
-      // is the deadline the platform does not give.
-      //
-      // Closing it is enough to start recovery: `onclose` follows, which is the
-      // same path a refused connection takes, so the attempt counts towards the
-      // backoff and towards `unreachable` like any other failure.
-      const deadline = setTimeout(() => {
-        if (socket.current !== ws || ws.readyState !== WEBSOCKET_CONNECTING) return;
-        ws.close();
-      }, CONNECT_TIMEOUT);
-
       ws.onclose = () => {
-        clearTimeout(deadline);
         scheduleReconnect();
       };
       ws.onerror = () => {
         resetStream();
         ws.close();
       };
+    };
+
+    /**
+     * Let go of everything that belonged to the connection just lost.
+     *
+     * Shared by the two ways a connection ends: a close that waits out the
+     * backoff, and a stale socket replaced on the spot.
+     */
+    const forgetConnection = () => {
+      resetStream();
+      // This connection is over, so what was asked over it no longer counts.
+      // Without this the chat list is whatever the daemon had at launch: an
+      // agent asked once was never asked again, and a project created at the
+      // desk stayed invisible until the app was force-quit. The in-flight set
+      // goes with it — a request cut off mid-flight is never answered, and
+      // leaving it behind kept a skeleton in the drawer for ever.
+      probed.current.disconnected();
+      pendingCapabilities.current.clear();
+      // A pull cut off with the socket is never answered either.
+      listRefresh.current.cancel();
+      setRefreshingList(false);
     };
 
     connect();
@@ -2140,12 +2190,15 @@ export function useDaemon(
       // home screen; retrying it here would defeat the whole point of `fatal`.
       if (fatal.current) return;
       const ws = socket.current;
-      // A live socket needs nothing. `CONNECTING` is left alone too: an attempt
-      // is already in flight, and replacing it would abandon a connection that
-      // may be one frame from opening.
-      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+      // An open socket is not taken at its word: one that spent the last ten
+      // minutes in a pocket is the likeliest to be dead without having closed,
+      // so it is pinged with a short deadline instead. `CONNECTING` is left
+      // alone: an attempt is already in flight, and its own deadline is running.
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        watch.current?.probe();
         return;
       }
+      if (ws && ws.readyState === WebSocket.CONNECTING) return;
       if (retry.current) {
         clearTimeout(retry.current);
         retry.current = null;
@@ -2170,6 +2223,8 @@ export function useDaemon(
       streamBoundary.current = undefined;
       alive.current = false;
       resume.current = undefined;
+      watch.current?.stop();
+      watch.current = null;
       if (retry.current) clearTimeout(retry.current);
       const ws = socket.current;
       socket.current = null;
@@ -2251,6 +2306,27 @@ export function useDaemon(
    * this hook free of native imports is the same rule the pure modules follow.
    */
   const resumeNow = useCallback(() => {
+    resume.current?.();
+  }, []);
+
+  /**
+   * The phone's network changed: wifi to cellular, a new access point, back
+   * online after none.
+   *
+   * A socket bound to the old network is dead even though nothing has told it
+   * so yet, and testing it would only spend a deadline proving that — so an
+   * open or opening socket is replaced at once. With none in flight this is the
+   * same as coming back to the screen: retry now rather than on the backoff.
+   *
+   * Driven from the caller for the same reason as `resumeNow`: the network
+   * listener is a native module, and this module must stay free of them.
+   */
+  const networkChanged = useCallback(() => {
+    const ws = socket.current;
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WEBSOCKET_CONNECTING)) {
+      watch.current?.networkChanged();
+      return;
+    }
     resume.current?.();
   }, []);
 
@@ -2994,6 +3070,7 @@ export function useDaemon(
     ...state,
     ...actions,
     resumeNow,
+    networkChanged,
     setForeground,
     // Exported so the UI names the same agent the composer targets: the drawer
     // and top bar must not show Claude Code while a prompt would go elsewhere.
