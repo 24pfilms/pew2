@@ -24,5 +24,16 @@
     <receiver
       android:name="expo.modules.pewlink.RingDeclineReceiver"
       android:exported="false" />
+    <!-- The incoming-call screen over the lock screen; its own task, so pew2
+         itself is untouched until the user chooses Open. -->
+    <activity
+      android:name="expo.modules.pewlink.RingActivity"
+      android:exported="false"
+      android:showWhenLocked="true"
+      android:turnScreenOn="true"
+      android:excludeFromRecents="true"
+      android:launchMode="singleTop"
+      android:taskAffinity=""
+      android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen" />
   </application>
 </manifest>

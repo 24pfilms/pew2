@@ -58,6 +58,20 @@ object PewLinkRinger {
         launch,
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
       )
+    // The locked-phone screen. Not pew2 itself: Android opens this at once on
+    // a locked phone, and opening pew2 there stopped the ring it was part of.
+    val fullScreen =
+      PendingIntent.getActivity(
+        context,
+        requestCode,
+        Intent(context, RingActivity::class.java)
+          .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_USER_ACTION)
+          .putExtra(EXTRA_RING_ID, id)
+          .putExtra(EXTRA_SESSION, sessionId)
+          .putExtra(RingActivity.EXTRA_TITLE, title)
+          .putExtra(RingActivity.EXTRA_TEXT, text),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+      )
     val decline =
       PendingIntent.getBroadcast(
         context,
@@ -77,7 +91,7 @@ object PewLinkRinger {
         .setCategory(NotificationCompat.CATEGORY_CALL)
         .setPriority(NotificationCompat.PRIORITY_MAX)
         .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-        .setFullScreenIntent(answer, true)
+        .setFullScreenIntent(fullScreen, true)
         .setContentIntent(answer)
         .setAutoCancel(true)
         .setOngoing(true)
