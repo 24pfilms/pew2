@@ -1,19 +1,16 @@
 /**
- * The pew2 mark.
- *
- * Deliberately not a new invention: the orb already means "an agent is here"
- * everywhere else in the app, so the brand mark is that same sphere rather than
- * an abstract logo that appears once and is never seen again. In accent rather
- * than a provider colour, because at launch no agent has been chosen yet.
+ * The pew2 mark: the Scarlet orca above the wordmark, the same orca that sits
+ * on the empty chat screen, so the brand is one image rather than a logo seen
+ * once and never again.
  *
  * The wordmark is lowercase to match how the command is typed.
  */
 import { StyleSheet, Text, View } from "react-native";
-import { Orb } from "./Orb";
+import { OrcaMark } from "./OrcaMark";
 import { theme } from "../theme";
 
 interface LogoProps {
-  /** Diameter of the orb. The wordmark scales with it. */
+  /** Size of the orca. The wordmark scales with it. */
   size?: number;
 }
 
@@ -25,7 +22,7 @@ export function Logo({ size = 72 }: LogoProps) {
       accessibilityRole="image"
       accessibilityLabel="pew2"
     >
-      <Orb color={theme.color.accent} size={size} />
+      <OrcaMark size={size} />
       <Text
         style={[
           styles.word,
@@ -34,7 +31,7 @@ export function Logo({ size = 72 }: LogoProps) {
             letterSpacing: size * 0.02,
             // Bitcount's side bearings are asymmetric: the glyph run sits left
             // of its own text box, so centring the box leaves the wordmark
-            // visibly off the orb above it. Measured at 4.3pt on a 72pt mark.
+            // visibly off the mark above it. Measured at 4.3pt on a 72pt mark.
             //
             // A margin on a centred child shifts it by half its value, hence
             // double the correction. Expressed as a ratio because bearings

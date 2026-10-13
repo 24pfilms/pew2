@@ -58,7 +58,7 @@ import {
   type NotificationChoice,
 } from "./src/ui/notifier";
 import { pushAddress } from "./src/ui/push";
-import { Orb } from "./src/ui/Orb";
+import { OrcaMark } from "./src/ui/OrcaMark";
 import { ComposerDock, type ComposerDockHandle } from "./src/ui/ComposerDock";
 import { ChatThread, type ChatThreadRef } from "./src/ui/ChatThread";
 import { ImageResolverProvider } from "./src/ui/ChatImage";
@@ -270,11 +270,10 @@ function Root() {
 }
 
 /**
- * The mark's diameter on an empty conversation, with nothing to compete with.
+ * The orca's size on the empty chat screen.
  *
  * Large enough to be the subject of the screen rather than an icon above a
- * sentence, and it reaches the densest grid the geometry offers — so the
- * drifting light has the most cells to travel across.
+ * sentence.
  */
 const ORB_REST_SIZE = 96;
 
@@ -1461,11 +1460,7 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
               onPress={Keyboard.dismiss}
             >
               <Reanimated.View style={keyboard.settled}>
-                <Orb
-                  color={active?.color}
-                  size={ORB_REST_SIZE}
-                  busy={daemon.busy}
-                />
+                <OrcaMark size={ORB_REST_SIZE} busy={daemon.busy} />
               </Reanimated.View>
               <Text style={styles.greetingText}>
                 {/* A refusal the daemon explained outranks the connecting
