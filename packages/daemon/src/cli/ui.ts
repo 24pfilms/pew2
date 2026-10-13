@@ -116,20 +116,43 @@ export interface Glyphs {
   tick: string;
   cross: string;
   warn: string;
+  /** A separator between facts on one line, such as `running · port 8787`. */
   dot: string;
+  /** A thing not started or not known yet: a section about to open, or a missing agent. */
+  pending: string;
   rule: string;
   arrow: string;
   spinner: string[];
 }
 
+/**
+ * An LED heading: each letter spaced, words separated by three spaces, in capitals.
+ * `PEW2 DOCTOR` becomes `P E W 2   D O C T O R`.
+ */
+export function spaced(text: string): string {
+  return text
+    .toUpperCase()
+    .split(" ")
+    .map((word) => word.split("").join(" "))
+    .join("   ");
+}
+
+/**
+ * The Stage look (style B): dot-matrix marks rather than ticks and crosses.
+ *
+ * ▓ is a finished thing, ▒ a thing worth a look, ■ a stop, ░ a section about to
+ * open. They are drawn from the same block set as the LED type, so the CLI and
+ * the phone read as one product. The ASCII set keeps every state distinct.
+ */
 export function glyphs(unicode: boolean = unicodeOk()): Glyphs {
   return unicode
     ? {
         unicode: true,
-        tick: "✓",
-        cross: "✗",
-        warn: "!",
+        tick: "▓",
+        cross: "■",
+        warn: "▒",
         dot: "·",
+        pending: "░",
         rule: "─",
         arrow: "→",
         // Braille dots read as one smoothly rotating shape at 80ms, where
@@ -142,6 +165,7 @@ export function glyphs(unicode: boolean = unicodeOk()): Glyphs {
         cross: "x",
         warn: "!",
         dot: "-",
+        pending: "o",
         rule: "-",
         arrow: "->",
         spinner: ["|", "/", "-", "\\"],

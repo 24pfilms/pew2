@@ -351,7 +351,7 @@ export function agentSections(agents: AgentState[], options: RenderOptions = {})
     // Not an error, and worded as the small thing it is.
     out.push(...r.step("Available if you want them", "installed, but not signed in"));
     for (const agent of buckets["needs-setup"]) {
-      out.push(r.line(`${s.hex(PALETTE.warning, g.dot)} ${s.bold(agent.name)}`));
+      out.push(r.line(`${s.hex(PALETTE.warning, g.warn)} ${s.bold(agent.name)}`));
       for (const part of wrapDetail(signinHint(agent), detailWidth(options))) {
         out.push(r.line(`  ${s.hex(PALETTE.faint, part)}`));
       }
@@ -361,7 +361,7 @@ export function agentSections(agents: AgentState[], options: RenderOptions = {})
   if (buckets["missing-key"].length > 0) {
     out.push(...r.step("Available with a key", "set it where the daemon runs"));
     for (const agent of buckets["missing-key"]) {
-      out.push(r.line(`${s.hex(PALETTE.warning, g.dot)} ${s.bold(agent.name)}`));
+      out.push(r.line(`${s.hex(PALETTE.warning, g.warn)} ${s.bold(agent.name)}`));
       out.push(r.line(`  ${s.hex(PALETTE.faint, `${agent.missingEnv.join(", ")}`)}`));
     }
   }
@@ -535,7 +535,7 @@ export function providerList(agents: AgentState[], options: RenderOptions = {}):
   if (half.length > 0) {
     out.push(...r.step("Installed, not finished", "one step each"));
     for (const agent of half) {
-      out.push(r.line(`${s.hex(PALETTE.warning, g.dot)} ${s.bold(agent.name)}`));
+      out.push(r.line(`${s.hex(PALETTE.warning, g.warn)} ${s.bold(agent.name)}`));
       const note =
         agent.missingEnv.length > 0
           ? `needs ${agent.missingEnv.join(", ")}`
@@ -570,7 +570,7 @@ export function providerList(agents: AgentState[], options: RenderOptions = {}):
     // than implying something is wrong with them.
     out.push(...r.step("Turned off", plural(off.length, "agent")));
     for (const agent of off) {
-      out.push(r.line(`${s.hex(PALETTE.faint, g.dot)} ${s.hex(PALETTE.faint, agent.name)}`));
+      out.push(r.line(`${s.hex(PALETTE.faint, g.pending)} ${s.hex(PALETTE.faint, agent.name)}`));
     }
     out.push(
       r.line(
@@ -585,7 +585,7 @@ export function providerList(agents: AgentState[], options: RenderOptions = {}):
     // cannot carry the install command that makes it actionable.
     out.push(...r.step("Available to install", plural(buckets["not-installed"].length, "agent")));
     for (const agent of buckets["not-installed"]) {
-      out.push(r.line(`${s.hex(PALETTE.faint, g.dot)} ${s.bold(agent.name)}`));
+      out.push(r.line(`${s.hex(PALETTE.faint, g.pending)} ${s.bold(agent.name)}`));
       if (agent.install) {
         for (const part of wrapDetail(agent.install, width - 2)) {
           out.push(r.line(`  ${s.hex(PALETTE.faint, part)}`));

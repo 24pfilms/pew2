@@ -1,5 +1,5 @@
 /**
- * The chrome every pew2 command is drawn with.
+ * The chrome every pew2 command is drawn with (style B: see `ui.ts`).
  *
  * Five commands used to look like five tools: `setup` and `providers list` drew
  * a rail, `pair` drew a centred block under a rule, `doctor` and `registry sync`
@@ -11,7 +11,7 @@
  * with a single line that says what happened. Anything shared between screens
  * belongs in this file; anything specific to one screen does not.
  */
-import { PALETTE, styler, glyphs, terminalWidth, type Glyphs, type Style } from "./ui.js";
+import { PALETTE, spaced, styler, glyphs, terminalWidth, type Glyphs, type Style } from "./ui.js";
 
 export interface RenderOptions {
   style?: Style;
@@ -42,9 +42,16 @@ export interface Rail {
   line: (text: string) => string;
   /** An empty rail segment, for breathing room. */
   bar: () => string;
-  /** Closes the flow. */
-  outro: (text: string) => string[];
+  /**
+   * Closes the flow. The closing square is the only mark on the line, and
+   * `tone` colours it: green when it worked, red for a stop, amber for
+   * something worth a look, faint for a quiet ending. Default is the accent.
+   */
+  outro: (text: string, tone?: Tone) => string[];
 }
+
+/** The state a closing line reports, shown as the colour of its square. */
+export type Tone = "ok" | "stop" | "warn" | "quiet";
 
 /**
  * The vertical rail.
@@ -61,25 +68,39 @@ export function rail(options: RenderOptions = {}): Rail {
   const g = options.glyph ?? glyphs();
   const unicode = g.unicode;
 
-  const pipe = s.hex(PALETTE.faint, unicode ? "│" : "|");
-  const open = s.hex(PALETTE.accent, unicode ? "◆" : "*");
-  const dot = s.hex(PALETTE.faint, unicode ? "◇" : "o");
-  const end = s.hex(PALETTE.accent, unicode ? "└" : "`");
+  // Style B: no vertical rule. A flow opens with a dot-matrix mark and a spaced
+  // title, its lines hang two spaces in under it, and a square closes it. The
+  // ASCII set keeps the same shape with plain characters.
+  const open = s.hex(PALETTE.accent, unicode ? "■" : "*");
+  const dot = s.hex(PALETTE.accent, unicode ? "░" : "o");
+  const endMark = unicode ? "■" : "`";
+  const toneColour = (tone?: Tone): string =>
+    tone === "ok"
+      ? PALETTE.success
+      : tone === "stop"
+        ? PALETTE.danger
+        : tone === "warn"
+          ? PALETTE.warning
+          : tone === "quiet"
+            ? PALETTE.faint
+            : PALETTE.accent;
 
   return {
     intro: (title, subtitle) => [
       "",
-      `${open}  ${s.bold(title)}`,
-      ...(subtitle ? [`${pipe}  ${s.hex(PALETTE.faint, subtitle)}`] : []),
+      `${open}  ${s.bold(spaced(title))}`,
+      ...(subtitle ? [`   ${s.hex(PALETTE.faint, subtitle.toUpperCase())}`] : []),
     ],
+    // Sections keep their own words: they are sentences ("Ready to use"), and
+    // spacing every letter makes them harder to read. Only the screen's title
+    // and the command groups are spaced, as in the style B preview.
     step: (title, note) => [
-      pipe,
+      "",
       `${dot}  ${s.bold(title)}${note ? s.hex(PALETTE.faint, `  ${note}`) : ""}`,
-      pipe,
     ],
-    line: (text) => `${pipe}  ${text}`,
-    bar: () => pipe,
-    outro: (text) => [pipe, `${end}  ${text}`, ""],
+    line: (text) => `  ${text}`,
+    bar: () => "",
+    outro: (text, tone) => ["", `${s.hex(toneColour(tone), endMark)}  ${text}`, ""],
   };
 }
 

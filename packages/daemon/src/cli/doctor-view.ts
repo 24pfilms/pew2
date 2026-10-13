@@ -59,7 +59,7 @@ export function checks(report: DoctorReport): Check[] {
 }
 
 /**
- * The closing line.
+ * The closing line. The rail's closing square is the only marker on it.
  *
  * Blocking problems are the only thing that can make this negative. A warning
  * means "you could do more", and a screen that shouts about optional things
@@ -67,17 +67,16 @@ export function checks(report: DoctorReport): Check[] {
  */
 export function summary(report: DoctorReport, options: RenderOptions = {}): string {
   const s = options.style ?? styler();
-  const g = options.glyph ?? glyphs();
   const errors = report.problems.filter((p) => p.severity === "error");
   const warnings = report.problems.filter((p) => p.severity === "warning");
 
   if (errors.length > 0) {
-    return `${s.hex(PALETTE.danger, g.cross)} ${s.bold(`${plural(errors.length, "thing")} to fix.`)} ${s.hex(PALETTE.faint, "Each one has the command above.")}`;
+    return `${s.bold(`${plural(errors.length, "thing")} to fix.`)} ${s.hex(PALETTE.faint, "Each one has the command above.")}`;
   }
   if (warnings.length > 0) {
-    return `${s.hex(PALETTE.success, g.tick)} ${s.bold("Working.")} ${s.hex(PALETTE.faint, `${plural(warnings.length, "optional improvement")} above.`)}`;
+    return `${s.bold("Working.")} ${s.hex(PALETTE.faint, `${plural(warnings.length, "optional improvement")} above.`)}`;
   }
-  return `${s.hex(PALETTE.success, g.tick)} ${s.bold("Everything checks out.")}`;
+  return s.bold("Everything checks out.");
 }
 
 function problemRows(
@@ -114,7 +113,7 @@ export function doctorView(report: DoctorReport, options: RenderOptions = {}): s
   const facts = checks(report);
   out.push(...r.step("Checked", plural(facts.length, "thing")));
   for (const check of facts) {
-    const mark = check.ok ? s.hex(PALETTE.success, g.tick) : s.hex(PALETTE.warning, g.dot);
+    const mark = check.ok ? s.hex(PALETTE.success, g.tick) : s.hex(PALETTE.warning, g.warn);
     out.push(r.line(`${mark} ${check.label}${check.note ? s.hex(PALETTE.faint, `  ${check.note}`) : ""}`));
   }
 
@@ -125,10 +124,10 @@ export function doctorView(report: DoctorReport, options: RenderOptions = {}): s
   if (warnings.length > 0) {
     // Worded as an offer, not a defect: everything here still works without it.
     out.push(
-      ...problemRows("Could be better", "optional", warnings, PALETTE.warning, g.dot, options),
+      ...problemRows("Could be better", "optional", warnings, PALETTE.warning, g.warn, options),
     );
   }
 
-  out.push(...r.outro(summary(report, options)));
+  out.push(...r.outro(summary(report, options), errors.length > 0 ? "stop" : "ok"));
   return out;
 }

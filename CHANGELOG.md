@@ -11,6 +11,20 @@ installs them separately, and what an app and a daemon must agree on is
 
 Dates are the day the tag was cut.
 
+## 0.9.21 — 2026-10-13
+
+### Changed
+
+- **A new look for the installer and every `pew2` command.** The install line,
+  `pew2 setup`, `doctor`, `pair`, `providers` and `registry sync` share one
+  style that matches the phone app: a dot-matrix mark opens each screen, its
+  title is set in spaced capitals, and each line is marked done, worth a look,
+  or stopped. `pew2 --help` groups its commands into Setup, Run and Agents.
+- **Choosing a folder for a goal no longer sets off a run of macOS "Allow"
+  prompts.** Suggestions now come only from folders you have already added, in
+  GG Coder or in pew2, instead of a search through your whole home folder.
+  Browsing to any other folder still works, and macOS asks only when you open it.
+
 ## 0.9.20 — 2026-10-13
 
 ### Added

@@ -2,6 +2,10 @@ import { test, expect } from "bun:test";
 import { initialState, reduce, render, summary, type PickerItem } from "./picker.js";
 import { stripAnsi, styler, glyphs } from "./ui.js";
 
+/** A line is on the layout if it is a section mark, a closing square, or hangs under one. */
+const onLayout = (line: string): boolean => /^(■|░|▓|▒|\s{2})/.test(line);
+
+
 const plain = { style: styler(0), glyph: glyphs(true), columns: 80 };
 
 const item = (over: Partial<PickerItem> & { id: string }): PickerItem => ({
@@ -141,7 +145,7 @@ test("the screen shows state, cursor and the keys that work", () => {
   const text = render(initialState(items), plain).map(stripAnsi).join("\n");
 
   expect(text).toContain("Claude Code");
-  expect(text).toContain("✓");
+  expect(text).toContain("▓");
   expect(text).toContain("❯");
   expect(text).toContain("space");
   expect(text).toContain("toggle");
@@ -169,7 +173,7 @@ test("every line stays on the rail", () => {
   const lines = render(initialState(items), plain)
     .map(stripAnsi)
     .filter((l) => l !== "");
-  expect(lines.every((l) => /^[│◇◆└]/.test(l))).toBe(true);
+  expect(lines.every(onLayout)).toBe(true);
 });
 
 test("the screen degrades to ASCII", () => {

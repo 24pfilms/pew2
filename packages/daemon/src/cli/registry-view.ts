@@ -76,7 +76,7 @@ export function registryView(result: SyncResult, options: RegistryViewOptions = 
   }
 
   if (result.written.length === 0 && result.conflicts.length === 0) {
-    out.push(...r.outro(`${s.hex(PALETTE.success, g.tick)} ${s.bold("Nothing to do.")} ${s.hex(PALETTE.faint, "You already have every agent in the registry.")}`));
+    out.push(...r.outro(`${s.bold("Nothing to do.")} ${s.hex(PALETTE.faint, "You already have every agent in the registry.")}`, "ok"));
     return out;
   }
 
@@ -84,7 +84,8 @@ export function registryView(result: SyncResult, options: RegistryViewOptions = 
     ...r.outro(
       dryRun
         ? `${s.bold(`${plural(result.written.length, "agent")} would be added.`)} ${s.hex(PALETTE.faint, "Run without --dry-run to do it.")}`
-        : `${s.hex(PALETTE.success, g.tick)} ${s.bold(`${plural(result.written.length, "agent")} added.`)} ${s.hex(PALETTE.faint, "Run")} ${s.bold("pew2 providers list")} ${s.hex(PALETTE.faint, "to see them.")}`,
+        : `${s.bold(`${plural(result.written.length, "agent")} added.`)} ${s.hex(PALETTE.faint, "Run")} ${s.bold("pew2 providers list")} ${s.hex(PALETTE.faint, "to see them.")}`,
+      dryRun ? undefined : "ok",
     ),
   );
   return out;

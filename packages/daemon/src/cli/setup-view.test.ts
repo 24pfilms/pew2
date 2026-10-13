@@ -85,7 +85,8 @@ test("a real breakage is still called out, and only that", () => {
 
   const text = stripAnsi(agentSections([broken], plain).join("\n"));
   expect(text).toContain("Installed, but not starting");
-  expect(text).toContain("✗");
+  // A stop is the square, in the style B look (■), not a cross.
+  expect(text).toContain("■");
   // With the command that investigates it.
   expect(text).toContain("pew2 providers verify goose");
 
@@ -378,8 +379,9 @@ test("the catalogue and the setup screen share one rail and one vocabulary", () 
   const list = providerList(agents, plain).map(stripAnsi);
   const setup = agentSections(agents, plain).map(stripAnsi);
 
-  expect(list.some((l) => l.startsWith("◇"))).toBe(true);
-  expect(list.every((l) => l.startsWith("│") || l.startsWith("◇"))).toBe(true);
+  // Style B: a section opens with the step mark, and its lines hang under it.
+  expect(list.some((l) => l.startsWith("░"))).toBe(true);
+  expect(list.filter((l) => l !== "").every((l) => /^(░|\s{2})/.test(l))).toBe(true);
   // Same heading for the same state.
   expect(list.join("\n")).toContain("Ready to use");
   expect(setup.join("\n")).toContain("Ready to use");
