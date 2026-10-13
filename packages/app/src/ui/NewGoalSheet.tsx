@@ -76,6 +76,8 @@ function NewGoalSheetView(props: NewGoalSheetProps) {
 
 /** The steps, in order. The last one is launching. */
 const STEPS = ["name", "goal", "context", "instructions", "launch"] as const;
+/** How long a launch waits for the computer before saying it heard nothing. */
+const LAUNCH_TIMEOUT_MS = 20_000;
 type Step = (typeof STEPS)[number];
 const STEP_TITLE: Record<Step, string> = {
   name: "Name it",
@@ -121,6 +123,18 @@ function NewGoalScreen({ visible, onClose, onCreate, results, onCreated, browse,
   }, [visible, prefill]);
 
   const result = pending ? results[pending] : undefined;
+  // A launch that hears nothing back gives up rather than sitting on
+  // "Launching" for ever: a dropped connection or an older pew2 that never
+  // answers both used to leave this page with no way forward but closing it.
+  useEffect(() => {
+    if (!pending) return;
+    const t = setTimeout(() => {
+      setPending(undefined);
+      haptics.failed();
+      setError("Your computer didn't answer. Check it's online, then hold Ken again.");
+    }, LAUNCH_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [pending]);
   // How many phone files went out with the create, to check they arrived.
   const sentFiles = useRef(0);
   useEffect(() => {
@@ -137,7 +151,10 @@ function NewGoalScreen({ visible, onClose, onCreate, results, onCreated, browse,
         );
       }
       onCreated(result.goal);
-    } else setError(result.error ?? "Couldn't create the goal");
+    } else {
+      haptics.failed();
+      setError(result.error ?? "Couldn't create the goal");
+    }
   }, [result, onCreated]);
 
   // The system file picker. Files join the goal's context row as chips and
@@ -296,7 +313,13 @@ function NewGoalScreen({ visible, onClose, onCreate, results, onCreated, browse,
 
           {step === "launch" && <LaunchPad ready={ready} pending={pending !== undefined} onLaunch={launch} />}
 
-          {error ? <Text style={styles.error}>{error}</Text> : null}
+          {/* Centred on the step it belongs to, so a failed launch is read where
+              the eye already is, under Ken. */}
+          {error ? (
+            <Text style={[styles.error, step === "launch" && styles.errorCentred]} accessibilityLiveRegion="polite">
+              {error}
+            </Text>
+          ) : null}
         </Reanimated.View>
       </KeyboardAwareScrollView>
 
@@ -590,6 +613,7 @@ const styles = StyleSheet.create({
   chip: { flexDirection: "row", alignItems: "center", gap: theme.space(1.5), maxWidth: "100%", paddingHorizontal: theme.space(3), paddingVertical: theme.space(1.5), borderRadius: theme.radius.pill },
   chipText: { flexShrink: 1, color: theme.color.text, fontSize: theme.font.small },
   error: { color: theme.color.danger, fontSize: theme.font.small },
+  errorCentred: { textAlign: "center", alignSelf: "stretch", lineHeight: 20 },
   pad: { alignItems: "center", gap: theme.space(3), paddingTop: theme.space(4) },
   padOff: { opacity: 0.45 },
   ring: { width: RING, height: RING, alignItems: "center", justifyContent: "center" },

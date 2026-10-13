@@ -73,6 +73,10 @@ const summary = (goal: Goal) => ({
   path: goal.path,
   createdAt: goal.createdAt,
   lastActiveMs: goal.lastActiveMs,
+  // Exactly as real ggcoder sends it: a goal whose coordinator has never run
+  // has no conversation yet, and ggcoder says so with null rather than
+  // leaving the field out. pew2 once rejected every new goal over this.
+  agentSessionId: null,
   status: goal.paused ? "paused" : goal.status,
 });
 

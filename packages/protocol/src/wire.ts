@@ -157,7 +157,7 @@ export const ProviderAnnounce = z.object({
    */
   update: z
     .object({
-      /** The published version, e.g. "0.9.21". */
+      /** The published version, e.g. "0.9.22". */
       latest: z.string(),
       /**
        * Whether the daemon expects to install it without being asked.

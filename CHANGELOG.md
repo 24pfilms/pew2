@@ -11,6 +11,16 @@ installs them separately, and what an app and a daemon must agree on is
 
 Dates are the day the tag was cut.
 
+## 0.9.22 — 2026-10-14
+
+### Fixed
+
+- **Starting a new goal from the phone works.** GG Coder reports a brand-new
+  goal with no conversation yet, and pew2 read that as a broken answer, so
+  every new goal failed and the phone sat on "Launching". If your computer
+  does not answer within 20 seconds, the phone now says so and lets you try
+  again.
+
 ## 0.9.21 — 2026-10-13
 
 ### Changed

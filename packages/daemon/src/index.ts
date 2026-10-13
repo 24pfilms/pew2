@@ -2753,6 +2753,14 @@ export class Daemon {
 
   /** Read one goal summary off GG Coder, dropping anything malformed. */
   private static readGoal(value: unknown): wire.GoalSummary | undefined {
+    // GG Coder sends `null` for a field it has no value for yet: a goal created
+    // a moment ago has no coordinator conversation, so `agentSessionId` is null.
+    // The wire treats absent as "none", so nulls are dropped before parsing.
+    // Rejecting them threw away every new goal ("GG Coder did not return the
+    // new goal"), while goals that had run once listed fine.
+    if (value && typeof value === "object") {
+      value = Object.fromEntries(Object.entries(value).filter(([, v]) => v !== null));
+    }
     const parsed = wire.GoalSummary.safeParse(value);
     if (!parsed.success) {
       console.error("[ggcoder] ignoring a malformed goal:", parsed.error.issues[0]?.message);
