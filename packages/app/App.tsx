@@ -71,6 +71,8 @@ import { ContextDetailsSheet } from "./src/ui/ContextDetailsSheet";
 import { projectsForProvider, projectSourceKey } from "./src/projects";
 import { greetingFor, hashSeed } from "./src/greeting";
 import { showsStop } from "./src/composerState";
+import NetInfo from "@react-native-community/netinfo";
+import { NetworkChange } from "./src/networkChange";
 import { ConfigPicker, summarise, valueName } from "./src/ui/ConfigPicker";
 import { useReducedMotion } from "./src/ui/useReducedMotion";
 import { CanvasCover } from "./src/ui/CanvasCover";
@@ -511,6 +513,18 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
     });
     return () => subscription.remove();
   }, [resumeDaemon, setDaemonForeground]);
+
+  // Reconnect the moment the phone moves network — out of the house onto
+  // cellular, onto a new access point, back from none. A socket bound to the
+  // old network does not close; it just stops, and the operating system takes
+  // minutes to notice. Subscribed here for the same reason as `resumeDaemon`.
+  const daemonNetworkChanged = daemon.networkChanged;
+  useEffect(() => {
+    const change = new NetworkChange();
+    return NetInfo.addEventListener((state) => {
+      if (change.next(state)) daemonNetworkChanged();
+    });
+  }, [daemonNetworkChanged]);
 
   // The rest of the hook's actions, pulled out for the same reason as
   // `resumeDaemon` above: `daemon` is a fresh object every render (it spreads
