@@ -275,10 +275,10 @@ function Root() {
  * Large enough to be the subject of the screen rather than an icon above a
  * sentence.
  */
-const ORB_REST_SIZE = 96;
+const ORB_REST_SIZE = 288;
 
 /** What it settles back to once the keyboard is up, as a fraction of that. */
-const ORB_SETTLED_SCALE = 56 / ORB_REST_SIZE;
+const ORB_SETTLED_SCALE = 96 / ORB_REST_SIZE;
 
 /**
  * How the drawer finishes a movement it was handed.
@@ -1731,6 +1731,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: theme.space(5),
     paddingHorizontal: theme.space(10),
+    // Sits the orca above the middle of the screen rather than on it.
+    paddingBottom: theme.space(24),
   },
   greetingText: {
     color: theme.color.text,

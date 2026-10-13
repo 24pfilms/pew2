@@ -10,7 +10,7 @@
       "policy": "appVersion"
     },
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/orcacoder-icon.png",
     "userInterfaceStyle": "dark",
     "ios": {
       "//supportsTablet": "False for 1.0 because nothing here is built for a tablet: the layout is portrait-only phone chrome, no code branches on an iPad idiom, and no iPad screenshots exist \u2014 App Store Connect requires a 13-inch set the moment this is true, and review then tests the stretched phone UI on hardware it was never laid out for. Turning it on is a layout pass plus its own screenshot set, not a flag.",
@@ -25,10 +25,8 @@
     "android": {
       "package": "io.github.kenkaiii.pew2",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
+        "backgroundColor": "#FFFFFF",
+        "foregroundImage": "./assets/orcacoder-icon-foreground.png"
       },
       "predictiveBackGestureEnabled": false,
       "permissions": [
