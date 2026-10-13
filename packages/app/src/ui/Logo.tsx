@@ -3,7 +3,7 @@
  * on the empty chat screen, so the brand is one image rather than a logo seen
  * once and never again.
  *
- * The wordmark is lowercase to match how the command is typed.
+ * The wordmark is the product name the phone shows, OrcaCoder.
  */
 import { StyleSheet, Text, View } from "react-native";
 import { OrcaMark } from "./OrcaMark";
@@ -20,7 +20,7 @@ export function Logo({ size = 72 }: LogoProps) {
       style={styles.root}
       accessible
       accessibilityRole="image"
-      accessibilityLabel="pew2"
+      accessibilityLabel="OrcaCoder"
     >
       <OrcaMark size={size} />
       <Text
@@ -43,7 +43,7 @@ export function Logo({ size = 72 }: LogoProps) {
         accessibilityElementsHidden
         importantForAccessibility="no"
       >
-        pew2
+        OrcaCoder
       </Text>
     </View>
   );

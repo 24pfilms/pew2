@@ -275,10 +275,7 @@ function Root() {
  * Large enough to be the subject of the screen rather than an icon above a
  * sentence.
  */
-const ORB_REST_SIZE = 288;
-
-/** What it settles back to once the keyboard is up, as a fraction of that. */
-const ORB_SETTLED_SCALE = 96 / ORB_REST_SIZE;
+const ORCA_SIZE = 288;
 
 /**
  * How the drawer finishes a movement it was handed.
@@ -311,8 +308,7 @@ const KEYBOARD_CURVE = Easing.bezier(0.17, 0.59, 0.4, 0.77);
 
 /**
  * Raises the thread and the composer by exactly the visible keyboard's height,
- * and returns a second style for content that is centred rather than
- * bottom-anchored.
+ * and returns a second style for content that steps aside while it is open.
  *
  * Written from a worklet on the keyboard's own animation, so the two move in
  * perfect step. No JS re-render can land halfway through and move things a
@@ -334,8 +330,8 @@ const KEYBOARD_CURVE = Easing.bezier(0.17, 0.59, 0.4, 0.77);
  * clearance the dock keeps is handed back while it is open, and the composer
  * keeps the same gap above either boundary.
  *
- * @returns `pane` for bottom-anchored content, `centred` to cancel half of it,
- *   `settled` for content that gives up room while the keyboard is open.
+ * @returns `pane` for content that rides up with the composer, `hidden` for
+ *   content that gives up its place while the keyboard is open.
  */
 function useKeyboardLift(bottomInset: number) {
   const height = useSharedValue(0);
@@ -403,32 +399,19 @@ function useKeyboardLift(bottomInset: number) {
     transform: [{ translateY: -height.value }],
   }));
 
-  // The empty state is centred in the pane rather than anchored to its bottom
-  // edge, so the full lift would carry it up by a whole keyboard — twice what
-  // re-centring needs, and far enough to push the greeting under the nav. Half
-  // the lift keeps it centred in what is left of the screen.
-  const centred = useAnimatedStyle(() => ({
-    transform: [{ translateY: height.value / 2 }],
-  }));
-
-  // At rest the mark is the screen: nothing else is there, so it should own it.
+  // At rest the orca is the screen: nothing else is there, so it should own it.
   // Once you start typing the screen belongs to the sentence you are writing,
-  // and the mark steps back to being an emblem above it.
+  // and what is left above the keyboard has no room for both — so the orca
+  // fades out with the keyboard's own progress and back in as it leaves.
   //
-  // A scale, not a smaller `size`: the grid resolution is chosen from the size,
-  // so animating that would rebuild the whole dot matrix mid-keyboard — exactly
-  // the per-frame relayout the pane transform exists to avoid. Reserved layout
-  // stays at full size for the same reason: nothing reflows on the keyboard's
-  // clock, and the greeting keeps one still centre to scale about.
-  //
-  // Held in a local because a worklet runs in its own runtime, where this
-  // file's module scope does not exist — only closed-over values cross over.
-  const shrinkBy = 1 - ORB_SETTLED_SCALE;
-  const settled = useAnimatedStyle(() => ({
-    transform: [{ scale: 1 - shrinkBy * progress.value }],
+  // Opacity, not unmounting or a smaller size: its layout stays reserved, so
+  // nothing reflows on the keyboard's clock — the per-frame relayout the pane
+  // transform exists to avoid.
+  const hidden = useAnimatedStyle(() => ({
+    opacity: 1 - progress.value,
   }));
 
-  return { pane, centred, settled };
+  return { pane, hidden };
 }
 
 function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void }) {
@@ -843,7 +826,7 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
 
   useBackgroundLink({
     enabled: linkSettings.background,
-    title: `pew2 · ${pairing.label}`,
+    title: `OrcaCoder · ${pairing.label}`,
     resumeNow: daemon.resumeNow,
     onAnswered: (sessionId) => setChoice({ sessionId }),
   });
@@ -1447,51 +1430,51 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
             onRetry={retrySend}
           />
         ) : !daemon.loadingSession ? (
-          // Cancels half the pane's lift, so the greeting settles in the middle
-          // of the shrunken screen instead of riding the composer all the way up.
-          <Reanimated.View style={[styles.greetingLift, keyboard.centred]}>
-            {/* Tapping the empty state dismisses the keyboard, which collapses
-                the composer. Without this the greeting is inert and the only way
-                out of the expanded state is the keyboard's own dismiss control. */}
-            <Pressable
-              style={styles.greeting}
-              accessibilityRole="button"
-              accessibilityLabel="Dismiss keyboard"
-              onPress={Keyboard.dismiss}
-            >
-              <Reanimated.View style={keyboard.settled}>
-                <OrcaMark size={ORB_REST_SIZE} busy={daemon.busy} />
-              </Reanimated.View>
-              <Text style={styles.greetingText}>
-                {/* A refusal the daemon explained outranks the connecting
-                    state: reconnecting cannot fix a rotated key or a version
-                    mismatch, so "Connecting..." would loop forever while
-                    telling the one person who can act nothing at all.
+          // Rides the pane's full lift: the greeting is anchored under the
+          // header, so it keeps the same distance above the composer as at
+          // rest, whatever height the keyboard turns out to be.
+          //
+          // Tapping the empty state dismisses the keyboard, which collapses the
+          // composer. Without this the greeting is inert and the only way out
+          // of the expanded state is the keyboard's own dismiss control.
+          <Pressable
+            style={styles.greeting}
+            accessibilityRole="button"
+            accessibilityLabel="Dismiss keyboard"
+            onPress={Keyboard.dismiss}
+          >
+            <Reanimated.View style={keyboard.hidden}>
+              <OrcaMark size={ORCA_SIZE} busy={daemon.busy} />
+            </Reanimated.View>
+            <Text style={styles.greetingText}>
+              {/* A refusal the daemon explained outranks the connecting
+                  state: reconnecting cannot fix a rotated key or a version
+                  mismatch, so "Connecting..." would loop forever while
+                  telling the one person who can act nothing at all.
 
-                    Then the quieter version of the same failure. A pairing the
-                    machine rejects below the socket — 401 from the daemon, 409
-                    from a relay room with no machine in it — sends no frame to
-                    explain itself, so retrying continues in the background
-                    while the words stop pretending it is nearly there.
+                  Then the quieter version of the same failure. A pairing the
+                  machine rejects below the socket — 401 from the daemon, 409
+                  from a relay room with no machine in it — sends no frame to
+                  explain itself, so retrying continues in the background
+                  while the words stop pretending it is nearly there.
 
-                    Deliberately not a checklist. By far the commonest reason
-                    this shows is that the phone has no signal, and the machine
-                    is fine — so instructions to go and inspect it are wrong
-                    advice most of the times they are read, and unfollowable
-                    anyway from wherever the user is standing. What can be done
-                    from here is keep typing, which the composer now says. */}
-                {daemon.fatal
-                  ? daemon.fatal
-                  : daemon.unreachable
-                    ? "Can't reach your machine."
-                    : daemon.status !== "online"
-                      ? "Connecting to your machine..."
-                      : active
-                        ? greeting
-                        : emptyReason(daemon.providers.length)}
-              </Text>
-            </Pressable>
-          </Reanimated.View>
+                  Deliberately not a checklist. By far the commonest reason
+                  this shows is that the phone has no signal, and the machine
+                  is fine — so instructions to go and inspect it are wrong
+                  advice most of the times they are read, and unfollowable
+                  anyway from wherever the user is standing. What can be done
+                  from here is keep typing, which the composer now says. */}
+              {daemon.fatal
+                ? daemon.fatal
+                : daemon.unreachable
+                  ? "Can't reach your machine."
+                  : daemon.status !== "online"
+                    ? "Connecting to your machine..."
+                    : active
+                      ? greeting
+                      : emptyReason(daemon.providers.length)}
+            </Text>
+          </Pressable>
         ) : null}
 
         <View style={[styles.dockOverlay, { bottom: 0 }]}>
@@ -1723,16 +1706,17 @@ const styles = StyleSheet.create({
     borderColor: theme.color.bg,
   },
 
-
-  greetingLift: { flex: 1 },
   greeting: {
     flex: 1,
     alignItems: "center",
-    justifyContent: "center",
+    // From the top, under the header: the orca is the screen's subject, and
+    // centred in this pane (which runs on behind the composer) it pushed the
+    // greeting down into the commands row.
+    justifyContent: "flex-start",
+    // Clear of the header, which otherwise cut off the top of the splash.
+    paddingTop: theme.space(18),
     gap: theme.space(5),
     paddingHorizontal: theme.space(10),
-    // Sits the orca above the middle of the screen rather than on it.
-    paddingBottom: theme.space(24),
   },
   greetingText: {
     color: theme.color.text,

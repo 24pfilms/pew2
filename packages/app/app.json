@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "pew2",
+    "name": "OrcaCoder",
     "slug": "pew2",
     "version": "1.0.0",
     "//scheme": "Claims the `pew2://` URL scheme so this app has a stable identity to be opened by. Nothing routes an incoming link yet — pairing is camera-only, and the link it carries is a `ws://` URL, not this scheme — so today this only makes the app addressable rather than adding a way in. That ordering is deliberate: a link that paired on arrival would let any app that can open a URL point this phone at someone else's daemon, so the handler needs a confirmation step designed before it exists, and the scheme has to be registered in a build before any of that can ship.",
@@ -25,8 +25,9 @@
     "android": {
       "package": "io.github.kenkaiii.pew2",
       "adaptiveIcon": {
-        "backgroundColor": "#FFFFFF",
-        "foregroundImage": "./assets/orcacoder-icon-foreground.png"
+        "backgroundColor": "#1B0908",
+        "foregroundImage": "./assets/orcacoder-icon-foreground.png",
+        "backgroundImage": "./assets/orcacoder-icon-background.png"
       },
       "predictiveBackGestureEnabled": false,
       "permissions": [
@@ -50,7 +51,7 @@
         {
           "//": "Without this the generated splash is pure white while the app's own background is #111111 with userInterfaceStyle dark, so every cold launch flashed white before painting. No `dark` variant: the app is dark-only, and declaring one conflicts with the app-wide userInterfaceStyle. The colour is theme.color.bg, kept in step by hand because app.json cannot import it.",
           "backgroundColor": "#111111",
-          "image": "./assets/splash-icon.png",
+          "image": "./assets/orcacoder-splash.png",
           "imageWidth": 160
         }
       ],

@@ -52,7 +52,7 @@ export function PhoneSetup({
       <Text style={styles.heading}>Away from the app</Text>
       <Toggle
         label="Stay connected in the background"
-        detail="Keeps a quiet notification while pew2 is connected."
+        detail="Keeps a quiet notification while OrcaCoder is connected."
         value={settings.background}
         onChange={set("background")}
       />
@@ -86,7 +86,7 @@ export function PhoneSetup({
         onPress={() => PewLink.openFullScreenSettings()}
       />
       <Pressable accessibilityRole="button" style={styles.link} onPress={() => PewLink.openAppSettings()}>
-        <Text style={styles.linkText}>Open pew2's Android settings</Text>
+        <Text style={styles.linkText}>Open OrcaCoder's Android settings</Text>
       </Pressable>
     </View>
   );
