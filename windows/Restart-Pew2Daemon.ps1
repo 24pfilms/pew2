@@ -96,6 +96,25 @@ Show-Group 'Orphaned pew2 agents (parent gone)' $orphanTree
 
 if (-not $PSCmdlet.ShouldProcess("pew2 daemon on port $Port", 'Stop and restart')) { return }
 
+# An agent installed through `npx` may be mid-download under the daemon. Stopping
+# it then leaves a half-written npx cache, and that agent fails every start
+# afterwards with ERR_MODULE_NOT_FOUND (seen 2026-10-13 with Claude Code). Wait
+# for installers to finish; give up loudly rather than break the cache.
+$InstallerPattern = 'postinstall|preinstall|node-gyp|npm-cli\.js"?\s+(install|i|ci)\b'
+$installing = @()
+for ($i = 0; $i -lt 24; $i++) {
+  $installing = @(Get-CimInstance Win32_Process | Where-Object {
+      $daemonTree.ProcessId -contains $_.ParentProcessId -or $daemonTree.ProcessId -contains $_.ProcessId
+    } | Where-Object { $_.CommandLine -match $InstallerPattern })
+  if (-not $installing.Count) { break }
+  if ($i -eq 0) { Write-Host "Waiting for $($installing.Count) agent install(s) to finish before stopping..." }
+  Start-Sleep -Seconds 5
+}
+if ($installing.Count) {
+  Write-Error "An agent install is still running after 2 minutes (PID $($installing[0].ProcessId)). Nothing was stopped; try again shortly."
+  exit 1
+}
+
 foreach ($t in $targets) { Stop-Process -Id $t.ProcessId -Force -ErrorAction SilentlyContinue }
 
 $freed = $false
