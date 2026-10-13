@@ -108,6 +108,10 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<RunningD
   }
   Object.assign(env, {
     HOME: home,
+    // Windows reads the home directory from USERPROFILE, not HOME. Without this
+    // the test daemon used the developer's real `~/.pew2` — its turned-off
+    // agents included — and every scenario failed the moment Echo was off there.
+    USERPROFILE: home,
     PEW2_PORT: "0",
     PEW2_TOKEN: secret,
     // Surfaces the echo agent, which is the only provider that can run with no

@@ -7,12 +7,25 @@
 import { basename, join } from "node:path";
 import { mkdtemp } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { test, expect } from "bun:test";
+import { afterAll, beforeAll, test, expect } from "bun:test";
 import { loadProviders } from "../providers/registry.js";
 import { connectProvider } from "../acp/connect.js";
 import { SessionLog } from "../session/log.js";
 import { mergeAgentSessions } from "../../../app/src/agentHistory.js";
 import { formatHistoryMetadata } from "../../../app/src/historyMetadata.js";
+
+// The daemons built here read the user's pew2 home for which agents are turned
+// off. Pointed at an empty one, so a developer who has turned Echo off on their
+// own machine does not fail every scenario below that runs on it.
+let realPew2Home: string | undefined;
+beforeAll(async () => {
+  realPew2Home = process.env.PEW2_HOME;
+  process.env.PEW2_HOME = await mkdtemp(join(tmpdir(), "pew2-pipeline-"));
+});
+afterAll(() => {
+  if (realPew2Home === undefined) delete process.env.PEW2_HOME;
+  else process.env.PEW2_HOME = realPew2Home;
+});
 
 async function echoProvider() {
   const { providers } = await loadProviders();
