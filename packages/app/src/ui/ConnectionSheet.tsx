@@ -4,6 +4,8 @@ import { PrivacyLink } from "./PrivacyLink";
 import { haptics } from "./haptics";
 import { theme } from "../theme";
 import type { Status } from "../useDaemon";
+import type { LinkSettings } from "../linkSettings";
+import { PhoneSetup } from "./PhoneSetup";
 
 // Same fixed desktop install/update instruction formerly shown in Sidebar.
 const INSTALL_COMMAND = "curl -fsSL https://raw.githubusercontent.com/KenKaiii/pew2/main/install.sh | sh";
@@ -15,8 +17,10 @@ interface Props {
   update?: { latest: string; automatic: boolean };
   onClose: () => void;
   onUnpair: () => void;
+  linkSettings: LinkSettings;
+  onLinkSettings: (next: LinkSettings) => void;
 }
-export function ConnectionSheet({ visible, machineLabel, machineRemote, status, update, onClose, onUnpair }: Props) {
+export function ConnectionSheet({ visible, machineLabel, machineRemote, status, update, onClose, onUnpair, linkSettings, onLinkSettings }: Props) {
   return <Sheet visible={visible} title="Connection" onClose={onClose} dismissLabel="Close connection details">
     <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
       <Text selectable style={styles.title}>{machineLabel}</Text>
@@ -26,6 +30,7 @@ export function ConnectionSheet({ visible, machineLabel, machineRemote, status, 
           haptics.tap();
           Alert.alert(`pew2 ${update.latest} is available`, `This computer can't update itself, so run this on ${machineLabel}:\n\n${INSTALL_COMMAND}`, [{ text: "OK" }]);
         }}><Text style={styles.actionText}>New pew2 version available</Text></Pressable>)}
+      <PhoneSetup visible={visible} settings={linkSettings} onChange={onLinkSettings} />
       <PrivacyLink />
       <Pressable accessibilityRole="button" accessibilityLabel={`Forget pairing with ${machineLabel}`} style={styles.action} onPress={() => {
         haptics.tap();

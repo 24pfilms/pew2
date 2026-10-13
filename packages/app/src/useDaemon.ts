@@ -2214,6 +2214,7 @@ export function useDaemon(
       // the pessimistic message this whole path exists to get rid of. Guarded so
       // a resume with nothing to correct does not re-render the tree.
       setState((s) => (s.unreachable ? { ...s, unreachable: false } : s));
+      console.log("[pew2] reconnecting now: no live connection on resume");
       connect();
     };
 

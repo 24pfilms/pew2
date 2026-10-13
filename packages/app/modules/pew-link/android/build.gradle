@@ -1,0 +1,20 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'io.github.kenkaiii.pew2'
+version = '1.0.0'
+
+android {
+  namespace "expo.modules.pewlink"
+  defaultConfig {
+    versionCode 1
+    versionName "1.0.0"
+  }
+}
+
+dependencies {
+  // WebSocketModule and OkHttp, for the native ping on every socket the app opens.
+  implementation 'com.facebook.react:react-android'
+}

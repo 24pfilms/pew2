@@ -1,0 +1,28 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!--
+    Keeping pew2 connected with the screen off. Android lets an app keep running
+    in the background only as a foreground service with a visible notification,
+    and since Android 14 the service must say what kind it is. `connectedDevice`
+    — "interaction with external devices over the network" — is what pew2 is,
+    has no daily time cap (unlike `dataSync`), and needs only the normal
+    CHANGE_NETWORK_STATE permission. Merged into the app's manifest.
+  -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+  <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  <!-- The ringing alert: an incoming-call style notification that can take the screen. -->
+  <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+  <!-- Lets the phone-setup checklist ask for "unrestricted" battery directly. -->
+  <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+  <application>
+    <service
+      android:name="expo.modules.pewlink.PewLinkService"
+      android:exported="false"
+      android:foregroundServiceType="connectedDevice" />
+    <receiver
+      android:name="expo.modules.pewlink.RingDeclineReceiver"
+      android:exported="false" />
+  </application>
+</manifest>

@@ -19,6 +19,7 @@ import { theme } from "../theme";
 import { Sidebar, DRAWER_WIDTH } from "./Sidebar";
 import type { Project } from "../projects";
 import type { Provider, Session } from "../useDaemon";
+import { DEFAULT_LINK_SETTINGS } from "../linkSettings";
 
 const PROVIDERS: Provider[] = [
   { id: "claude-code", name: "Claude Code", description: "", available: true, color: "#d97757" },
@@ -100,7 +101,7 @@ function NativeDrawer() {
   return <SafeAreaProvider><GestureHandlerRootView style={{ flex: 1, backgroundColor: theme.color.bg }}>
     <StatusBar style="light" />
     {unpaired ? <Text style={{ color: theme.color.text, marginTop: 100 }}>Fixture unpaired</Text> : <Sidebar open providers={PROVIDERS} sessions={SESSIONS} activeProviderId={provider} onSelectProvider={setProvider} onOpenSession={() => {}} onNewConversation={() => {}} projects={PROJECTS} onSelectProject={() => {}} machineLabel="studio.local:8787" machineRemote connectionStatus="online" update={{ latest: "0.9.19", automatic: false }} onOpenConnection={() => setOpen(true)} />}
-    <ConnectionSheet visible={open} machineLabel="studio.local:8787" machineRemote status="online" update={{ latest: "0.9.19", automatic: false }} onClose={() => setOpen(false)} onUnpair={() => { setOpen(false); setUnpaired(true); }} />
+    <ConnectionSheet linkSettings={DEFAULT_LINK_SETTINGS} onLinkSettings={() => {}} visible={open} machineLabel="studio.local:8787" machineRemote status="online" update={{ latest: "0.9.19", automatic: false }} onClose={() => setOpen(false)} onUnpair={() => { setOpen(false); setUnpaired(true); }} />
   </GestureHandlerRootView></SafeAreaProvider>;
 }
 

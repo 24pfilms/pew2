@@ -8,10 +8,31 @@
  */
 import * as SecureStore from "expo-secure-store";
 import { fromCachedProviders, toCachedProviders } from "./providerCache";
+import { DEFAULT_LINK_SETTINGS, parseLinkSettings, type LinkSettings } from "./linkSettings";
 import type { Provider } from "./useDaemon";
 
 const LAST_PROVIDER_KEY = "pew2.lastProviderId";
 const PROVIDERS_KEY = "pew2.providers";
+const LINK_SETTINGS_KEY = "pew2.linkSettings";
+
+/** Background connection and ringing switches; the defaults when none were saved. */
+export async function loadLinkSettings(): Promise<LinkSettings> {
+  try {
+    return parseLinkSettings(await SecureStore.getItemAsync(LINK_SETTINGS_KEY));
+  } catch {
+    // An unreadable store means "no choice made": the defaults are the
+    // behaviour this build ships with.
+    return DEFAULT_LINK_SETTINGS;
+  }
+}
+
+export async function saveLinkSettings(settings: LinkSettings): Promise<void> {
+  try {
+    await SecureStore.setItemAsync(LINK_SETTINGS_KEY, JSON.stringify(settings));
+  } catch {
+    // The switch still applies for this run; only remembering it is lost.
+  }
+}
 
 /** The agent last targeted on this device, or null if never chosen. */
 export async function loadLastProvider(): Promise<string | null> {

@@ -42,6 +42,16 @@ import { currentTool } from "./src/activity";
 import { dockHeightFor, recordDockHeight, type DockHeights } from "./src/dockHeight";
 import { finishedNotice } from "./src/notificationPolicy";
 import {
+  DEFAULT_LINK_SETTINGS,
+  newApprovals,
+  shouldRing,
+  type LinkSettings,
+  type PendingApproval,
+} from "./src/linkSettings";
+import { loadLinkSettings, saveLinkSettings } from "./src/preferences";
+import * as PewLink from "./modules/pew-link";
+import { useBackgroundLink } from "./src/ui/useBackgroundLink";
+import {
   ensureNotificationPermission,
   notify,
   onNotificationChoice,
@@ -451,12 +461,28 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
   // would leave the phone silent.
   const pushExpected = useRef(false);
 
+  // Background connection and ringing switches. A ref beside the state because
+  // the announce callbacks below are read from the socket handler, which must
+  // not be rebuilt when a switch changes.
+  const [linkSettings, setLinkSettings] = useState<LinkSettings>(DEFAULT_LINK_SETTINGS);
+  const linkSettingsRef = useRef(linkSettings);
+  linkSettingsRef.current = linkSettings;
+  useEffect(() => {
+    void loadLinkSettings().then(setLinkSettings);
+  }, []);
+  const changeLinkSettings = useCallback((next: LinkSettings) => {
+    setLinkSettings(next);
+    void saveLinkSettings(next);
+  }, []);
+
   /**
    * Announce a turn that ended somewhere the user cannot see it.
    *
    * The agent runs on the desktop and keeps running when this app is
    * backgrounded or looking at another project, so without this a finished
-   * five-minute turn is only discovered by going back to check.
+   * five-minute turn is only discovered by going back to check. With pew2 off
+   * screen it rings like a call, unless that is switched off; a ring that
+   * cannot be raised still leaves the ordinary notification.
    */
   const announceTurn = useCallback((turn: TurnFinished) => {
     const notice = finishedNotice({
@@ -464,7 +490,13 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
       foreground: foreground.current,
       pushExpected: pushExpected.current,
     });
-    if (notice) void notify(notice);
+    if (!notice) return;
+    if (shouldRing("finished", foreground.current, linkSettingsRef.current)) {
+      const rang = PewLink.ring(`turn:${notice.sessionId}:${Date.now()}`, notice.title, notice.body, notice.sessionId);
+      if (rang) return;
+      console.warn("[pew2] could not ring for a finished turn; notifying instead");
+    }
+    void notify(notice);
   }, []);
 
   // The relay identifies devices by this, and it must match the id baked into
@@ -522,7 +554,9 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
   useEffect(() => {
     const change = new NetworkChange();
     return NetInfo.addEventListener((state) => {
-      if (change.next(state)) daemonNetworkChanged();
+      if (!change.next(state)) return;
+      console.log(`[pew2] network changed: ${state.type}`);
+      daemonNetworkChanged();
     });
   }, [daemonNetworkChanged]);
 
@@ -789,6 +823,39 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
     }
     lastPermissionId.current = requestId;
   }, [daemon.permission]);
+
+  // An agent somewhere is blocked on an approval and pew2 is not on screen:
+  // ring, because nothing else will tell anyone and the agent waits until then.
+  // Every open request across conversations, not just the one on screen, and
+  // each rings once — a reconnect restates them all.
+  const seenApprovals = useRef(new Set<string>());
+  useEffect(() => {
+    const open: PendingApproval[] = [];
+    for (const session of daemon.sessions) {
+      if (session.permission) {
+        open.push({ requestId: session.permission.requestId, sessionId: session.id, title: session.permission.title });
+      }
+    }
+    const current = daemon.permission;
+    if (current && daemon.sessionId && !open.some((approval) => approval.requestId === current.requestId)) {
+      open.push({ requestId: current.requestId, sessionId: daemon.sessionId, title: current.title });
+    }
+    for (const approval of newApprovals(seenApprovals.current, open)) {
+      if (!shouldRing("approval", foreground.current, linkSettingsRef.current)) continue;
+      const rang = PewLink.ring(`approval:${approval.requestId}`, "Approval needed", approval.title, approval.sessionId);
+      if (!rang) {
+        console.warn("[pew2] could not ring for an approval; notifying instead");
+        void notify({ title: "Approval needed", body: approval.title, sessionId: approval.sessionId });
+      }
+    }
+  }, [daemon.sessions, daemon.permission, daemon.sessionId]);
+
+  useBackgroundLink({
+    enabled: linkSettings.background,
+    title: `pew2 · ${pairing.label}`,
+    resumeNow: daemon.resumeNow,
+    onAnswered: (sessionId) => setChoice({ sessionId }),
+  });
 
   // Something failed. Keyed by role as well as id, because a duplicated error is
   // promoted in place rather than appended, which leaves the id unchanged.
@@ -1530,7 +1597,7 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
       {/* Outside the lifted pane: a sheet belongs to the screen's bottom edge,
           not to the composer, so it must not ride up with the keyboard. */}
       <ContextDetailsSheet visible={contextOpen} workspace={daemon.workspace} usage={daemon.usage} onClose={closeContext} />
-      <ConnectionSheet visible={connectionOpen} machineLabel={pairing.label} machineRemote={pairing.remote} status={daemon.status} update={daemon.update} onClose={closeConnection} onUnpair={onUnpair} />
+      <ConnectionSheet visible={connectionOpen} machineLabel={pairing.label} machineRemote={pairing.remote} status={daemon.status} update={daemon.update} onClose={closeConnection} onUnpair={onUnpair} linkSettings={linkSettings} onLinkSettings={changeLinkSettings} />
       <CommandSheet
         visible={commandsOpen}
         commands={daemon.commands}
