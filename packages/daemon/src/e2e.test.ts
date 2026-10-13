@@ -381,3 +381,24 @@ test("cancelling a turn actually stops the agent, and closes the turn", async ()
   expect(idle.folder).toBeTruthy();
   app.close();
 }, TEST_TIMEOUT);
+
+test("the LAN socket answers the phone's ping, as the relay does", async () => {
+  // The phone pings every 20 seconds and replaces any socket that stays
+  // silent. Over the relay the Durable Object answers; on a direct LAN socket
+  // nothing did, so a healthy home connection would have been torn down on
+  // every ping.
+  const socket = new WebSocket(`ws://127.0.0.1:${daemon.port}/?token=${daemon.token}`);
+  const reply = await new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("no pong within 3s")), 3_000);
+    socket.onopen = () => socket.send('{"t":"ping"}');
+    socket.onmessage = (event) => {
+      if (event.data === '{"t":"pong"}') {
+        clearTimeout(timer);
+        resolve(event.data as string);
+      }
+    };
+    socket.onerror = () => reject(new Error("socket failed"));
+  });
+  expect(reply).toBe('{"t":"pong"}');
+  socket.close();
+}, TEST_TIMEOUT);

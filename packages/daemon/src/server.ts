@@ -17,7 +17,8 @@ import { watchPairing } from "./pairing-watch.js";
 import { decideClaim, type ClaimDecision } from "./device-claim.js";
 import { SecureChannel, e2e, envelopeHeader, wire } from "@pew2/protocol";
 import { handleMessage } from "./handler.js";
-import { RelayClient } from "./relay-client.js";
+import { KEEPALIVE_FRAME, KEEPALIVE_REPLY, RelayClient } from "./relay-client.js";
+import { stampConsole } from "./log-time.js";
 import { hostname } from "node:os";
 import { daemonLogPaths, rotateLog, startLogRotation } from "./logs.js";
 import { sweepOrphans } from "./children.js";
@@ -25,6 +26,10 @@ import { startUpdateScheduler } from "./update/scheduler.js";
 import type { ServerWebSocket } from "bun";
 
 const PORT = Number(process.env.PEW2_PORT ?? 8787);
+
+// Before anything is written: a log without times cannot say when a connection
+// dropped or how long it stayed down, which is the question it is read for.
+stampConsole();
 
 // Under launchd this process's stdout is an append-only file that nothing else
 // ever trims. Done here first, before anything is written.
@@ -239,6 +244,15 @@ const server = Bun.serve({
 
       const client = clients.get(ws);
       if (!client) return;
+
+      // The phone's liveness ping. Over the relay the Durable Object answers it
+      // without waking; on this direct socket nothing would, and the phone
+      // would conclude every few seconds that a perfectly good LAN link had
+      // died. Cleartext and content-free, exactly as the relay answers it.
+      if (raw === KEEPALIVE_FRAME) {
+        ws.send(KEEPALIVE_REPLY);
+        return;
+      }
 
       let frame: unknown;
       try {
