@@ -1,19 +1,18 @@
 /**
  * The pew2 mark.
  *
- * Deliberately not a new invention: the orb already means "an agent is here"
- * everywhere else in the app, so the brand mark is that same sphere rather than
- * an abstract logo that appears once and is never seen again. In accent rather
- * than a provider colour, because at launch no agent has been chosen yet.
+ * Pew, the same living mascot that stands for an agent everywhere else in
+ * the app, in pew2's own coral rather than a provider colour, because at
+ * launch no agent has been chosen yet.
  *
  * The wordmark is lowercase to match how the command is typed.
  */
 import { StyleSheet, Text, View } from "react-native";
-import { Orb } from "./Orb";
+import { Pew } from "../pew/Pew";
 import { theme } from "../theme";
 
 interface LogoProps {
-  /** Diameter of the orb. The wordmark scales with it. */
+  /** Visual size of the mark. The wordmark scales with it. */
   size?: number;
 }
 
@@ -25,7 +24,10 @@ export function Logo({ size = 72 }: LogoProps) {
       accessibilityRole="image"
       accessibilityLabel="pew2"
     >
-      <Orb color={theme.color.accent} size={size} />
+      {/* Pew, pew2's own living mark, in its own coral. Its box has room
+          for bounce and shadow around the globe, so it is drawn larger than
+          the old orb's diameter to read at the same size. */}
+      <Pew size={Math.round(size * 1.7)} style={styles.mark} />
       <Text
         style={[
           styles.word,
@@ -53,7 +55,8 @@ export function Logo({ size = 72 }: LogoProps) {
 }
 
 const styles = StyleSheet.create({
-  root: { alignItems: "center", gap: theme.space(5) },
+  root: { alignItems: "center", gap: theme.space(2) },
+  mark: { marginVertical: -theme.space(4) },
   word: {
     color: theme.color.text,
     // The wordmark is the purest expression of the display face, so it uses the

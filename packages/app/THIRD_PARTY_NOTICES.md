@@ -16,12 +16,10 @@ https://github.com/Jakubantalik/thinking-orbs
 
 Copyright (c) 2026 Jakub Antalik
 
-`src/ui/ThinkingOrb.tsx` adapts the official React Native renderer at commit
-`de85557ca220332586d070d8788c0e1d6e877a0d`, under the MIT permission and disclaimer
-reproduced below. It uses the pinned package's 20px engine without changing the
-geometry. Local changes use existing lifecycle/accessibility hooks and cap
-picture recording at 30 fps. The unpublished native wrapper is kept as source;
-no unversioned Git dependency is installed. Skia 2.2.12 is pinned to Expo 54's
+The package's `OrbState` vocabulary (`src/activityOrb.ts`) still names what the
+agent is doing; it is a type-only import now. The adapted renderer
+(`src/ui/ThinkingOrb.tsx`, from commit `de85557ca220332586d070d8788c0e1d6e877a0d`)
+was retired in favour of Dotty. Skia 2.2.12 is pinned to Expo 54's
 compatibility manifest. Both dependency additions were approved by the user.
 
 ## assistant-ui smooth reveal lifecycle

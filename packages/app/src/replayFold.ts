@@ -82,7 +82,7 @@ export function applyChunk(turns: Turn[], key: string, chunk: Chunk): void {
     // evidence, and a bubble must never keep the label after the agent has it.
     const { queued: _queued, ...adopted } = turns[optimistic]!;
     turns[optimistic] = { ...adopted, id: key };
-  } else if (last && last.role === chunk.role && chunk.role !== "user") {
+  } else if (last && last.role === chunk.role && chunk.role !== "user" && chunk.role !== "ken" && chunk.role !== "note") {
     // Coalesce consecutive chunks of the same role into one bubble.
     turns[turns.length - 1] = mergeChunk(last, chunk);
   } else {
@@ -126,6 +126,7 @@ export function turnFromChunk(id: string, chunk: Chunk): Turn {
     role: chunk.role,
     text: chunk.text,
     ...(chunk.images ? { images: chunk.images } : {}),
+    ...(chunk.ken ? { ken: chunk.ken } : {}),
   };
 }
 
@@ -277,7 +278,8 @@ export function foldBackgroundEvent<S extends { sessions: Session[] }>(
     title: titledBy(session, chunk),
     // A system chunk is a failure notice, not work in progress — the same rule
     // the visible path applies, so the drawer dot and the spinner agree.
-    busy: chunk.role !== "system",
+    // Ken's verdicts say nothing about whether the agent is working.
+    busy: chunk.role === "ken" || chunk.role === "note" ? session.busy : chunk.role !== "system",
   };
   return { ...prev, sessions };
 }
@@ -353,6 +355,9 @@ export function foldSessionEvents<S extends FoldState>(
     const replayedUsage = readUsage(payload);
     if (replayedUsage) {
       usage = replayedUsage;
+      // Also on the conversation's row, so reopening it later shows it.
+      const row = message.sessionId ? byId.get(message.sessionId) : undefined;
+      if (row) byId.set(row.id, { ...row, usage: replayedUsage });
       continue;
     }
     const chunk = readChunk(payload);

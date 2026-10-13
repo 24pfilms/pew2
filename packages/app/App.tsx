@@ -25,6 +25,7 @@ import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from "react-native-
 import { KeyboardProvider, useKeyboardHandler } from "react-native-keyboard-controller";
 import Reanimated, {
   cancelAnimation,
+  FadeIn,
   Easing,
   runOnJS,
   useAnimatedStyle,
@@ -33,7 +34,6 @@ import Reanimated, {
   withTiming,
 } from "react-native-reanimated";
 import { StatusBar } from "expo-status-bar";
-import Ionicons from "@expo/vector-icons/Ionicons";
 import { theme } from "./src/theme";
 import { useDaemon, type Provider, type TurnFinished } from "./src/useDaemon";
 import { projectDrawerRows } from "./src/historyMetadata";
@@ -49,7 +49,6 @@ import {
   type NotificationChoice,
 } from "./src/ui/notifier";
 import { pushAddress } from "./src/ui/push";
-import { Orb } from "./src/ui/Orb";
 import { ComposerDock, type ComposerDockHandle } from "./src/ui/ComposerDock";
 import { ChatThread, type ChatThreadRef } from "./src/ui/ChatThread";
 import { ImageResolverProvider } from "./src/ui/ChatImage";
@@ -61,15 +60,33 @@ import { addAttachments, MAX_ATTACHMENTS, type PendingAttachment } from "./src/a
 import { pickFiles, pickPhotos, takePhoto } from "./src/ui/attachmentPicker";
 import { useDictation } from "./src/ui/useDictation";
 import { ApprovalSheet } from "./src/ui/ApprovalSheet";
+import { AskUserSheet } from "./src/ui/AskUserSheet";
+import { QueuedStrip } from "./src/ui/QueuedStrip";
+import { ChecklistSheet, PlanReviewSheet } from "./src/ui/GgReview";
+import { ggStrips, isGoalsProvider } from "./src/goalsAgent";
+import { NewGoalSheet } from "./src/ui/NewGoalSheet";
+import { GoalSettingsSheet } from "./src/ui/GoalSettingsSheet";
+import { goalForSession, type GoalSummary } from "./src/ggState";
+import { latestKenSaying, withoutKenLines } from "./src/kenLine";
+import { returnedDraft } from "./src/queue";
+import type { AskResult } from "./src/askUser";
 import { ThoughtSheet } from "./src/ui/ThoughtSheet";
 import { applyCommand, type SlashCommand } from "./src/slashCommands";
 import { CircleButton } from "./src/ui/controls";
+import { DotGlyph } from "./src/ui/stage/DotGlyph";
 import { haptics } from "./src/ui/haptics";
 import { Sidebar, DRAWER_WIDTH } from "./src/ui/Sidebar";
 import { ConnectionSheet } from "./src/ui/ConnectionSheet";
 import { ContextDetailsSheet } from "./src/ui/ContextDetailsSheet";
 import { projectsForProvider, projectSourceKey } from "./src/projects";
 import { greetingFor, hashSeed } from "./src/greeting";
+import { HomeGreeting } from "./src/ui/HomeGreeting";
+import { AgentCarousel } from "./src/ui/AgentCarousel";
+import { orderProvidersByRecency } from "./src/providerRecency";
+import { AgentColorProvider } from "./src/ui/stage/agentColor";
+import { CrewRow } from "./src/ui/CrewRow";
+import { Ticker } from "./src/ui/Ticker";
+import { pewInk } from "./src/pew/palette";
 import { showsStop } from "./src/composerState";
 import { ConfigPicker, summarise, valueName } from "./src/ui/ConfigPicker";
 import { useReducedMotion } from "./src/ui/useReducedMotion";
@@ -95,6 +112,12 @@ import { useFonts } from "expo-font";
 import { BitcountPropSingle_400Regular } from "@expo-google-fonts/bitcount-prop-single/400Regular";
 import { BitcountPropSingle_600SemiBold } from "@expo-google-fonts/bitcount-prop-single/600SemiBold";
 import { BitcountPropSingle_700Bold } from "@expo-google-fonts/bitcount-prop-single/700Bold";
+
+/** Longest Pew's "Reopening" waits for the full transcript before showing what it has. */
+const RESTORE_HOLD_MS = 2500;
+const NO_TURNS: never[] = [];
+/** Pew's smile on home before the agent switcher opens and carries it on. */
+const PEW_HANDOFF_MS = 320;
 
 export default function App() {
   const [fontsLoaded, fontError] = useFonts({
@@ -258,17 +281,6 @@ function Root() {
   return <PairingScreen onPaired={pair} onBack={() => setConnecting(false)} />;
 }
 
-/**
- * The mark's diameter on an empty conversation, with nothing to compete with.
- *
- * Large enough to be the subject of the screen rather than an icon above a
- * sentence, and it reaches the densest grid the geometry offers — so the
- * drifting light has the most cells to travel across.
- */
-const ORB_REST_SIZE = 96;
-
-/** What it settles back to once the keyboard is up, as a fraction of that. */
-const ORB_SETTLED_SCALE = 56 / ORB_REST_SIZE;
 
 /**
  * How the drawer finishes a movement it was handed.
@@ -325,7 +337,7 @@ const KEYBOARD_CURVE = Easing.bezier(0.17, 0.59, 0.4, 0.77);
  * keeps the same gap above either boundary.
  *
  * @returns `pane` for bottom-anchored content, `centred` to cancel half of it,
- *   `settled` for content that gives up room while the keyboard is open.
+ *   `progress` (0 closed to 1 open) for content that reacts to typing.
  */
 function useKeyboardLift(bottomInset: number) {
   const height = useSharedValue(0);
@@ -401,24 +413,7 @@ function useKeyboardLift(bottomInset: number) {
     transform: [{ translateY: height.value / 2 }],
   }));
 
-  // At rest the mark is the screen: nothing else is there, so it should own it.
-  // Once you start typing the screen belongs to the sentence you are writing,
-  // and the mark steps back to being an emblem above it.
-  //
-  // A scale, not a smaller `size`: the grid resolution is chosen from the size,
-  // so animating that would rebuild the whole dot matrix mid-keyboard — exactly
-  // the per-frame relayout the pane transform exists to avoid. Reserved layout
-  // stays at full size for the same reason: nothing reflows on the keyboard's
-  // clock, and the greeting keeps one still centre to scale about.
-  //
-  // Held in a local because a worklet runs in its own runtime, where this
-  // file's module scope does not exist — only closed-over values cross over.
-  const shrinkBy = 1 - ORB_SETTLED_SCALE;
-  const settled = useAnimatedStyle(() => ({
-    transform: [{ scale: 1 - shrinkBy * progress.value }],
-  }));
-
-  return { pane, centred, settled };
+  return { pane, centred, progress };
 }
 
 function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void }) {
@@ -538,12 +533,20 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
   // Mirror, for the async gap while a photo is being read and downscaled.
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
-  const [attachOpen, setAttachOpen] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [connectionOpen, setConnectionOpen] = useState(false);
-  const [contextOpen, setContextOpen] = useState(false);
+  // `EXPO_PUBLIC_DEV_SHEET=<name>` (development only) starts with that sheet
+  // or overlay open, so each can be checked on the simulator without a tap:
+  // attach, connection, context, model, commands, newchat, thought, carousel,
+  // checklist, goalsettings.
+  const devSheet = __DEV__ ? process.env.EXPO_PUBLIC_DEV_SHEET : undefined;
+  const [attachOpen, setAttachOpen] = useState(() => devSheet === "attach");
+  // `EXPO_PUBLIC_DEV_OPEN_DRAWER=1` (development only) starts with the drawer
+  // open, so a simulator check can see it without a tap.
+  const [menuOpen, setMenuOpen] = useState(() => __DEV__ && process.env.EXPO_PUBLIC_DEV_OPEN_DRAWER === "1");
+  const [connectionOpen, setConnectionOpen] = useState(() => devSheet === "connection");
+  const [contextOpen, setContextOpen] = useState(() => devSheet === "context");
   const openContext = useCallback(() => { Keyboard.dismiss(); setContextOpen(true); }, []);
   const closeContext = useCallback(() => setContextOpen(false), []);
+  const closeMenu = useCallback(() => setMenuOpen(false), []);
   const openConnection = useCallback(() => {
     Keyboard.dismiss();
     setMenuOpen(false);
@@ -552,13 +555,17 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
   const closeConnection = useCallback(() => setConnectionOpen(false), []);
   // Which pill's menu is open, and where that pill sits, so the menu opens
   // under it instead of always at the gutter.
-  const [picker, setPicker] = useState<"model" | "mode" | null>(null);
-  const [commandsOpen, setCommandsOpen] = useState(false);
-  const [newChatOpen, setNewChatOpen] = useState(false);
+  const [picker, setPicker] = useState<"model" | "mode" | null>(() => (devSheet === "model" ? "model" : null));
+  const [commandsOpen, setCommandsOpen] = useState(() => devSheet === "commands");
+  const [newChatOpen, setNewChatOpen] = useState(() => devSheet === "newchat");
   // The reasoning currently being read, if any. Held here rather than per turn
   // so the sheet lives outside the recycling list — a cell scrolled off screen
   // must not take the sheet down with it.
-  const [thought, setThought] = useState<string | null>(null);
+  const [thought, setThought] = useState<string | null>(() =>
+    devSheet === "thought"
+      ? "The chunk is there on reopen, so the daemon has it. The phone drops it.\n\nReplay and live stream overlap at the cursor. If the cursor moves first, the event at the cursor looks like a duplicate."
+      : null,
+  );
   // The draft lives inside the dock, not here.
   //
   // Holding it at the root meant every keystroke re-rendered the entire app,
@@ -570,6 +577,10 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
   const [typing, setTyping] = useState(false);
   // Measured so the thread's top inset always matches the real nav height.
   const [navHeight, setNavHeight] = useState(0);
+  // The control strip and queue strip ride on top of the composer inside the
+  // dock overlay, so the thread has to clear them as well as the composer —
+  // measured, like the composer, rather than guessed.
+  const [stripsHeight, setStripsHeight] = useState(0);
   // The thread's bottom inset and frosted zone track the dock's measured height.
   //
   // Two heights, not one, because the dock is a different size while you type:
@@ -591,6 +602,13 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
   // list on its own; only picking one drawer entry while another is open swaps
   // the turns in place.
   const [threadKey, setThreadKey] = useState("new");
+  // A reopened conversation arrives from the computer in batches. Showing the
+  // first batch and then re-laying the list as the rest landed read as the
+  // chat rendering, vanishing and rendering again, so Pew's "Reopening" stays
+  // up until the last batch is in and the transcript appears once. A very
+  // long one (still loading after the hold) shows what it has instead of
+  // making you wait.
+  const [restoreHold, setRestoreHold] = useState(false);
   // Drives the scroll-to-latest control below.
   const [atBottom, setAtBottom] = useState(true);
   const jumpOpacity = useRef(new Animated.Value(0)).current;
@@ -643,6 +661,12 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
   const active: Provider | undefined =
     daemon.providers.find((p) => p.id === daemon.effectiveProviderId) ??
     daemon.providers.find((p) => p.available);
+  // How long home waits for an agent before showing without one.
+  const [homeWaited, setHomeWaited] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setHomeWaited(true), 900);
+    return () => clearTimeout(t);
+  }, []);
 
   // Projects the selected agent has worked in, and which one the drawer is
   // narrowed to. Derived here rather than in the drawer so both the list and
@@ -653,6 +677,10 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
   // `projectSourceKey`: `daemon.sessions` is still what the computation reads,
   // but it is no longer what decides whether to run it.
   const activeId = active?.id;
+  // The agent's colour as Stage lights it: brand hue, lifted until it reads on
+  // the canvas. Every LED label, sheet strip and selected outline uses it.
+  // Cheap and pure; the React Compiler memoizes it.
+  const agentInk = pewInk(active?.color);
   const daemonSessions = daemon.sessions;
   const projectKey = projectSourceKey(daemonSessions, activeId);
   const projects = useMemo(
@@ -691,7 +719,7 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
   // either has. Both are closer than a zero, which would put the last message
   // hard against the composer for a frame.
   const dockHeight = dockHeightFor(dockHeights, typing, restingDockHeight);
-  const threadBottom = dockHeight + theme.space(2);
+  const threadBottom = dockHeight + stripsHeight + theme.space(2);
   // Only until the answer itself starts arriving. The indicator occupies exactly
   // one body line at the same offset as the agent's first line, so text replacing
   // it lands where it was and the transcript never shifts — whereas an indicator
@@ -723,8 +751,74 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
     if (!inThread) setGreetingRound((round) => round + 1);
   }, [inThread, threadKey]);
 
+  // Home's agent carousel (tap Pew) and its recent-chat cards.
+  const [carouselOpen, setCarouselOpen] = useState(() => devSheet === "carousel");
+  // While you're typing, a tap on Pew is far more likely a stray thumb than a
+  // wish to switch agent: it only puts the keyboard away. Tapped again with
+  // the keyboard down, it opens the carousel.
+  // `EXPO_PUBLIC_DEV_KEYBOARD_LOOP=1` (development only): focus the composer
+  // at 8s, put the keyboard away at 11s, again every 6s, so the keyboard's
+  // entrance can be filmed and measured frame by frame without a tap.
+  useEffect(() => {
+    if (!__DEV__ || process.env.EXPO_PUBLIC_DEV_KEYBOARD_LOOP !== "1") return;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    for (let k = 0; k < 4; k++) {
+      timers.push(setTimeout(() => composer.current?.focus(), 8000 + k * 6000));
+      timers.push(setTimeout(() => Keyboard.dismiss(), 11000 + k * 6000));
+    }
+    return () => timers.forEach(clearTimeout);
+  }, []);
+
+  // `typingRef` mirrors the app's own keyboard state (set from the will-show /
+  // will-hide events below). `Keyboard.isVisible()` was the first try and is
+  // not reliable here: it could stay true after the keyboard had gone, and
+  // then every tap on Pew only "dismissed" a keyboard that wasn't there.
+  const typingRef = useRef(false);
+  // One beat between the tap and the switcher: Pew smiles where you touched
+  // it, then the switcher opens with its Pew still smiling (it hands the smile
+  // over), and that Pew settles back to normal. The same moment continues
+  // across the two screens instead of a smile cut off by a page change.
+  const [pewSmiling, setPewSmiling] = useState(false);
+  const smileTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(smileTimer.current), []);
+  const openCarousel = useCallback(() => {
+    if (typingRef.current) {
+      Keyboard.dismiss();
+      return;
+    }
+    setPewSmiling(true);
+    clearTimeout(smileTimer.current);
+    smileTimer.current = setTimeout(() => {
+      setCarouselOpen(true);
+      setPewSmiling(false);
+    }, PEW_HANDOFF_MS);
+  }, []);
+  const closeCarousel = useCallback(() => setCarouselOpen(false), []);
+  const carouselAgents = useMemo(
+    () => orderProvidersByRecency(daemon.providers, drawerProjection.rows).filter((p) => p.available !== false),
+    [daemon.providers, drawerProjection.rows],
+  );
+  const homeChats = useMemo(
+    () =>
+      drawerProjection.rows
+        .filter((row) => row.providerId === activeId && (!selectedProjectPath || row.cwd === selectedProjectPath))
+        .slice(0, 6)
+        .map((row) => ({ id: row.id, title: row.title || "Untitled", startedAt: row.startedAt })),
+    [drawerProjection.rows, activeId, selectedProjectPath],
+  );
+  const homeStatus = [
+    daemon.busy ? "Working" : daemon.status === "online" && !daemon.unreachable ? "Ready" : "Offline",
+    daemon.workspace?.folder,
+    daemon.workspace?.repo && (daemon.workspace.uncommitted ?? 0) > 0 ? `${daemon.workspace.uncommitted} changed` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
   const greeting = useMemo(
-    () => greetingFor(active?.name, hashSeed(`${greetingRound}:${active?.id ?? ""}`)),
+    () =>
+      isGoalsProvider(active?.id)
+        ? "What's the goal?"
+        : greetingFor(active?.name, hashSeed(`${greetingRound}:${active?.id ?? ""}`)),
     [greetingRound, active?.id, active?.name],
   );
 
@@ -743,10 +837,6 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
   const { model, mode: modeOption, level } = summarise(daemon.configOptions);
   // Never let one selector drive two pills.
   const mode = modeOption && modeOption.id !== model?.id ? modeOption : undefined;
-  const composerSelectors = useMemo<ComposerSelector[]>(() => [
-    ...(model ? [{ id: "model", value: "Model", label: `Model: ${valueName(model) ?? "Not reported"}${level ? `, ${valueName(level)}` : ""}`, onPress: (anchor: ComposerAnchor) => openComposerPicker("model", anchor) }] : []),
-    ...(mode ? [{ id: "mode", value: valueName(mode) ?? mode.name, label: `${mode.name}: ${valueName(mode) ?? "Not reported"}`, onPress: (anchor: ComposerAnchor) => openComposerPicker("mode", anchor) }] : []),
-  ], [model, mode, level, openComposerPicker]);
 
   // Feedback for things that happen on their own, rather than because a finger
   // touched the screen. This is the point of a remote control: the agent runs
@@ -945,6 +1035,9 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
   // drawer opens or closes, the loser is the one still on screen.
   const edgeSwipeClosed = useMemo(() => buildEdgeSwipe(), [buildEdgeSwipe]);
   const edgeSwipeOpen = useMemo(() => buildEdgeSwipe(), [buildEdgeSwipe]);
+  // A third, on the drawer itself: full width, it covers the conversation, so
+  // a left swipe anywhere on it is how it closes by hand.
+  const drawerSwipe = useMemo(() => buildEdgeSwipe(), [buildEdgeSwipe]);
 
   // Belt and braces for every other way in: the hamburger, a swipe that the
   // strip lost, a session opened from the drawer. The drawer is never the place
@@ -960,11 +1053,17 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
     const willShow = Platform.OS === "ios";
     const shown = Keyboard.addListener(
       willShow ? "keyboardWillShow" : "keyboardDidShow",
-      () => setTyping(true),
+      () => {
+        typingRef.current = true;
+        setTyping(true);
+      },
     );
     const hidden = Keyboard.addListener(
       willShow ? "keyboardWillHide" : "keyboardDidHide",
-      () => setTyping(false),
+      () => {
+        typingRef.current = false;
+        setTyping(false);
+      },
     );
     return () => {
       shown.remove();
@@ -1050,6 +1149,10 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
   // keeps it on false, so a send refused below — no agent available to start a
   // conversation with — leaves the words in the box instead of destroying a
   // message that was never delivered.
+  // `EXPO_PUBLIC_DEV_NEW_GOAL=1` (development only) opens the New goal screen
+  // on launch, for a simulator check without a tap.
+  const [newGoalOpen, setNewGoalOpen] = useState(() => __DEV__ && process.env.EXPO_PUBLIC_DEV_NEW_GOAL === "1");
+  const [newGoalPrefill, setNewGoalPrefill] = useState<string>();
   const send = useCallback(
     (text: string): boolean => {
       // A photo on its own is a message; "look at this" is implied by attaching it.
@@ -1057,6 +1160,15 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
       const staged = attachmentsRef.current;
 
       if (!daemon.sessionId && !active?.available) return false;
+
+      // GG Goals has no free-standing conversation: a message typed on its
+      // home screen becomes the goal of a new one (the sheet takes the draft).
+      if (!daemon.sessionId && isGoalsProvider(active?.id)) {
+        if (!text) return false;
+        setNewGoalPrefill(text);
+        setNewGoalOpen(true);
+        return true;
+      }
 
       // Whatever the recogniser still holds is not going into a message that has
       // already gone, and a live mic outliving the send is what leaves the OS
@@ -1170,13 +1282,62 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
    */
   const startNewChat = useCallback(
     (cwd?: string) => {
-      if (cwd && activeId) selectDaemonProject(activeId, cwd);
-      leaveDaemon();
-      setNewChatOpen(false);
+      // Same split as `openSession`: closing the drawer commits on its own so
+      // its slide starts on the tap, and leaving the conversation (the whole
+      // home screen mounts in its place: the hero Pew, its glow, the recent
+      // cards) renders behind it as a transition. Together in one batch, the
+      // drawer sat still until home had finished building, then slid.
       setMenuOpen(false);
+      setNewChatOpen(false);
+      startTransition(() => {
+        if (cwd && activeId) selectDaemonProject(activeId, cwd);
+        leaveDaemon();
+      });
     },
     [activeId, selectDaemonProject, leaveDaemon],
   );
+  // `EXPO_PUBLIC_DEV_OPEN_SESSION=<n>` (development only): open the n-th chat
+  // in the drawer 6s after launch, leave it at 16s and open it again at 20s,
+  // so opening a chat (cold, then already loaded) can be filmed on the
+  // simulator without a tap.
+  const devOpen = __DEV__ ? process.env.EXPO_PUBLIC_DEV_OPEN_SESSION : undefined;
+  const devOpenRows = useRef(drawerProjection.rows);
+  devOpenRows.current = drawerProjection.rows;
+  const activeIdRef = useRef(activeId);
+  activeIdRef.current = activeId;
+  useEffect(() => {
+    if (devOpen === undefined) return;
+    const n = Number(devOpen) || 0;
+    const open = () => {
+      // A numeric value is an index into this agent's chats; anything else is
+      // a session id (for opening one specific long conversation).
+      const row = /^\d+$/.test(devOpen)
+        ? devOpenRows.current.filter((r) => r.providerId === activeIdRef.current)[n]
+        : devOpenRows.current.find((r) => r.id === devOpen);
+      if (row) openSession(row.id);
+      else if (!/^\d+$/.test(devOpen)) openSession(devOpen);
+    };
+    // `EXPO_PUBLIC_DEV_NEWCHAT_PROBE=1`: from inside the open chat, open the
+    // New chat sheet at 10s and start the new chat at 14s, logging when each
+    // was asked for, so its timing can be read off a recording.
+    if (process.env.EXPO_PUBLIC_DEV_NEWCHAT_PROBE === "1") {
+      const probe = [
+        setTimeout(open, 6000),
+        setTimeout(() => {
+          console.log("NC-PROBE open-sheet", Date.now() % 100000);
+          setNewChatOpen(true);
+        }, 10000),
+        setTimeout(() => {
+          console.log("NC-PROBE start", Date.now() % 100000);
+          startNewChat();
+        }, 14000),
+      ];
+      return () => probe.forEach(clearTimeout);
+    }
+    const timers = [setTimeout(open, 6000), setTimeout(() => startNewChat(), 16000), setTimeout(open, 20000)];
+    return () => timers.forEach(clearTimeout);
+  }, [devOpen, openSession, startNewChat]);
+
   const closeNewChat = useCallback(() => setNewChatOpen(false), []);
   // The drawer only ever offers this beside a named project, so it always has
   // a path to hand — no undefined branch to fall back on here.
@@ -1206,6 +1367,182 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
   }, []);
   const closeThought = useCallback(() => setThought(null), []);
 
+  // ── GG Coder: queue, ask_user, goals ──────────────────────
+  const {
+    gg,
+    cancelQueued: cancelQueuedDaemon,
+    answerAsk: answerAskDaemon,
+    decidePlan: decidePlanDaemon,
+    setAutopilot: setAutopilotDaemon,
+    requestChecklist,
+    refreshGoals,
+    createGoal,
+    goalAction,
+    openGoal: openGoalDaemon,
+    browseWorkspaces,
+  } = daemon;
+  const [goalSettingsOpen, setGoalSettingsOpen] = useState(() => devSheet === "goalsettings");
+  const openSessionId = daemon.sessionId;
+  const queuedHere = openSessionId ? gg.queues[openSessionId] : undefined;
+  const askHere = openSessionId ? gg.asks[openSessionId]?.[0] : undefined;
+  const goalState = openSessionId ? gg.goalStates[openSessionId] : undefined;
+  const goalHere =
+    isGoalsProvider(daemon.effectiveProviderId ?? activeId) && (openSessionId || daemon.workspace)
+      ? goalForSession(gg.goals, { sessionId: openSessionId, cwd: daemon.workspace?.cwd }, goalState)
+      : undefined;
+  // Goal header/roster/Ken line belong to GG Goals conversations only.
+  const inGoal =
+    isGoalsProvider(daemon.effectiveProviderId ?? activeId) && (goalState !== undefined || goalHere !== undefined);
+  // GG Goals ends a message with `[ken:face] words`: shown in the goal header,
+  // never in the bubble.
+  const restoring = Boolean(daemon.restoreTarget) && daemon.loadingSession;
+  useEffect(() => {
+    if (!restoring) {
+      setRestoreHold(false);
+      return;
+    }
+    setRestoreHold(true);
+    const t = setTimeout(() => setRestoreHold(false), RESTORE_HOLD_MS);
+    return () => clearTimeout(t);
+  }, [restoring]);
+  const holdingRestore = restoring && restoreHold;
+
+  const shownTurns = useMemo(
+    () => (inGoal ? withoutKenLines(daemon.turns) : daemon.turns),
+    [inGoal, daemon.turns],
+  );
+  // Ken's latest spoken line, for the goal's ticker.
+  const kenSays = useMemo(() => (inGoal ? latestKenSaying(daemon.turns) : null), [inGoal, daemon.turns]);
+  const cancelQueued = useCallback(
+    (id: string) => {
+      if (openSessionId) cancelQueuedDaemon(openSessionId, id);
+    },
+    [openSessionId, cancelQueuedDaemon],
+  );
+  const planHere = openSessionId ? gg.plans[openSessionId] : undefined;
+  const autopilotHere = openSessionId ? gg.autopilot[openSessionId] : undefined;
+  const extensionsHere = gg.extensions[daemon.effectiveProviderId ?? ""];
+  const stripsHere = ggStrips(daemon.effectiveProviderId, extensionsHere, openSessionId !== undefined);
+  const [checklistOpen, setChecklistOpen] = useState(() => devSheet === "checklist");
+  const openChecklist = useCallback(() => setChecklistOpen(true), []);
+  // `EXPO_PUBLIC_DEV_SHEET=cycle` (development only): open each sheet in turn,
+  // 7s apart, so one launch can be screenshotted sheet by sheet.
+  useEffect(() => {
+    if (devSheet !== "cycle") return;
+    const steps: Array<() => void> = [
+      () => setConnectionOpen(true),
+      () => { setConnectionOpen(false); setContextOpen(true); },
+      () => { setContextOpen(false); setPicker("model"); },
+      () => { setPicker(null); setCommandsOpen(true); },
+      () => { setCommandsOpen(false); setAttachOpen(true); },
+      () => { setAttachOpen(false); setNewChatOpen(true); },
+      () => { setNewChatOpen(false); setThought("The chunk is there on reopen, so the daemon has it. The phone drops it.\n\nReplay and live stream overlap at the cursor."); },
+      () => { setThought(null); setCarouselOpen(true); },
+      () => { setCarouselOpen(false); setMenuOpen(true); },
+      () => setMenuOpen(false),
+    ];
+    let i = 0;
+    const timer = setInterval(() => {
+      steps[i]?.();
+      i += 1;
+      if (i >= steps.length) clearInterval(timer);
+    }, 7000);
+    return () => clearInterval(timer);
+  }, [devSheet]);
+  const checklistHere = openSessionId ? gg.checklists[openSessionId] : undefined;
+  const decidePlan = useCallback(
+    (generation: number, action: "accept" | "feedback" | "reject", feedback?: string) => {
+      if (openSessionId) decidePlanDaemon(openSessionId, generation, action, feedback);
+    },
+    [openSessionId, decidePlanDaemon],
+  );
+  // Autopilot is a session setting, so a new GG Coder conversation has
+  // nothing to set yet: a press there is remembered and applied the moment the
+  // session exists, rather than showing a switch that does nothing.
+  const [autopilotWanted, setAutopilotWanted] = useState(false);
+  const toggleAutopilot = useCallback(() => {
+    if (openSessionId) setAutopilotDaemon(openSessionId, !(autopilotHere?.enabled ?? false));
+    else setAutopilotWanted((wanted) => !wanted);
+  }, [openSessionId, autopilotHere?.enabled, setAutopilotDaemon]);
+  useEffect(() => {
+    if (!openSessionId || !autopilotWanted) return;
+    setAutopilotWanted(false);
+    setAutopilotDaemon(openSessionId, true);
+  }, [openSessionId, autopilotWanted, setAutopilotDaemon]);
+
+  // GG Goals and GG Coder have no mode dropdown: a goal runs on its own, and
+  // GG Coder's slot is the Autopilot switch instead — a press turns it on or
+  // off, no menu.
+  const selectedAgent = daemon.effectiveProviderId ?? activeId;
+  const ggAgent = isGoalsProvider(selectedAgent) || selectedAgent === "ggcoder";
+  const autopilotOffered = selectedAgent === "ggcoder" && extensionsHere?.autopilot === true;
+  const autopilotOn = openSessionId ? autopilotHere?.enabled === true : autopilotWanted;
+  const autopilotReviewing = autopilotHere?.reviewing === true;
+  const composerSelectors = useMemo<ComposerSelector[]>(() => [
+    ...(model ? [{ id: "model", value: "Model", label: `Model: ${valueName(model) ?? "Not reported"}${level ? `, ${valueName(level)}` : ""}`, onPress: (anchor: ComposerAnchor) => openComposerPicker("model", anchor) }] : []),
+    ...(mode && !ggAgent ? [{ id: "mode", value: valueName(mode) ?? mode.name, label: `${mode.name}: ${valueName(mode) ?? "Not reported"}`, onPress: (anchor: ComposerAnchor) => openComposerPicker("mode", anchor) }] : []),
+    ...(autopilotOffered
+      ? [{
+          id: "autopilot",
+          value: autopilotReviewing ? "Reviewing…" : "Autopilot",
+          label: autopilotReviewing ? "Autopilot, Ken is reviewing" : "Autopilot",
+          toggle: { on: autopilotOn },
+          onPress: toggleAutopilot,
+        }]
+      : []),
+  ], [model, mode, level, ggAgent, autopilotOffered, autopilotOn, autopilotReviewing, toggleAutopilot, openComposerPicker]);
+  // Open = ask; a `checklist changed` nudge or any session.idle bumps the nonce.
+  useEffect(() => {
+    if (checklistOpen && openSessionId) requestChecklist(openSessionId);
+  }, [checklistOpen, openSessionId, gg.checklistNonce, requestChecklist]);
+  const answerAsk = useCallback(
+    (requestId: string, result: AskResult) => {
+      if (openSessionId) answerAskDaemon(openSessionId, requestId, result);
+    },
+    [openSessionId, answerAskDaemon],
+  );
+  // Messages handed back unsent (a cancelled turn) go into an empty draft only.
+  const returnedNonce = gg.returned?.nonce;
+  useEffect(() => {
+    const returned = gg.returned;
+    if (!returned || returned.sessionId !== openSessionId) return;
+    const text = returnedDraft(returned.messages, composer.current?.getDraft() ?? "");
+    if (text) composer.current?.setDraft(text);
+    // Only on a new hand-back, not on every session switch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [returnedNonce]);
+  const openGoal = useCallback(
+    (goal: GoalSummary) => {
+      setMenuOpen(false);
+      openGoalDaemon(goal);
+    },
+    [openGoalDaemon],
+  );
+  const deleteGoal = useCallback((goal: GoalSummary) => goalAction(goal.id, "delete"), [goalAction]);
+  const openNewGoal = useCallback((prefill?: string) => {
+    setMenuOpen(false);
+    setNewGoalPrefill(prefill);
+    setNewGoalOpen(true);
+  }, []);
+  const closeNewGoal = useCallback(() => setNewGoalOpen(false), []);
+  const goalCreated = useCallback(
+    (goal: GoalSummary | undefined) => {
+      setNewGoalOpen(false);
+      if (goal) openGoalDaemon(goal);
+    },
+    [openGoalDaemon],
+  );
+  const closeGoalSettings = useCallback(() => setGoalSettingsOpen(false), []);
+  const openGoalSettings = useCallback(() => setGoalSettingsOpen(true), []);
+  const goalId = goalHere?.id ?? goalState?.goalId;
+  const goalPaused = goalState?.paused ?? goalHere?.status === "paused";
+  const pauseGoal = useCallback(() => {
+    if (goalId) goalAction(goalId, "pause");
+  }, [goalId, goalAction]);
+  const resumeGoal = useCallback(() => {
+    if (goalId) goalAction(goalId, "resume");
+  }, [goalId, goalAction]);
+
   const answerPermission = useCallback(
     (requestId: string, optionId: string, deny: boolean) => {
       if (deny) haptics.warned();
@@ -1233,9 +1570,12 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
 
   return (
     <ImageResolverProvider value={imageResolver}>
+    <AgentColorProvider value={agentInk}>
     <View style={styles.root}>
       <StatusBar style="light" />
 
+      <GestureDetector gesture={drawerSwipe}>
+      <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
       <Sidebar
         open={menuOpen}
         providers={daemon.providers}
@@ -1255,12 +1595,28 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
         onSelectProject={selectProject}
         historyLoading={daemon.loadingSessions}
         reduceMotion={reduceMotion}
-        machineLabel={pairing.label}
+        machineLabel={daemon.machineName ?? "Your computer"}
         machineRemote={pairing.remote}
         connectionStatus={daemon.status}
         update={daemon.update}
         onOpenConnection={openConnection}
+        onClose={closeMenu}
+        goals={
+          isGoalsProvider(activeId) && daemon.hasGgCoder
+            ? {
+                list: gg.goals,
+                loading: gg.goalsLoading,
+                error: gg.goalsError,
+                onRefresh: refreshGoals,
+                onOpen: openGoal,
+                onDelete: deleteGoal,
+                onNew: openNewGoal,
+              }
+            : undefined
+        }
       />
+      </View>
+      </GestureDetector>
 
       {/* The conversation pane. Slides right to reveal the drawer beneath. */}
       <Reanimated.View style={[styles.pane, paneSlide]}>
@@ -1282,15 +1638,16 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
           out under the CanvasCover instead of hitting a panel edge, so the
           conversation keeps the full screen height. */}
       <View
-        style={[styles.topBar, styles.topBarOverlay, { top: insets.top }]}
+        style={[styles.topBarOverlay, { top: insets.top }]}
         onLayout={(e) => setNavHeight(e.nativeEvent.layout.height)}
       >
-        <View>
+      <View style={styles.topBar}>
+        <View style={inGoal && [styles.navActionsGoal, styles.navLeadGoal]}>
           <CircleButton
             label={`Open menu. Daemon ${daemon.status}.`}
             onPress={() => setMenuOpen(true)}
           >
-            <Ionicons name="menu" size={20} color={theme.color.text} />
+            <DotGlyph name="menu" size={16} />
           </CircleButton>
           {/* Connection state as a dot on the menu button: always visible, but
               it never competes with the model name for space. */}
@@ -1319,16 +1676,50 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
           {sessionTitle}
         </Text>
 
-        <View style={styles.navAction}>
-        {inThread && (
+        <View style={[styles.navAction, inGoal && styles.navActionsGoal]}>
+        {inGoal ? (
+          // A goal is one long conversation, so there is no "new conversation"
+          // here: its two controls take the spot instead of a card over the thread.
+          <>
+            <CircleButton
+              label={goalPaused ? "Resume goal" : "Pause goal"}
+              disabled={!goalId}
+              onPress={goalPaused ? resumeGoal : pauseGoal}
+            >
+              <DotGlyph name={goalPaused ? "play" : "pause"} size={14} />
+            </CircleButton>
+            <CircleButton label="Goal settings" disabled={!goalId} onPress={openGoalSettings}>
+              <DotGlyph name="gear" size={16} />
+            </CircleButton>
+          </>
+        ) : inThread && (
           // Asks where, rather than starting one immediately: the old behaviour
           // always landed wherever the agent happened to be, which is the wrong
           // project as often as the right one and was unfixable from the phone.
           <CircleButton label="New conversation" onPress={() => setNewChatOpen(true)}>
-            <Ionicons name="create-outline" size={18} color={theme.color.text} />
+            <DotGlyph name="compose" size={16} />
           </CircleButton>
         )}
         </View>
+      </View>
+      {/* Not while a chat is reopening: that screen is Pew alone, centred,
+          and the ticker fades in with the messages once they've loaded. */}
+      {(inThread || daemon.restoreTarget) && !(daemon.restoreTarget && daemon.loadingSession && (daemon.turns.length === 0 || holdingRestore)) && (
+        <Ticker
+          color={active?.color}
+          working={daemon.busy && !daemon.loadingSession}
+          activity={daemon.activity}
+          needs={daemon.permission ? daemon.permission.title : askHere ? "Question" : undefined}
+          offline={daemon.status !== "online" || Boolean(daemon.unreachable)}
+          project={daemon.workspace?.folder}
+          changes={daemon.workspace?.uncommitted}
+          say={kenSays?.text}
+        />
+      )}
+      {/* A goal's crew: one slidable row of its workers under the ticker, each
+          its own Pew in its role colour. Inside the measured overlay, so the
+          thread starts below it. */}
+      {inGoal && goalState && !daemon.restoreTarget && <CrewRow workers={goalState.workers} />}
       </View>
 
       {/* Frosted cover for the nav zone only — it ends exactly at the nav's
@@ -1353,21 +1744,20 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
           <ChatThread
             key={threadKey}
             ref={scroller}
-            turns={daemon.turns}
+            turns={holdingRestore ? NO_TURNS : shownTurns}
             activeStream={daemon.activeStream}
             restore={daemon.restoreTarget ? {
               title: daemon.restoreTarget.title,
-              state: restorePresentation(daemon.restoreTarget, daemon.loadingSession, daemon.restoreError, daemon.turns.length, daemon.status),
+              state: restorePresentation(daemon.restoreTarget, daemon.loadingSession, daemon.restoreError, holdingRestore ? 0 : daemon.turns.length, daemon.status),
               error: daemon.restoreError,
               onRetry: () => daemon.openSession(daemon.restoreTarget!.id),
             } : undefined}
             threadTop={threadTop}
             threadBottom={threadBottom}
             working={working && !daemon.loadingSession && !daemon.restoreError}
-            activity={daemon.activity}
             receipt={daemon.receipt}
             indicatorTop={insets.top + navHeight}
-            indicatorBottom={dockHeight}
+            indicatorBottom={dockHeight + stripsHeight}
             onAtBottomChange={setAtBottom}
             onOpenThought={openThought}
             onRetry={retrySend}
@@ -1385,15 +1775,30 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
               accessibilityLabel="Dismiss keyboard"
               onPress={Keyboard.dismiss}
             >
-              <Reanimated.View style={keyboard.settled}>
-                <Orb
+              {/* Not scaled as a whole any more: HomeGreeting dissolves its text
+                  away and shrinks only Pew while the keyboard is up.
+
+                  Mounted only once an agent is known (from the machine or the
+                  last-known list), and then all at once with a fade: before
+                  that, Pew burst in coral, with "Ready" and no greeting, then
+                  recoloured and the greeting arrived beneath it a beat later.
+                  A launch with no agent at all (a fresh pairing, a machine
+                  with none turned on) still shows after a short wait. */}
+              {(active || homeWaited) && (
+              <Reanimated.View entering={reduceMotion ? undefined : FadeIn.duration(260)}>
+                <HomeGreeting
+                  typing={keyboard.progress}
+                  providerId={active?.id}
                   color={active?.color}
-                  size={ORB_REST_SIZE}
                   busy={daemon.busy}
-                />
-              </Reanimated.View>
-              <Text style={styles.greetingText}>
-                {/* A refusal the daemon explained outranks the connecting
+                  online={daemon.status === "online" && !daemon.unreachable}
+                  failed={Boolean(daemon.fatal)}
+                  status={homeStatus}
+                  onPressPew={active ? openCarousel : undefined}
+                  smiling={pewSmiling}
+                  chats={homeChats}
+                  onOpenChat={openSession}
+                  /* A refusal the daemon explained outranks the connecting
                     state: reconnecting cannot fix a rotated key or a version
                     mismatch, so "Connecting..." would loop forever while
                     telling the one person who can act nothing at all.
@@ -1409,8 +1814,8 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
                     is fine — so instructions to go and inspect it are wrong
                     advice most of the times they are read, and unfollowable
                     anyway from wherever the user is standing. What can be done
-                    from here is keep typing, which the composer now says. */}
-                {daemon.fatal
+                    from here is keep typing, which the composer now says. */
+                  text={daemon.fatal
                   ? daemon.fatal
                   : daemon.unreachable
                     ? "Can't reach your machine."
@@ -1419,7 +1824,9 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
                       : active
                         ? greeting
                         : emptyReason(daemon.providers.length)}
-              </Text>
+                />
+              </Reanimated.View>
+              )}
             </Pressable>
           </Reanimated.View>
         ) : null}
@@ -1442,11 +1849,11 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
               }}
               size={theme.size.chip}
             >
-              <Ionicons name="arrow-down" size={18} color={theme.color.text} />
+              <DotGlyph name="down" size={16} />
             </CircleButton>
           </Animated.View>
           {dockHeight > 0 && (
-            <CanvasCover edge="bottom" height={dockHeight} style={styles.dockCover} />
+            <CanvasCover edge="bottom" height={dockHeight + stripsHeight} style={styles.dockCover} />
           )}
           {/* The dock keeps the composer even while an approval is pending:
               the request is its own blocking sheet now, so swapping this out
@@ -1455,6 +1862,15 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
               It owns the draft, so typing re-renders this subtree and not the
               whole app. That is what leaves the JS thread free for the
               composer's own growth animation while a line wraps. */}
+          <View
+            onLayout={(e) => {
+              const height = Math.round(e.nativeEvent.layout.height);
+              setStripsHeight((prev) => (prev === height ? prev : height));
+            }}
+          >
+            {/* GG's Checklist / Plan chips ride the composer's context row now. */}
+            <QueuedStrip messages={queuedHere} onCancel={cancelQueued} />
+          </View>
           <ComposerDock
             ref={composer}
             style={[
@@ -1477,11 +1893,13 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
               setDockHeights((prev) => recordDockHeight(prev, typing, height));
             }}
             typing={typing}
-            workspace={daemon.workspace}
+            workspace={isGoalsProvider(active?.id) && !openSessionId ? undefined : daemon.workspace}
             usage={daemon.usage}
             showCommands={daemon.commands.length > 0}
             onCommands={openCommands}
             onProjectDetails={openContext}
+            onChecklist={stripsHere.checklist ? openChecklist : undefined}
+            planMode={stripsHere.plan && planHere?.planMode === true}
             selectors={composerSelectors}
             onSend={send}
             busy={showsStop(daemon)}
@@ -1499,9 +1917,13 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
                 ? "Listening..."
                 : daemon.status !== "online"
                   ? "Offline. Sends when you reconnect"
-                  : active
-                    ? "Build anything..."
-                    : "Waiting for an agent..."
+                  : !active
+                    ? "Waiting for an agent..."
+                    : isGoalsProvider(active.id)
+                      ? openSessionId
+                        ? "Message GG Goals..."
+                        : "Describe the goal..."
+                      : "Build anything..."
             }
             attachments={attachments}
             onAttach={openAttach}
@@ -1513,8 +1935,8 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
 
       {/* Outside the lifted pane: a sheet belongs to the screen's bottom edge,
           not to the composer, so it must not ride up with the keyboard. */}
-      <ContextDetailsSheet visible={contextOpen} workspace={daemon.workspace} usage={daemon.usage} onClose={closeContext} />
-      <ConnectionSheet visible={connectionOpen} machineLabel={pairing.label} machineRemote={pairing.remote} status={daemon.status} update={daemon.update} onClose={closeConnection} onUnpair={onUnpair} />
+      <ContextDetailsSheet visible={contextOpen} workspace={daemon.workspace} usage={daemon.usage} inConversation={daemon.sessionId !== undefined} onClose={closeContext} />
+      <ConnectionSheet visible={connectionOpen} machineLabel={daemon.machineName ?? "Your computer"} machineRemote={pairing.remote} status={daemon.status} update={daemon.update} onClose={closeConnection} onUnpair={onUnpair} />
       <CommandSheet
         visible={commandsOpen}
         commands={daemon.commands}
@@ -1536,6 +1958,9 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
       <AttachmentSheet visible={attachOpen} onSelect={pickAttachment} onClose={closeAttach} />
 
       <ThoughtSheet visible={thought !== null} text={thought ?? ""} onClose={closeThought} />
+      {carouselOpen && carouselAgents.length > 0 && (
+        <AgentCarousel agents={carouselAgents} currentId={activeId} onSelect={daemon.select} onClose={closeCarousel} arriveSmiling />
+      )}
 
       {/* One picker, pointed at whichever pill opened it. The mode selector is
           excluded from the model menu so each pill owns exactly one list. */}
@@ -1557,7 +1982,46 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
       {/* Last of every overlay on purpose. All the sheets share one zIndex, so
           paint order is sibling order — and an approval the agent is blocked on
           must sit above anything the user happened to have open. */}
+      <NewGoalSheet
+        visible={newGoalOpen}
+        onClose={closeNewGoal}
+        onCreate={createGoal}
+        results={gg.goalResults}
+        onCreated={goalCreated}
+        browse={daemon.browse}
+        onBrowse={browseWorkspaces}
+        prefill={newGoalPrefill}
+        online={daemon.status === "online"}
+      />
+      <GoalSettingsSheet
+        visible={goalSettingsOpen}
+        goal={goalHere}
+        state={goalState}
+        onAction={goalAction}
+        results={gg.goalResults}
+        modelOption={daemon.providerConfigs.ggcoder?.find((option) => option.id === "model")}
+        onClose={closeGoalSettings}
+        browse={daemon.browse}
+        onBrowse={browseWorkspaces}
+        online={daemon.status === "online"}
+      />
+
       <ApprovalSheet permission={daemon.permission} onAnswer={answerPermission} />
+      {/* Same rule as the approval: a question the agent is blocked on sits
+          above whatever else is open. Never raised by a replay batch. */}
+      <AskUserSheet ask={askHere} onAnswer={answerAsk} />
+      <PlanReviewSheet plan={stripsHere.plan ? planHere?.pending ?? undefined : undefined} busy={daemon.busy} onDecide={decidePlan} />
+      <ChecklistSheet
+        visible={checklistOpen}
+        items={checklistHere?.items}
+        error={checklistHere?.error}
+        busy={daemon.busy}
+        onClose={() => setChecklistOpen(false)}
+        onRun={(prompt) => {
+          setChecklistOpen(false);
+          send(prompt);
+        }}
+      />
 
       {/* While the drawer is open the pane itself is the way back: tapping
           anywhere on it closes, which matches the push metaphor better than a
@@ -1584,6 +2048,7 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
       </SafeAreaView>
       </Reanimated.View>
     </View>
+    </AgentColorProvider>
     </ImageResolverProvider>
   );
 }
@@ -1633,6 +2098,16 @@ const styles = StyleSheet.create({
   },
   navFade: { zIndex: 2 },
   navAction: { width: theme.size.control, flexShrink: 0 },
+  // Two controls on the right in a goal; the menu side takes the same width so
+  // the title stays centred on the screen.
+  navLeadGoal: { justifyContent: "flex-start" },
+  navActionsGoal: {
+    width: theme.size.control * 2 + theme.space(2),
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: theme.space(2),
+    flexShrink: 0,
+  },
   sessionTitle: {
     textAlign: "center",
     flex: 1,
@@ -1655,12 +2130,13 @@ const styles = StyleSheet.create({
 
 
   greetingLift: { flex: 1 },
+  // Full width: HomeGreeting puts its own text on the gutter, and its row of
+  // recent chats has to scroll edge to edge while starting on that same rail.
   greeting: {
     flex: 1,
-    alignItems: "center",
+    alignItems: "stretch",
     justifyContent: "center",
     gap: theme.space(5),
-    paddingHorizontal: theme.space(10),
   },
   greetingText: {
     color: theme.color.text,

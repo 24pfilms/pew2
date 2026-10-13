@@ -1,10 +1,10 @@
 /** Neutral provider controls retain the same native Glass press response. */
 import { memo } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import Ionicons from "@expo/vector-icons/Ionicons";
 import { theme } from "../theme";
 import { agentChipColors } from "../agentChipColors";
 import { Glass } from "./Glass";
+import { Pew } from "../pew/Pew";
 import { haptics } from "./haptics";
 import type { Provider } from "../useDaemon";
 
@@ -25,16 +25,21 @@ function AgentChipView({ provider, selected, onPress }: AgentChipProps) {
       onPress={() => { haptics.select(); onPress(provider.id); }}
       style={[styles.body, { backgroundColor: colors.background }]}
     >
-      <View accessible={false} style={[styles.marker, { backgroundColor: colors.marker }]} />
+      {/* Each agent's own Pew, in its brand colour. Picking an agent wakes it;
+          the others doze and breathe, and an unavailable one lies still. */}
+      <View style={!enabled && styles.unavailable}>
+        <Pew size={28} style={styles.pew} color={provider.color} mood={selected ? "idle" : "sleepy"} paused={!enabled} />
+      </View>
       <Text style={[styles.label, { color: colors.text }]} numberOfLines={1}>{provider.name}</Text>
-      {selected && <Ionicons name="checkmark" size={16} color={colors.text} accessible={false} />}
     </Pressable>
   </Glass>;
 }
 const styles = StyleSheet.create({
   chip: { borderRadius: theme.radius.pill, overflow: "hidden" },
   body: { flexDirection: "row", alignItems: "center", justifyContent: "center", minHeight: theme.size.touch, paddingHorizontal: theme.space(4), paddingVertical: theme.space(1), gap: theme.space(2) },
-  marker: { width: 7, height: 7, borderRadius: theme.radius.pill },
+  unavailable: { opacity: 0.4 },
+  // The globe fills the middle of its box; the rest is room to bounce.
+  pew: { margin: -theme.space(1) },
   label: { fontSize: theme.font.small, fontWeight: "700", lineHeight: theme.font.small + 4, maxWidth: 160 },
 });
 export const AgentChip = memo(AgentChipView, (before, after) =>

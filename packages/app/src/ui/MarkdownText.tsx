@@ -1,9 +1,9 @@
-import { createElement, memo, useMemo, useState } from "react";
+import { createElement, memo, useContext, useMemo, useState } from "react";
 import { StreamingMarkdown } from "./StreamingMarkdown";
 import { useSmoothText } from "./useSmoothText";
 import * as Clipboard from "expo-clipboard";
 import * as WebBrowser from "expo-web-browser";
-import { Alert, Linking, Platform, StyleSheet, Text, View } from "react-native";
+import { Alert, Linking, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import Markdown, {
   type MarkdownStyles,
   type RenderFunction,
@@ -13,11 +13,11 @@ import { theme } from "../theme";
 import { ChatImage } from "./ChatImage";
 import { isDisplayableImage } from "../images";
 import { writeToClipboard } from "./clipboard";
-import { CopyButton } from "./CopyButton";
+import { MessageTextContext, openCopyMenu } from "./copyMenu";
 import { linkTarget } from "./links";
 import { fencedCodeContainerStyle, fencedCodeTextStyle } from "./markdownCodeStyles";
 import { boundedMarkdownParagraphStyle, boundedMarkdownRootStyle } from "./messageLayoutStyles";
-import { splitMarkdownBlocks } from "./markdownBlocks";
+import { hasFence, holdOpenInlineCode, splitMarkdownBlocks } from "./markdownBlocks";
 
 export type MarkdownTone = "body" | "thought" | "system";
 
@@ -41,35 +41,22 @@ function CodeBlock({
   contentStyle: object;
   textStyle: object;
 }) {
+  const message = useContext(MessageTextContext);
+  // Holding a fence offers just this block, then the whole message. The
+  // innermost Pressable wins the responder, so the turn's own hold never fires.
   return (
-    <View style={containerStyle}>
-      <View style={codeBlockChrome.header}>
-        {/* The same control the whole reply carries under it. A code block gets
-            its own because a fence is the thing most often wanted on its own —
-            and because holding it selects, but cannot reach past its own
-            scroll. */}
-        <CopyButton text={content} accessibilityLabel="Copy code" />
-      </View>
+    <Pressable
+      accessible={false}
+      delayLongPress={350}
+      onLongPress={() => openCopyMenu(message ?? content, content)}
+      style={containerStyle}
+    >
       <View style={contentStyle}>
-        <Text selectable style={textStyle}>
-          {content}
-        </Text>
+        <Text style={textStyle}>{content}</Text>
       </View>
-    </View>
+    </Pressable>
   );
 }
-
-const codeBlockChrome = StyleSheet.create({
-  header: {
-    minHeight: 36,
-    alignItems: "flex-end",
-    justifyContent: "center",
-    paddingHorizontal: theme.space(1.5),
-    borderBottomWidth: StyleSheetHairline,
-    borderBottomColor: theme.color.border,
-    backgroundColor: theme.color.surfaceRaised,
-  },
-});
 
 const renderCodeBlock: RenderFunction = (node, _children, _parents, styles) => {
   const content = trimTrailingNewline(node.content);
@@ -111,16 +98,12 @@ const renderImage: RenderFunction = (node) => {
 export const markdownRules: Partial<RenderRules> = {
   // Every inline run that is *not* a paragraph — a heading, a list item, a table
   // cell — bottoms out here, and this is the outermost Text of those blocks.
-  //
-  // That is why `selectable` is said twice, here and on the paragraph below.
-  // Nested Text is virtual on both platforms: it is flattened into the one
-  // native text view its top-level Text creates, and the native selection
-  // gesture belongs to that view. So the flag only does anything on the
-  // outermost Text of a block, and there are two kinds of those.
+  // Plain text, deliberately: a hold on a message opens the copy menu (`copyMenu.ts`),
+  // and native selection would fight that gesture.
   textgroup: (node, children, _parents, styles) =>
     createElement(
       Text,
-      { ["key"]: node.key, selectable: true, style: styles.text as never },
+      { ["key"]: node.key, style: styles.text as never },
       children,
     ),
   // A paragraph must be one measured Text block. The library's default uses a
@@ -128,14 +111,12 @@ export const markdownRules: Partial<RenderRules> = {
   // height while its text paints several lines, so following items overlap it.
   // One exception: a paragraph holding an image becomes a column, because
   // nesting a View in text layout collapses a percentage-width picture on iOS.
-  // Only the Text branch is selectable — a View is not text and `selectable`
-  // means nothing on it.
   paragraph: (node, children, _parents, styles) =>
     hasImageChild(node)
       ? createElement(View, { ["key"]: node.key, style: styles.paragraph as never }, children)
       : createElement(
           Text,
-          { ["key"]: node.key, selectable: true, style: styles.paragraph as never },
+          { ["key"]: node.key, style: styles.paragraph as never },
           children,
         ),
   code_block: renderCodeBlock,
@@ -156,6 +137,7 @@ function stylesFor(
   color: string,
   fontSize: number,
   lineHeight: number,
+  italic = false,
 ): Partial<MarkdownStyles> {
   return {
     // No negative margin here, unlike the single-render version this replaced.
@@ -164,7 +146,7 @@ function stylesFor(
     // wrapper around all of them — applied per block it would instead collapse
     // the gap between every pair of paragraphs.
     root: boundedMarkdownRootStyle,
-    text: { color, fontSize, lineHeight },
+    text: { color, fontSize, lineHeight, ...(italic ? { fontStyle: "italic" as const } : {}) },
     paragraph: {
       color,
       fontSize,
@@ -313,7 +295,9 @@ function stylesFor(
 // identity of these objects while streamed chunks update only the source text.
 export const markdownStyles: Record<MarkdownTone, Partial<MarkdownStyles>> = {
   body: stylesFor(theme.color.text, theme.font.body, theme.line.body),
-  thought: stylesFor(theme.color.textDim, theme.font.small, 20),
+  // Reasoning reads as notes in the margin: italic, a touch larger than
+  // small type so a long one is comfortable to read in the thought sheet.
+  thought: stylesFor(theme.color.textDim, 14, 21, true),
   system: stylesFor(theme.color.danger, theme.font.small, 20),
 };
 
@@ -405,15 +389,21 @@ const MarkdownBlock = memo(function MarkdownBlock({
 function GrowingMarkdownTextView({ text, tone = "body", liveIdentity }: { text: string; tone?: MarkdownTone; liveIdentity?: string }) {
   const [touchedIdentity, setTouchedIdentity] = useState<string>();
   const completeBlocks = useMemo(() => splitMarkdownBlocks(text), [text]);
-  // A code-bearing block stays authoritative: never turn half of an inline
-  // code token into fading prose, or pace characters inside a fenced block.
-  const hasCode = /`|^\s*~{3,}/m.test(completeBlocks.at(-1) ?? "");
+  // A fenced block stays authoritative: characters are never paced inside it.
+  // Inline code is paced and dissolves with the prose around it (it used to
+  // switch the whole paragraph off, which was most agent replies); a span that
+  // is only half revealed is held back until it is whole (`holdOpenInlineCode`).
+  const hasCode = hasFence(completeBlocks.at(-1) ?? "");
   const live = tone === "body" && liveIdentity !== undefined && touchedIdentity !== liveIdentity && !hasCode;
   const smooth = useSmoothText(text, liveIdentity ?? "history", live);
+  const revealed = useMemo(
+    () => (live && smooth.animating ? holdOpenInlineCode(smooth.text) : smooth.text),
+    [live, smooth.animating, smooth.text],
+  );
   // Splitting is a parse, so it is memoised too — but it is only the block
   // tokeniser, not the inline pass or the element tree, and it is the one piece
   // of work that unavoidably sees the whole message.
-  const blocks = useMemo(() => splitMarkdownBlocks(smooth.text), [smooth.text]);
+  const blocks = useMemo(() => splitMarkdownBlocks(revealed), [revealed]);
 
   return (
     <View style={blockLayout.root} accessibilityLiveRegion="none" onTouchStart={() => { if (liveIdentity) setTouchedIdentity(liveIdentity); }}>

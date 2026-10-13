@@ -13,7 +13,7 @@
  */
 
 interface VisibleTurn {
-  role: "user" | "agent" | "thought" | "system";
+  role: "user" | "agent" | "thought" | "system" | "ken" | "note";
   text: string;
 }
 
@@ -46,7 +46,8 @@ export function findDuplicateError(turns: readonly VisibleTurn[], message: strin
     const turn = turns[index];
     // A user prompt ends the current turn; anything above it is history.
     if (!turn || turn.role === "user") break;
-    if (turn.role === "thought") continue;
+    // Ken's words are never the agent restating its own error.
+    if (turn.role === "thought" || turn.role === "ken" || turn.role === "note") continue;
 
     const text = canonical(turn.text);
     if (!text) continue;

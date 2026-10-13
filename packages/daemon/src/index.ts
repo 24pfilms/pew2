@@ -13,16 +13,27 @@ import {
   connectProvider,
   type AcpSessionHandle,
   type AgentSession,
+  type AskAnswer,
   type AvailableCommand,
   type ConfigOption,
+  type PromptOptions,
 } from "./acp/connect.js";
 import { loadClaudeDisplayHistory } from "./acp/claude-history.js";
 import { loadGgCoderDisplayHistory } from "./acp/ggcoder-history.js";
 import { SessionLog } from "./session/log.js";
 import { readDisabled } from "./providers/enabled.js";
-import { discardAttachments, storeAttachments } from "./attachments.js";
+import { homedir as __homedir } from "node:os";
+import { join as __join, dirname as __dirname, resolve as __resolve } from "node:path";
+const homedir = __homedir;
+const join = __join;
+import {
+  attachmentLimitError,
+  discardAttachments,
+  storeAttachments,
+  type StoredAttachment,
+} from "./attachments.js";
 import { folderName, resolveWorkspace } from "./workspace.js";
-import { PushRegistry } from "./push.js";
+import { PushRegistry, pushFinishedTurn } from "./push.js";
 import { readProbeCache, writeProbeCache } from "./probe-cache.js";
 import { readKnownProjects, rememberKnownProject } from "./known-projects.js";
 import { hydrateMessageCounts } from "./acp/messageCounts.js";
@@ -106,10 +117,94 @@ interface ActiveSession {
    * Capped, because a turn can emit megabytes and a banner shows one line.
    */
   turnText?: string;
+  /**
+   * Messages sent while a turn was running, oldest first. Live state, never
+   * logged: an entry becomes a `user_message` only when it reaches the agent.
+   */
+  queue?: QueueEntry[];
+  /**
+   * The user stopped this turn. New queue entries are held back from the
+   * agent's own queue until it ends, or the agent would hand them straight
+   * back as cancelled.
+   */
+  cancelling?: boolean;
+  /**
+   * Forwarded entries this daemon already sent itself as a turn. The agent's
+   * turn-end `returned` for them is then old news, not something new to run.
+   */
+  sentForwarded?: QueueEntry[];
+  /** Open `_gg/ask_user` questions, by request id: same role as `permissions`. */
+  asks?: Map<string, unknown[]>;
+  /** Latest GG Goals state, when this session coordinates a goal. */
+  goal?: wire.GoalState;
+  /** Latest `_gg/plan_state`: live state, broadcast + catch-up, never logged. */
+  plan?: wire.PlanState;
+  /** Latest `_gg/autopilot_state`: live state, broadcast + catch-up, never logged. */
+  autopilot?: wire.AutopilotState;
+  /** The goal's kickoff turn has been started from here; never twice. */
+  kickedOff?: boolean;
   /** Resume history is frame-batched until loading completes. */
   streamingReplay?: boolean;
   pendingReplay?: wire.SessionEvent[];
   replayTimer?: NodeJS.Timeout;
+}
+
+/** One queued message. `storing` writes its attachments; awaited when it is sent. */
+interface QueueEntry {
+  id: string;
+  text: string;
+  attachments: number;
+  storing: Promise<StoredAttachment[]>;
+  /** Handed to a GG-capable agent's own queue (`_gg/queue`). */
+  forwarded?: boolean;
+  /** The agent's id for it, once `_gg/queue` answered. */
+  agentId?: string;
+}
+
+/** The provider whose ACP connection carries GG Coder's goals extension. */
+export const GG_PROVIDER_ID = "ggcoder";
+/** GG Goals: the ggcoder command, offered as its own agent for goal folders only. */
+export const GG_GOALS_ID = "gg-goals";
+
+/** The GG Coder goals root: `<GG_AGENT_DIR or ~/.gg>/goals`. */
+export function goalsRoot(env: NodeJS.ProcessEnv = process.env): string {
+  return join(env.GG_AGENT_DIR || join(homedir(), ".gg"), "goals");
+}
+
+/** `gg-goals`, synthesised in memory from the ggcoder provider (no manifest file). */
+function goalsProviderFrom(gg: LoadedProvider): LoadedProvider {
+  return {
+    ...gg,
+    manifest: {
+      ...gg.manifest,
+      id: GG_GOALS_ID,
+      name: "GG Goals",
+      description: "Long-running goals: GG Goals plans, runs workers and checks in.",
+      pew: { ...gg.manifest.pew, color: "#8b7cf6", requiresWorkspace: false },
+    },
+  };
+}
+
+/** What `prompt` did with a message: ran it (and anything queued behind it), or queued it. */
+export type PromptOutcome = "ran" | "queued";
+
+function queuedForWire(entry: QueueEntry): wire.QueuedMessage {
+  return {
+    id: entry.id,
+    text: entry.text,
+    ...(entry.attachments > 0 ? { attachments: entry.attachments } : {}),
+  };
+}
+
+/** `{ id, text }` items off a `_gg/queue_update`, ignoring junk. */
+function agentQueueItems(value: unknown): { id: string; text: string }[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    const typed = item as { id?: unknown; text?: unknown } | null;
+    return typeof typed?.id === "string"
+      ? [{ id: typed.id, text: typeof typed.text === "string" ? typed.text : "" }]
+      : [];
+  });
 }
 
 /** Everything a provider can tell us before a conversation is under way. */
@@ -134,7 +229,22 @@ export interface ProviderCapabilities {
    * fills the recent history.
    */
   projects?: AgentProject[];
+  /** GG Coder extensions from `agentCapabilities._meta.gg`; absent for every other agent. */
+  extensions?: wire.ProviderExtensions;
 }
+
+/** `_meta.gg` as the booleans the app reads; undefined when the agent advertised none. */
+function readExtensions(gg: Record<string, unknown> | undefined): wire.ProviderExtensions | undefined {
+  if (!gg) return undefined;
+  const keys = ["queue", "askUser", "goals", "planReview", "autopilot", "checklist"] as const;
+  const out: wire.ProviderExtensions = {};
+  for (const key of keys) if (gg[key] !== undefined) out[key] = Boolean(gg[key]);
+  return out;
+}
+
+const AUTOPILOT_PHASES = new Set([
+  "review_start", "prompted", "done", "human", "capped", "ignored", "plan_accepted", "error",
+]);
 
 /**
  * Show a selector at the value it will actually take.
@@ -226,6 +336,8 @@ function rememberTurnText(session: ActiveSession, payload: unknown): void {
 export class Daemon {
   private providers: LoadedProvider[] = [];
   private readonly sessions = new Map<string, ActiveSession>();
+  /** Mints queued-message ids (`q_<n>`), unique for this process. */
+  private queueCounter = 0;
   private send: (message: unknown) => void = () => {};
   // What a provider offers, learned by probing it: selectors, and the
   // conversations it already has on disk. Keyed by provider id, and stored in
@@ -496,6 +608,10 @@ export class Daemon {
     // still boot a process for it in the background, which is most of what
     // turning it off was meant to avoid.
     if (!this.isEnabled(providerId)) return Promise.resolve();
+    // A GG Goals process belongs to one goal folder, and a spare is parked at
+    // the default workspace — no goal could ever adopt it, so it would only be
+    // a second idle GG Coder. Goal conversations open cold.
+    if (providerId === GG_GOALS_ID) return Promise.resolve();
     // Any warm process for this provider is enough to skip the boot; the
     // directory match is `takeSpare`'s business, not this one's.
     if (this.hasSpare(providerId)) {
@@ -639,7 +755,22 @@ export class Daemon {
     return `${providerId}\u0000${cwd}`;
   }
 
+  /**
+   * GG extensions last seen on any connection to a provider. The probe is the
+   * usual source, but it can lose a race (a session starting in the same breath
+   * parks a second spare and closes the probe's process mid-list), and the
+   * answer it then gives carries no extensions — which hides Autopilot, the
+   * checklist and goals for that conversation. Any live connection knows them.
+   */
+  private knownExtensions = new Map<string, wire.ProviderExtensions>();
+
+  private noteExtensions(providerId: string, handle: AcpSessionHandle | undefined): void {
+    const ext = readExtensions(handle?.ggCapabilities as Record<string, unknown> | undefined);
+    if (ext) this.knownExtensions.set(providerId, ext);
+  }
+
   private stashSpare(providerId: string, handle: AcpSessionHandle, cwd: string) {
+    this.noteExtensions(providerId, handle);
     const key = Daemon.spareKey(providerId, cwd);
     const old = this.spares.get(key);
     if (old) {
@@ -730,6 +861,33 @@ export class Daemon {
         session.lastUsedAt = Date.now();
         this.record(session, { kind: "permission_request", requestId, params });
       },
+      gg: {
+        // Same order as a permission: held, clock stamped, then told.
+        onAskUser: ({ requestId, params }: { requestId: string; params: unknown }) => {
+          const raw = (params as { questions?: unknown } | null)?.questions;
+          const questions = Array.isArray(raw) ? raw : [];
+          (session.asks ??= new Map()).set(requestId, questions);
+          session.lastUsedAt = Date.now();
+          this.record(session, { kind: "ask_user", requestId, questions });
+        },
+        // The agent withdrew it (JSON-RPC cancel, or a new ask superseded it).
+        onAskClosed: (requestId: string) => this.closeAsk(session, requestId),
+        onQueueUpdate: (params: unknown) => this.applyAgentQueueUpdate(session, params),
+        onGoalState: (params: unknown) => this.applyGoalState(session, params),
+        onPlanState: (params: unknown) => {
+          if (session.providerId !== GG_GOALS_ID) this.applyPlanState(session, params);
+        },
+        onSessionReset: (params: unknown) => this.applySessionReset(session, params),
+        onAutopilotState: (params: unknown) => {
+          if (session.providerId !== GG_GOALS_ID) this.applyAutopilotState(session, params);
+        },
+        onAutopilotEvent: (params: unknown) => {
+          if (session.providerId !== GG_GOALS_ID) this.applyAutopilotEvent(session, params);
+        },
+        onChecklistChanged: () => {
+          if (session.live && session.providerId !== GG_GOALS_ID) this.send({ t: "checklist", sessionId: session.log.sessionId, changed: true });
+        },
+      },
       onConfigOptions: (configOptions: ConfigOption[]) =>
         this.publishConfigOptions(session, configOptions),
       onExit: (code: number | null) => this.record(session, { kind: "exit", code }),
@@ -760,7 +918,11 @@ export class Daemon {
       : undefined;
     if (localUpdates) {
       for (const update of localUpdates) {
-        callbacks.onUpdate({ sessionId: loadSessionId, update });
+        // GG Coder's persisted Ken verdicts arrive in order among the turns and
+        // are logged as the same event the live Autopilot cycle produces —
+        // history, so no push.
+        if ((update as { kind?: unknown }).kind === "autopilot") this.record(session, update);
+        else callbacks.onUpdate({ sessionId: loadSessionId, update });
       }
     }
     // Already on screen, so the agent does not need to send it again. Agents
@@ -803,10 +965,24 @@ export class Daemon {
         onStderr: (line) => console.error(`[${provider.manifest.id}] ${line}`),
       });
     }
+    this.noteExtensions(provider.manifest.id, session.handle);
     loadingDuplicateReplay = false;
     // The agent's own id for the conversation, which is what the per-session
     // selectors below are keyed by and what the app dedupes history against.
     session.agentSessionId = session.handle.sessionId;
+    // A goal's coordinator: seed its state so a catch-up has something before
+    // the first `_gg/goal_state` arrives.
+    const goalMeta = session.handle.goal;
+    if (goalMeta && !session.goal) {
+      session.goal = {
+        t: "goal.state",
+        sessionId: session.log.sessionId,
+        goalId: goalMeta.id,
+        phase: goalMeta.phase === "active" ? "active" : "briefing",
+        paused: goalMeta.paused === true,
+        workers: [],
+      };
+    }
 
     // A reopened conversation gets the selectors *it* was last held at; a new
     // one gets the provider's. Never the other way round: applying the phone's
@@ -981,7 +1157,10 @@ export class Daemon {
   busyReason(): string | undefined {
     for (const [sessionId, session] of this.sessions) {
       if (session.working) return `session ${sessionId} is mid-turn`;
-      if ((session.permissions?.size ?? 0) > 0) {
+      if (
+        (session.permissions?.size ?? 0) > 0 ||
+        (session.working && (session.asks?.size ?? 0) > 0)
+      ) {
         return `session ${sessionId} is waiting on an approval`;
       }
       if (!session.agentSessionId) return `session ${sessionId} is still opening`;
@@ -1002,6 +1181,8 @@ export class Daemon {
    * because the message is a full snapshot of `activeSessions`.
    */
   private closeSession(sessionId: string, session: ActiveSession) {
+    // Every device closes the card on this, before the session goes.
+    for (const requestId of [...(session.asks?.keys() ?? [])]) this.closeAsk(session, requestId);
     if (session.replayTimer) clearTimeout(session.replayTimer);
     session.replayTimer = undefined;
     session.handle?.close();
@@ -1037,7 +1218,11 @@ export class Daemon {
       // spend minutes inside one tool call without emitting anything. Unless it
       // is not working at all but waiting on an approval nobody answered, which
       // is the one kind of stopped that lasts for ever.
-      const blocked = (session.permissions?.size ?? 0) > 0;
+      // An open ask_user question is the same kind of wait.
+      // Only while working: an idle session with an open ask is just idle.
+      const blocked =
+        (session.permissions?.size ?? 0) > 0 ||
+        (session.working === true && (session.asks?.size ?? 0) > 0);
       if (session.working && !blocked) continue;
       const ttl = blocked ? Daemon.BLOCKED_TTL_MS : Daemon.SESSION_TTL_MS;
       if (now - session.lastUsedAt < ttl) continue;
@@ -1092,6 +1277,11 @@ export class Daemon {
    *  added manifest show up on the phone without a restart. */
   async refreshProviders(): Promise<{ errors: { source: string; message: string }[] }> {
     const { providers, errors } = await loadProviders();
+    const gg = providers.findIndex((p) => p.manifest.id === GG_PROVIDER_ID);
+    const ggProvider = providers[gg];
+    if (ggProvider && !providers.some((p) => p.manifest.id === GG_GOALS_ID)) {
+      providers.splice(gg + 1, 0, goalsProviderFrom(ggProvider));
+    }
     this.providers = providers;
     // Re-read every refresh, so `pew2 providers disable` takes effect without
     // restarting the daemon.
@@ -1153,6 +1343,8 @@ export class Daemon {
         // Turned off by the user. Filtered here rather than in the app, so the
         // phone is never even told about an agent it should not offer.
         .filter((p) => this.isEnabled(p.manifest.id))
+        // GG Goals rides ggcoder: never announced without it.
+        .filter((p) => p.manifest.id !== GG_GOALS_ID || this.isEnabled(GG_PROVIDER_ID))
         // Not on this machine at all. Nothing about it can be acted on from a
         // phone \u2014 you cannot install a CLI from there \u2014 so a dimmed row for it
         // is a permanent piece of furniture that never becomes useful.
@@ -1266,7 +1458,13 @@ export class Daemon {
     // The probe is already resolved by the time a session starts, so this is a
     // map lookup in practice rather than a wait on the agent.
     const probed = await this.probes.get(providerId);
-    return probed?.sessions[0]?.cwd ?? (await readProbeCache(providerId, this.env))?.sessions[0]?.cwd;
+    const sessions = probed?.sessions ?? (await readProbeCache(providerId, this.env))?.sessions ?? [];
+    // The raw probe of GG Coder includes its goal conversations (GG Goals runs
+    // on the same `ggcoder acp`), and a goal is often what it ran last: that
+    // put a goal folder in GG Coder's composer as "the project". Goal folders
+    // belong to GG Goals alone.
+    const own = providerId === GG_PROVIDER_ID ? sessions.filter((s) => !this.isGoalFolder(s.cwd)) : sessions;
+    return own[0]?.cwd;
   }
 
   async startSession(providerId: string, cwd: string): Promise<string> {
@@ -1497,6 +1695,50 @@ export class Daemon {
     providerId: string,
     { refresh = false } = {},
   ): Promise<ProviderCapabilities> {
+    if (providerId === GG_GOALS_ID) {
+      if (!this.isEnabled(GG_GOALS_ID)) return EMPTY_CAPABILITIES;
+      const base = await this.probeRaw(GG_PROVIDER_ID, { refresh });
+      if (base === EMPTY_CAPABILITIES) return base;
+      const ext = base.extensions ?? this.knownExtensions.get(GG_PROVIDER_ID);
+      return {
+        ...base,
+        sessions: base.sessions
+          .filter((s) => this.isGoalFolder(s.cwd))
+          .map((s) => {
+            const name = this.goalNames.get(__resolve(s.cwd));
+            return name ? { ...s, title: name } : s;
+          }),
+        projects: [],
+        commands: [],
+        extensions: {
+          ...(ext?.queue !== undefined ? { queue: ext.queue } : {}),
+          ...(ext?.askUser !== undefined ? { askUser: ext.askUser } : {}),
+          ...(ext?.goals !== undefined ? { goals: ext.goals } : {}),
+        },
+      };
+    }
+    const raw = await this.probeRaw(providerId, { refresh });
+    if (providerId !== GG_PROVIDER_ID || raw === EMPTY_CAPABILITIES) return raw;
+    return {
+      ...raw,
+      sessions: raw.sessions.filter((s) => !this.isGoalFolder(s.cwd)),
+      ...(raw.projects ? { projects: raw.projects.filter((p) => !this.isGoalFolder(p.path)) } : {}),
+    };
+  }
+
+  /** Goal folder paths (resolved) -> goal name, from the last goals list. */
+  private goalNames = new Map<string, string>();
+
+  /** A directory directly inside the goals root, or a path from the last goals list. */
+  isGoalFolder(cwd: string): boolean {
+    const abs = __resolve(cwd);
+    return this.goalNames.has(abs) || __dirname(abs) === __resolve(goalsRoot());
+  }
+
+  private async probeRaw(
+    providerId: string,
+    { refresh = false } = {},
+  ): Promise<ProviderCapabilities> {
     // A disabled agent answers as if it has nothing, rather than spawning to
     // find out. The app should never ask \u2014 it is not announced \u2014 but a stale
     // client or a direct CLI call must not be able to boot it either.
@@ -1562,6 +1804,7 @@ export class Daemon {
           // below fills both in, and until then the app falls back to the
           // projects it can see in the history it holds.
           projects: disk.projects ?? [],
+          ...(disk.extensions ? { extensions: disk.extensions } : {}),
           // A cache written by an older daemon predates commands entirely; the
           // background refresh below fills them in.
           commands: disk.commands ?? [],
@@ -1622,6 +1865,9 @@ export class Daemon {
           // The complete set of places this agent has worked, which the capped
           // `sessions` above cannot describe.
           projects,
+          ...((ext) => (ext ? { extensions: ext } : {}))(
+            readExtensions(booted.ggCapabilities as Record<string, unknown> | undefined),
+          ),
           // Read after `listSessions` deliberately. Commands arrive as a
           // notification rather than in `session/new`'s result, so reading them
           // the instant the session opened would find none; that round trip is
@@ -1702,8 +1948,13 @@ export class Daemon {
   ): Promise<ProviderCapabilities> {
     const probed = await this.probeProvider(providerId, { refresh });
     if (probed === EMPTY_CAPABILITIES) return probed;
+    const extensions = probed.extensions ?? this.knownExtensions.get(providerId);
+    if (providerId === GG_GOALS_ID) {
+      return { ...probed, configOptions: withStoredPrefs(probed.configOptions, await readConfigPrefs(providerId)) };
+    }
     return {
       ...probed,
+      ...(extensions ? { extensions } : {}),
       // Ambient env, like every other preference read here: `this.env` is fixed
       // at construction for the probe cache's sake, and prefs are written
       // through the ambient one.
@@ -1821,68 +2072,469 @@ export class Daemon {
     return updated;
   }
 
-  async prompt(sessionId: string, text: string, attachments: wire.PromptAttachment[] = []) {
+  /**
+   * Send a prompt, or queue it behind the turn already running.
+   *
+   * ACP allows one turn at a time, so a message that arrives mid-turn is held
+   * here for every agent. A GG-capable agent also gets it in its own queue and
+   * folds it in at its next step; anything still queued when a turn ends goes
+   * out as ONE next turn, each message logged as its own `user_message` at the
+   * moment it actually reaches the agent. Resolves when the session is idle
+   * again — after those follow-up turns — or at once with `"queued"`.
+   */
+  async prompt(
+    sessionId: string,
+    text: string,
+    attachments: wire.PromptAttachment[] = [],
+    options: PromptOptions = {},
+  ): Promise<PromptOutcome> {
     const session = this.require(sessionId);
+    if (session.working) {
+      if (options.goalTurn) throw new Error("GG Goals is already working on this goal.");
+      if (options.planDecision) throw new Error("The agent is still working; decide the plan when it stops.");
+      this.enqueue(session, text, attachments);
+      return "queued";
+    }
     // Use, and the start of a turn. `working` is cleared in the `finally` below
     // rather than on the agent's last word: an agent can go quiet for minutes
     // mid-tool, and a reaper that read silence as "done" would close the
     // process out from under a turn the user is waiting on.
     //
-    // The whole body is inside the try, including storing attachments. A throw
-    // before the flag was cleared would leave the session marked working for
-    // ever, and a permanently working session is one the reaper can never
-    // touch — the exact leak this flag exists to bound.
+    // Set synchronously, before any await, so a second message arriving while
+    // this one's attachments are written is queued rather than run beside it.
     session.lastUsedAt = Date.now();
     session.working = true;
-    // A new turn, so the previous turn's closing words must not be what the
-    // push notification for this one quotes.
-    session.turnText = undefined;
+    session.cancelling = false;
     try {
       // Written before the echo: an attachment that cannot be stored (over the
       // limits, disk full) must fail the whole prompt rather than leave a turn on
       // every screen referring to a file the agent never got.
-      const stored = await storeAttachments(sessionId, attachments);
-      // Echo immediately, then queue against a still-loading agent if necessary.
-      // The paths ride along so every client — including one replaying later —
-      // can show what was sent; only this machine can read them, which is exactly
-      // what `image.fetch` already exists to handle.
-      this.send(
-        session.log.append({
-          kind: "user_message",
-          text,
-          // Omitted entirely when there are none, so the shape of an ordinary
-          // text turn — which is nearly all of them — is unchanged in the log and
-          // in every replayed frame.
-          ...(stored.length > 0 && {
-            attachments: stored.map((file) => ({
-              name: file.name,
-              mimeType: file.mimeType,
-              uri: file.path,
-            })),
-          }),
-        }),
-      );
-      await session.ready;
-      await session.handle!.prompt(text, stored);
+      let next:
+        | {
+            texts: { text: string; stored: StoredAttachment[] }[];
+            goalTurn?: PromptOptions["goalTurn"];
+            planDecision?: PromptOptions["planDecision"];
+          }
+        | undefined = options.goalTurn
+          ? { texts: [], goalTurn: options.goalTurn }
+          : options.planDecision
+          ? { texts: [], planDecision: options.planDecision }
+          : { texts: [{ text, stored: await storeAttachments(sessionId, attachments) }] };
+      try {
+        while (next) {
+          // A new turn, so the previous turn's closing words must not be what
+          // the push notification for this one quotes.
+          session.turnText = undefined;
+          // Echoed before the agent is ready: the paths ride along so every
+          // client — including one replaying later — can show what was sent.
+          // A goal turn has no user words, so nothing is logged for it.
+          for (const entry of next.texts) this.logUserMessage(session, entry.text, entry.stored);
+          // A plan decision is logged as itself, not as a user message.
+          if (next.planDecision) {
+            const { action, feedback } = next.planDecision;
+            this.record(session, {
+              kind: "plan_decision",
+              action,
+              ...(feedback !== undefined ? { feedback } : {}),
+            });
+          }
+          await session.ready;
+          if (next.goalTurn) {
+            await session.handle!.prompt("", [], { goalTurn: next.goalTurn });
+          } else if (next.planDecision) {
+            await session.handle!.prompt("", [], { planDecision: next.planDecision });
+          } else {
+            await session.handle!.prompt(
+              next.texts.map((entry) => entry.text).join("\n\n"),
+              next.texts.flatMap((entry) => entry.stored),
+            );
+          }
+          // The turn is over: whatever it was blocked on died with it.
+          session.cancelling = false;
+          session.permissions?.clear();
+          next = await this.takeQueuedTurn(session);
+        }
+      } catch (error) {
+        // A failed turn does not run what was waiting behind it: those go back
+        // to the composer, exactly as a cancel hands them back.
+        this.returnQueue(session);
+        throw error;
+      }
     } finally {
       session.working = false;
+      session.cancelling = false;
       // A turn cannot end while the agent is still waiting to be let past a
       // tool: it is blocked on that answer. So anything left here was killed
       // with the turn — cancelled, or the agent errored out — and offering it
       // to the next client to reconnect would be an approve button wired to a
       // request no one is listening for any more.
       session.permissions?.clear();
+      // Open asks are NOT cleared: GG Coder keeps an ask_user request open past
+      // the turn that raised it, and a late answer comes back as a returned
+      // queue item. They go when answered, withdrawn by the agent, or closed.
       // Touched again at the end, so the idle window is measured from when the
       // agent stopped rather than from when the user typed. A turn that ran for
       // twenty minutes would otherwise be reapable the moment it finished.
       session.lastUsedAt = Date.now();
     }
+    return "ran";
+  }
+
+  /** Log a message as the user's turn, at the moment it reaches the agent. */
+  private logUserMessage(session: ActiveSession, text: string, stored: StoredAttachment[]) {
+    this.send(
+      session.log.append({
+        kind: "user_message",
+        text,
+        // Omitted entirely when there are none, so the shape of an ordinary
+        // text turn — which is nearly all of them — is unchanged in the log and
+        // in every replayed frame.
+        ...(stored.length > 0 && {
+          attachments: stored.map((file) => ({
+            name: file.name,
+            mimeType: file.mimeType,
+            uri: file.path,
+          })),
+        }),
+      }),
+    );
+  }
+
+  /**
+   * Hold a message until the running turn can take it.
+   *
+   * Synchronous up to the push, so the turn loop can never finish between the
+   * check and the queue and strand a message on an idle session. The files are
+   * written behind it and awaited when the message is sent.
+   */
+  private enqueue(session: ActiveSession, text: string, attachments: wire.PromptAttachment[]) {
+    const limit = attachmentLimitError(attachments);
+    if (limit) throw new Error(limit);
+    const id = `q_${++this.queueCounter}`;
+    const storing = storeAttachments(session.log.sessionId, attachments, undefined, `${id}-`);
+    // Awaited when sent; this only stops an early failure being "unhandled".
+    storing.catch(() => {});
+    const entry: QueueEntry = { id, text, attachments: attachments.length, storing };
+    (session.queue ??= []).push(entry);
+    session.lastUsedAt = Date.now();
+    this.broadcastQueue(session);
+    // GG's queue carries text only, so a message with files waits for the
+    // next turn, where they can travel as prompt blocks.
+    if (session.handle?.ggCapabilities?.queue && !session.cancelling && attachments.length === 0) {
+      void this.forwardQueued(session, entry);
+    }
+  }
+
+  /** Hand a queued message to a GG-capable agent's own queue. Best effort. */
+  private async forwardQueued(session: ActiveSession, entry: QueueEntry) {
+    const handle = session.handle;
+    if (!handle) return;
+    entry.forwarded = true;
+    try {
+      const answer = await handle.extRequest<{ id?: unknown }>("_gg/queue", {
+        sessionId: handle.sessionId,
+        text: entry.text,
+      });
+      if (typeof answer?.id === "string") entry.agentId = answer.id;
+    } catch {
+      // Not mid-turn any more (-32602) or an older agent: it goes as the next
+      // turn from our queue instead.
+      entry.forwarded = false;
+    }
+  }
+
+  /** The daemon's entry for an item the agent names. */
+  private matchQueued(session: ActiveSession, item: { id: string; text: string }) {
+    const queue = session.queue ?? [];
+    return (
+      queue.find((entry) => entry.agentId === item.id) ??
+      // The notification can beat the `_gg/queue` answer that carries the id.
+      queue.find((entry) => entry.forwarded && !entry.agentId && entry.text === item.text)
+    );
+  }
+
+  /** `_gg/queue_update`: drained messages became user turns; returned ones go back. */
+  private applyAgentQueueUpdate(session: ActiveSession, params: unknown) {
+    const update = params as { drained?: unknown; returned?: unknown; turnEnded?: unknown } | null;
+    let changed = false;
+    for (const item of agentQueueItems(update?.drained)) {
+      const entry = this.matchQueued(session, item);
+      if (!entry) continue;
+      session.queue = (session.queue ?? []).filter((queued) => queued !== entry);
+      changed = true;
+      // Folded into the running turn right now: that is where the agent read it.
+      this.logUserMessage(session, entry.text, []);
+    }
+    const returned: QueueEntry[] = [];
+    for (const item of agentQueueItems(update?.returned)) {
+      const entry = this.matchQueued(session, item);
+      if (!entry) {
+        const sent = session.sentForwarded ?? [];
+        const already =
+          sent.find((e) => e.agentId === item.id) ??
+          sent.find((e) => !e.agentId && e.text === item.text);
+        if (already) {
+          session.sentForwarded = sent.filter((e) => e !== already);
+          continue;
+        }
+        // Not one of ours: GG Coder hands back text it wants run next (a late
+        // ask_user answer). Same path as a leftover: the next turn.
+        if (update?.turnEnded === true) this.adoptReturned(session, item.text);
+        continue;
+      }
+      if (update?.turnEnded === true) {
+        // The turn ended before a steering point. It stays in our queue, and
+        // the turn loop sends it as the next turn — usually already has.
+        entry.forwarded = false;
+        entry.agentId = undefined;
+        continue;
+      }
+      session.queue = (session.queue ?? []).filter((queued) => queued !== entry);
+      returned.push(entry);
+      changed = true;
+    }
+    if (changed) this.broadcastQueue(session, returned.length > 0 ? returned : undefined);
+  }
+
+  /**
+   * Run text the agent handed back at turn end. Queued when a turn loop is
+   * still going (it picks it up); otherwise starts one, announcing idle itself
+   * since no client request is waiting on it.
+   */
+  private adoptReturned(session: ActiveSession, text: string) {
+    const sessionId = session.log.sessionId;
+    if (session.working) {
+      const entry: QueueEntry = {
+        id: `q_${++this.queueCounter}`,
+        text,
+        attachments: 0,
+        storing: Promise.resolve([]),
+      };
+      (session.queue ??= []).push(entry);
+      this.broadcastQueue(session);
+      return;
+    }
+    if (!this.sessions.has(sessionId)) return;
+    void this.prompt(sessionId, text)
+      .catch((error: unknown) => console.error(`[${session.providerId}] returned prompt failed:`, error))
+      .finally(() => this.send({ t: "session.idle", sessionId, ...this.sessionOrigin(sessionId) }));
+  }
+
+  /** Everything queued, as the next turn; undefined when nothing is waiting. */
+  private async takeQueuedTurn(session: ActiveSession) {
+    const entries = session.queue?.splice(0) ?? [];
+    if (entries.length === 0) return undefined;
+    // Bounded: only the latest turn-end notification can still name these.
+    session.sentForwarded = entries.filter((entry) => entry.forwarded);
+    this.broadcastQueue(session);
+    const texts: { text: string; stored: StoredAttachment[] }[] = [];
+    for (const entry of entries) texts.push({ text: entry.text, stored: await entry.storing });
+    return { texts };
+  }
+
+  /** Clear the queue unsent and hand it back to the composer. */
+  private returnQueue(session: ActiveSession) {
+    const returned = session.queue?.splice(0) ?? [];
+    if (returned.length > 0) this.broadcastQueue(session, returned);
+  }
+
+  /** Full queue state to every client. Broadcast, never logged. */
+  private broadcastQueue(session: ActiveSession, returned?: QueueEntry[]) {
+    if (!session.live) return;
+    const message: wire.SessionQueue = {
+      t: "session.queue",
+      sessionId: session.log.sessionId,
+      queued: (session.queue ?? []).map(queuedForWire),
+      ...(returned ? { returned: returned.map(queuedForWire) } : {}),
+    };
+    this.send(message);
+  }
+
+  /** Withdraw one queued message. False when it was already gone or the agent had taken it. */
+  async cancelQueued(sessionId: string, id: string): Promise<boolean> {
+    const session = this.require(sessionId);
+    const entry = session.queue?.find((queued) => queued.id === id);
+    if (!entry) {
+      // Re-sync whoever asked: their strip is showing something stale.
+      this.broadcastQueue(session);
+      return false;
+    }
+    const handle = session.handle;
+    if (entry.agentId && handle) {
+      try {
+        const answer = await handle.extRequest<{ cancelled?: unknown }>("_gg/queue/cancel", {
+          sessionId: handle.sessionId,
+          id: entry.agentId,
+        });
+        // The agent already folded it in; its `drained` logs it as a turn.
+        if (answer?.cancelled === false) return false;
+      } catch {
+        // The agent no longer has it; ours is the copy that would be sent.
+      }
+    }
+    if (!session.queue?.includes(entry)) return false;
+    session.queue = session.queue.filter((queued) => queued !== entry);
+    this.broadcastQueue(session);
+    return true;
+  }
+
+  /** `_gg/plan_state`: the plan sheet's state, broadcast and kept for catch-up. */
+  private applyPlanState(session: ActiveSession, params: unknown) {
+    const raw = params as { planMode?: unknown; pending?: unknown } | null;
+    const parsed = wire.PlanState.safeParse({
+      t: "plan.state",
+      sessionId: session.log.sessionId,
+      planMode: raw?.planMode === true,
+      pending: raw?.pending ?? null,
+    });
+    if (!parsed.success) return;
+    session.plan = parsed.data;
+    if (session.live) this.send(parsed.data);
+  }
+
+  /** `_gg/session_reset`: an accepted plan moved the agent to a fresh on-disk session. */
+  private applySessionReset(session: ActiveSession, params: unknown) {
+    const raw = params as { agentSessionId?: unknown; planTotal?: unknown } | null;
+    // Resume must reopen the NEW conversation, which holds the implementation.
+    if (typeof raw?.agentSessionId === "string" && raw.agentSessionId) {
+      session.agentSessionId = raw.agentSessionId;
+    }
+    this.record(session, {
+      kind: "plan_accepted",
+      ...(typeof raw?.planTotal === "number" ? { planTotal: raw.planTotal } : {}),
+    });
+  }
+
+  /** `_gg/autopilot_state`: whether Ken is on / reviewing; live state, never logged. */
+  private applyAutopilotState(session: ActiveSession, params: unknown) {
+    const raw = params as { enabled?: unknown; reviewing?: unknown } | null;
+    const state: wire.AutopilotState = {
+      t: "autopilot.state",
+      sessionId: session.log.sessionId,
+      enabled: raw?.enabled === true,
+      reviewing: raw?.reviewing === true,
+    };
+    session.autopilot = state;
+    if (session.live) this.send(state);
+  }
+
+  /** `_gg/autopilot_event`: one of Ken's verdicts, logged; `human`/`capped` also push. */
+  private applyAutopilotEvent(session: ActiveSession, params: unknown) {
+    const raw = params as { phase?: unknown; reason?: unknown; body?: unknown; round?: unknown } | null;
+    if (typeof raw?.phase !== "string" || !AUTOPILOT_PHASES.has(raw.phase)) return;
+    session.lastUsedAt = Date.now();
+    this.record(session, {
+      kind: "autopilot",
+      phase: raw.phase,
+      ...(typeof raw.reason === "string" ? { reason: raw.reason } : {}),
+      ...(typeof raw.body === "string" ? { body: raw.body } : {}),
+      ...(typeof raw.round === "number" ? { round: raw.round } : {}),
+    });
+    if ((raw.phase === "human" || raw.phase === "capped") && (params as { history?: unknown }).history !== true) {
+      const sessionId = session.log.sessionId;
+      const reason = typeof raw.reason === "string" && raw.reason ? `: ${raw.reason}` : "";
+      void pushFinishedTurn(this.pushTargets, {
+        sessionId,
+        ...this.sessionNotice(sessionId),
+        lastText: `Ken needs you${reason}`,
+      });
+    }
+  }
+
+  /** `autopilot.set`: turn Ken on or off for this session's project. */
+  async setAutopilot(sessionId: string, enabled: boolean): Promise<void> {
+    const session = this.require(sessionId);
+    if (session.providerId === GG_GOALS_ID) throw new Error("Autopilot is for GG Coder conversations.");
+    await session.ready;
+    if (!session.handle?.ggCapabilities?.autopilot) throw new Error("This agent has no Autopilot.");
+    await session.handle.extRequest("_gg/autopilot/set", {
+      sessionId: session.handle.sessionId,
+      enabled,
+    });
+  }
+
+  /** `checklist`: the project checklist via `_gg/checklist`, mapped to wire rows. */
+  async checklist(sessionId: string): Promise<{ staleAfterDays?: number; items: wire.ChecklistItemRow[] }> {
+    const session = this.require(sessionId);
+    if (session.providerId === GG_GOALS_ID) throw new Error("The checklist is for GG Coder conversations.");
+    await session.ready;
+    if (!session.handle?.ggCapabilities?.checklist) throw new Error("This agent has no project checklist.");
+    const raw = await session.handle.extRequest<{ staleAfterDays?: unknown; items?: unknown }>(
+      "_gg/checklist",
+      { sessionId: session.handle.sessionId },
+    );
+    const items = (Array.isArray(raw?.items) ? raw.items : []).flatMap((item) => {
+      const parsed = wire.ChecklistItemRow.safeParse(item);
+      return parsed.success ? [parsed.data] : [];
+    });
+    return {
+      ...(typeof raw?.staleAfterDays === "number" ? { staleAfterDays: raw.staleAfterDays } : {}),
+      items,
+    };
+  }
+
+  /** `_gg/goal_state`: the goal's live phase and workers, broadcast and kept for catch-up. */
+  private applyGoalState(session: ActiveSession, params: unknown) {
+    const raw = params as {
+      goalId?: unknown;
+      phase?: unknown;
+      paused?: unknown;
+      critterModel?: unknown;
+      workers?: unknown;
+    } | null;
+    if (typeof raw?.goalId !== "string") return;
+    const workers = (Array.isArray(raw.workers) ? raw.workers : []).flatMap((worker) => {
+      const parsed = wire.GoalWorker.safeParse(worker);
+      return parsed.success ? [parsed.data] : [];
+    });
+    const state: wire.GoalState = {
+      t: "goal.state",
+      sessionId: session.log.sessionId,
+      goalId: raw.goalId,
+      phase: raw.phase === "active" ? "active" : "briefing",
+      paused: raw.paused === true,
+      workers,
+      ...(typeof raw.critterModel === "string" || raw.critterModel === null
+        ? { critterModel: raw.critterModel }
+        : {}),
+    };
+    session.goal = state;
+    if (session.live) this.send(state);
+  }
+
+  /**
+   * Whether this session just opened on a goal that still needs its kickoff
+   * turn, claiming it so it can only ever be started once.
+   */
+  claimKickoff(sessionId: string): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session?.handle?.goal?.needsKickoff || session.kickedOff) return false;
+    session.kickedOff = true;
+    return true;
   }
 
   async cancel(sessionId: string) {
     const session = this.require(sessionId);
+    // A stop takes the queue with it: those messages go back to the composer
+    // rather than running after the user said stop.
+    if (session.working) session.cancelling = true;
+    this.returnQueue(session);
     await session.ready;
     await session.handle!.cancel();
+  }
+
+  /** An open ask stopped being open: forget it and log `ask_user_closed` once. */
+  private closeAsk(session: ActiveSession, requestId: string) {
+    if (!session.asks?.delete(requestId)) return;
+    this.record(session, { kind: "ask_user_closed", requestId });
+  }
+
+  /** Answer an open `_gg/ask_user` question. */
+  answerAsk(sessionId: string, requestId: string, result: AskAnswer) {
+    const session = this.require(sessionId);
+    const answered = session.handle?.answerAsk(requestId, result) ?? false;
+    if (answered) this.closeAsk(session, requestId);
+    return answered;
   }
 
   answerPermission(sessionId: string, requestId: string, optionId: string) {
@@ -1901,6 +2553,11 @@ export class Daemon {
    * uses to name files. Undefined once the session is gone, in which case the
    * caller falls back to the daemon's own workspace.
    */
+  /** Which provider a live session runs under, if any. */
+  sessionProvider(sessionId: string): string | undefined {
+    return this.sessions.get(sessionId)?.providerId;
+  }
+
   sessionCwd(sessionId: string): string | undefined {
     return this.sessions.get(sessionId)?.cwd;
   }
@@ -1998,6 +2655,16 @@ export class Daemon {
         // empty one as "nothing is pending, dismiss it" — so omitting it made
         // the second case unreachable.
         permissions,
+        // Same absent/empty rule as permissions.
+        queued: (session.queue ?? []).map(queuedForWire),
+        asks: [...(session.asks ?? [])].map(([requestId, questions]) => ({
+          requestId,
+          questions: questions as wire.AskQuestion[],
+        })),
+        // Only a goal's coordinator has one; absent otherwise.
+        ...(session.goal ? { goal: session.goal } : {}),
+        ...(session.plan ? { plan: session.plan } : {}),
+        ...(session.autopilot ? { autopilot: session.autopilot } : {}),
       });
     }
     return frames;
@@ -2017,6 +2684,190 @@ export class Daemon {
       spare.handle.close();
     }
     this.spares.clear();
+  }
+
+  // ── Goals (GG Coder) ───────────────────────────────────────
+
+  /** One shared boot of a GG Coder connection for goal calls, while in flight. */
+  private ggConnecting?: Promise<AcpSessionHandle>;
+
+  /**
+   * A GG Coder connection that speaks the goals extension.
+   *
+   * Any process will do — goals live on disk, not in a session — so a live
+   * ggcoder session or a warm spare is used first, and only otherwise one is
+   * booted (and parked as the spare, so it is reused and idles out).
+   */
+  private async goalsConnection(): Promise<AcpSessionHandle> {
+    const provider = this.providers.find((p) => p.manifest.id === GG_PROVIDER_ID);
+    if (!provider || provider.commandMissing) {
+      throw new Error("GG Coder isn't installed on this machine.");
+    }
+    if (!this.isEnabled(GG_PROVIDER_ID)) throw new Error("GG Coder is turned off on this machine.");
+    if (!isAvailable(provider)) throw new Error(unavailableReason(provider) ?? "GG Coder is unavailable.");
+    const supports = (handle: AcpSessionHandle) => {
+      if (!handle.ggCapabilities?.goals) {
+        throw new Error("This GG Coder is too old for goals. Update it on your computer.");
+      }
+      return handle;
+    };
+    const live = [...this.sessions.values()]
+      .filter((s) => (s.providerId === GG_PROVIDER_ID || s.providerId === GG_GOALS_ID) && s.handle && s.agentSessionId)
+      .sort((a, b) => b.lastUsedAt - a.lastUsedAt)[0]?.handle;
+    if (live) return supports(live);
+    const spare = [...this.spares.values()].find((s) => s.providerId === GG_PROVIDER_ID || s.providerId === GG_GOALS_ID);
+    if (spare) return supports(spare.handle);
+    // A capability probe already booting GG Coder will park its process as a
+    // spare. Wait for that rather than racing it with a second boot: two boots
+    // land on the same spare key, and whichever is stashed second closes the
+    // first — mid-`session/list` for the probe, which then failed with "ACP
+    // connection closed" and left GG Coder's chats and goals list empty.
+    const warming = this.warming.get(GG_PROVIDER_ID);
+    if (warming) {
+      await warming.catch(() => {});
+      const parked = [...this.spares.values()].find((s) => s.providerId === GG_PROVIDER_ID);
+      if (parked) return supports(parked.handle);
+    }
+    this.ggConnecting ??= (async () => {
+      const workspace = resolveWorkspace();
+      const handle = await connectProvider({
+        provider,
+        cwd: workspace,
+        onUpdate: () => {},
+        onPermissionRequest: () => {},
+      });
+      // Never evict a parked process for this one: a probe may still be using
+      // it. If one appeared while this booted, keep it and drop the newcomer.
+      const parked = [...this.spares.values()].find((s) => s.providerId === GG_PROVIDER_ID);
+      if (parked) {
+        handle.close();
+        return parked.handle;
+      }
+      this.stashSpare(GG_PROVIDER_ID, handle, workspace);
+      return handle;
+    })().finally(() => {
+      this.ggConnecting = undefined;
+    });
+    return supports(await this.ggConnecting);
+  }
+
+  /** Read one goal summary off GG Coder, dropping anything malformed. */
+  private static readGoal(value: unknown): wire.GoalSummary | undefined {
+    const parsed = wire.GoalSummary.safeParse(value);
+    if (!parsed.success) {
+      console.error("[ggcoder] ignoring a malformed goal:", parsed.error.issues[0]?.message);
+      return undefined;
+    }
+    return parsed.data;
+  }
+
+  /** The live daemon session open on a goal folder, newest use first. */
+  private goalSessionEntry(path: string): [string, ActiveSession] | undefined {
+    return [...this.sessions.entries()]
+      .filter(([, s]) => (s.providerId === GG_PROVIDER_ID || s.providerId === GG_GOALS_ID) && s.cwd === path)
+      .sort((a, b) => b[1].lastUsedAt - a[1].lastUsedAt)[0];
+  }
+
+  /** GG Coder never reports `running` or a daemon session: only this process knows. */
+  private overlayGoal(goal: wire.GoalSummary): wire.GoalSummary {
+    const { sessionId: _ignored, ...rest } = goal;
+    const live = this.goalSessionEntry(goal.path);
+    if (!live) return rest;
+    return {
+      ...rest,
+      sessionId: live[0],
+      ...(live[1].working ? { status: "running" as const } : {}),
+    };
+  }
+
+  /**
+   * Every goal on this machine, overlaid with live state.
+   *
+   * Listing a goal publishes its folder, so each becomes a known project: the
+   * app opens a goal by starting a ggcoder session with that folder as `cwd`.
+   */
+  async listGoals(): Promise<wire.GoalSummary[]> {
+    const handle = await this.goalsConnection();
+    const answer = await handle.extRequest<{ goals?: unknown }>("_gg/goals/list", {});
+    const goals = (Array.isArray(answer?.goals) ? answer.goals : []).flatMap((value) => {
+      const goal = Daemon.readGoal(value);
+      return goal ? [goal] : [];
+    });
+    this.goalNames = new Map(goals.map((g) => [__resolve(g.path), g.name]));
+    for (const goal of goals) await this.rememberProject(goal.path);
+    return goals.map((goal) => this.overlayGoal(goal));
+  }
+
+  async createGoal(input: {
+    name: string;
+    goal: string;
+    context: string[];
+    instructions?: string;
+  }): Promise<wire.GoalSummary> {
+    const handle = await this.goalsConnection();
+    const answer = await handle.extRequest<{ goal?: unknown }>("_gg/goals/create", {
+      name: input.name,
+      goal: input.goal,
+      context: input.context,
+      ...(input.instructions !== undefined ? { instructions: input.instructions } : {}),
+    });
+    const goal = Daemon.readGoal(answer?.goal);
+    if (!goal) throw new Error("GG Coder did not return the new goal.");
+    this.goalNames.set(__resolve(goal.path), goal.name);
+    await this.rememberProject(goal.path);
+    return this.overlayGoal(goal);
+  }
+
+  /** One goal by id, with the daemon session open on it, if any. */
+  async findGoal(goalId: string): Promise<wire.GoalSummary> {
+    const goal = (await this.listGoals()).find((g) => g.id === goalId);
+    if (!goal) throw new Error("That goal no longer exists.");
+    return goal;
+  }
+
+  /** The open session on a goal, for the session-scoped `_gg/goal/*` calls. */
+  private openGoalSession(goal: wire.GoalSummary): { sessionId: string; session: ActiveSession } {
+    const session = goal.sessionId ? this.sessions.get(goal.sessionId) : undefined;
+    if (!goal.sessionId || !session?.handle) throw new Error("Open the goal first.");
+    return { sessionId: goal.sessionId, session };
+  }
+
+  /**
+   * `delete`, `pause`, `update` and `critterModel`. `resume` needs a session
+   * opened through the transport's start/resume flow, so the handler owns it.
+   */
+  async goalAction(
+    goalId: string,
+    action: "delete" | "pause" | "update" | "critterModel",
+    input: { context?: string[]; instructions?: string; model?: string | null } = {},
+  ): Promise<wire.GoalSummary | undefined> {
+    const goal = await this.findGoal(goalId);
+    if (action === "delete") {
+      const live = this.goalSessionEntry(goal.path);
+      if (live?.[1].working) throw new Error("GG Goals is working on this goal. Pause it first.");
+      const handle = await this.goalsConnection();
+      await handle.extRequest("_gg/goals/delete", { id: goalId });
+      return undefined;
+    }
+    const { sessionId, session } = this.openGoalSession(goal);
+    const handle = session.handle!;
+    await session.ready;
+    if (action === "pause") {
+      await handle.extRequest("_gg/goal/pause", { sessionId: handle.sessionId });
+      if (session.working) await this.cancel(sessionId);
+    } else if (action === "update") {
+      await handle.extRequest("_gg/goal/update", {
+        sessionId: handle.sessionId,
+        ...(input.context !== undefined ? { context: input.context } : {}),
+        ...(input.instructions !== undefined ? { instructions: input.instructions } : {}),
+      });
+    } else {
+      await handle.extRequest("_gg/goal/critter_model", {
+        sessionId: handle.sessionId,
+        model: input.model ?? null,
+      });
+    }
+    return (await this.listGoals()).find((g) => g.id === goalId);
   }
 
   private require(sessionId: string): ActiveSession {

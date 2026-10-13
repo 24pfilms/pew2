@@ -166,6 +166,66 @@ function readAvailableCommands(raw: unknown): AvailableCommand[] {
     }));
 }
 
+/**
+ * GG Coder's ACP extensions (`_meta.gg` on `initialize`), as the agent
+ * advertised them. Absent for every other agent and for an older ggcoder —
+ * which is the signal to behave exactly as before.
+ */
+export interface GgCapabilities {
+  queue?: unknown;
+  askUser?: unknown;
+  goals?: unknown;
+  planReview?: unknown;
+  autopilot?: unknown;
+  checklist?: unknown;
+}
+
+/** `_meta.gg.goal` on a session opened in a GG Goals folder. */
+export interface GgGoalMeta {
+  id: string;
+  phase?: string;
+  paused?: boolean;
+  needsKickoff?: boolean;
+}
+
+/** Per-session receivers for GG's agent -> client extension traffic. */
+export interface GgCallbacks {
+  /** `_gg/ask_user`; answer with `answerAsk`. Registered before this is called. */
+  onAskUser?: (request: { requestId: string; params: unknown }) => void;
+  /** The agent withdrew an open ask (JSON-RPC cancel); drop it from state. */
+  onAskClosed?: (requestId: string) => void;
+  /** `_gg/queue_update` notification params. */
+  onQueueUpdate?: (params: unknown) => void;
+  /** `_gg/goal_state` notification params. */
+  onGoalState?: (params: unknown) => void;
+  /** `_gg/plan_state` notification params. */
+  onPlanState?: (params: unknown) => void;
+  /** `_gg/session_reset` notification params (an accepted plan's fresh context). */
+  onSessionReset?: (params: unknown) => void;
+  /** `_gg/autopilot_state` notification params. */
+  onAutopilotState?: (params: unknown) => void;
+  /** `_gg/autopilot_event` notification params. */
+  onAutopilotEvent?: (params: unknown) => void;
+  /** `_gg/checklist_changed` notification params. */
+  onChecklistChanged?: (params: unknown) => void;
+}
+
+/** What an `_gg/ask_user` request is answered with. */
+export type AskAnswer =
+  | { action: "answer"; answers: Record<string, string | string[]> }
+  | { action: "cancel" };
+
+/** A GG Goals turn: a `session/prompt` with an empty prompt and `_meta.gg.goalTurn`. */
+export interface PromptOptions {
+  goalTurn?: "kickoff" | "resume";
+  /** Decide a pending plan: an empty prompt with `_meta.gg.planDecision`. */
+  planDecision?: {
+    action: "accept" | "feedback" | "reject";
+    feedback?: string;
+    generation: number;
+  };
+}
+
 export interface AcpSessionHandle {
   connection: ClientConnection;
   child: ChildProcessWithoutNullStreams;
@@ -208,8 +268,20 @@ export interface AcpSessionHandle {
    * not a graceful degradation.
    */
   readonly promptCapabilities?: PromptCapabilities;
-  prompt(text: string, attachments?: readonly StoredAttachment[]): Promise<unknown>;
+  prompt(
+    text: string,
+    attachments?: readonly StoredAttachment[],
+    options?: PromptOptions,
+  ): Promise<unknown>;
   cancel(): Promise<void>;
+  /** `agentCapabilities._meta.gg`, undefined when the agent advertised none. */
+  readonly ggCapabilities?: GgCapabilities;
+  /** `_meta.gg.goal` from opening the current session, when it is a goal's coordinator. */
+  readonly goal?: GgGoalMeta;
+  /** Send an extension (`_`-prefixed) request on this connection. */
+  extRequest<T = unknown>(method: string, params: Record<string, unknown>): Promise<T>;
+  /** Answer an open `_gg/ask_user`. False when no such question is pending. */
+  answerAsk(requestId: string, result: AskAnswer): boolean;
   setConfigOption(configId: string, value: string | boolean): Promise<ConfigOption[]>;
   answerPermission(requestId: string, optionId: string): boolean;
   close(): void;
@@ -234,9 +306,12 @@ export interface AdoptOptions {
   onPermissionRequest: (request: { requestId: string; params: unknown }) => void;
   onConfigOptions?: (options: ConfigOption[]) => void;
   onExit?: (code: number | null, signal: NodeJS.Signals | null) => void;
+  gg?: GgCallbacks;
 }
 
 export interface ConnectOptions {
+  /** GG Coder extension receivers for the first session. */
+  gg?: GgCallbacks;
   provider: LoadedProvider;
   cwd: string;
   /** Called for every ACP `session/update` notification, in arrival order. */
@@ -613,6 +688,9 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
   // daemon process.
   const pending = new Map<string, (optionId: string | null) => void>();
   let permissionCounter = 0;
+  // Same rule for GG's `_gg/ask_user` questions: `null` answers as cancel.
+  const asksPending = new Map<string, (result: AskAnswer | null) => void>();
+  let askCounter = 0;
 
   const { input, output } = toWebStreams(child);
   const stream = ndJsonStream(output, input);
@@ -623,9 +701,18 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
   // inside `session/new`, whose id only exists once it resolves.
   const updateHandlers = new Map<string, (payload: unknown) => void>();
   const permissionHandlers = new Map<string, ConnectOptions["onPermissionRequest"]>();
+  const ggHandlers = new Map<string, GgCallbacks>();
   let pendingRoute:
-    | { onUpdate: (payload: unknown) => void; onPermissionRequest: ConnectOptions["onPermissionRequest"] }
+    | {
+        onUpdate: (payload: unknown) => void;
+        onPermissionRequest: ConnectOptions["onPermissionRequest"];
+        gg?: GgCallbacks;
+      }
     | undefined;
+  const ggRoute = (params: unknown): GgCallbacks | undefined => {
+    const sid = (params as { sessionId?: unknown } | null)?.sessionId;
+    return (typeof sid === "string" ? ggHandlers.get(sid) : undefined) ?? pendingRoute?.gg;
+  };
 
   // Commands arrive as a notification after `session/new` resolves, so they
   // cannot be part of its result. Captured here rather than only forwarded,
@@ -637,7 +724,7 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
   // the temporal dead zone: `session/load` replays through the notification
   // handler *before* that assignment lands, and the config branch there reads
   // this — a bare `let` would throw mid-replay.
-  let current: { sessionId: string; configOptions: ConfigOption[] } = {
+  let current: { sessionId: string; configOptions: ConfigOption[]; goal?: GgGoalMeta } = {
     sessionId: "",
     configOptions: [],
   };
@@ -692,7 +779,90 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
       // sitting on a request whose client no longer exists.
       if (optionId === null) return { outcome: { outcome: "cancelled" } };
       return { outcome: { outcome: "selected", optionId } };
-    });
+    })
+    // GG Coder's ask_user. Exactly the permission rule: the resolver is
+    // registered before anyone is told, and a connection that closes with the
+    // question open answers it as cancelled rather than leaving it hanging.
+    .onRequest(
+      "_gg/ask_user",
+      (params: unknown) => params,
+      async (ctx: { params: unknown; signal?: AbortSignal }) => {
+        const requestId = `ask_${++askCounter}`;
+        const answered = new Promise<AskAnswer | null>((resolve) => {
+          asksPending.set(requestId, resolve);
+        });
+        const handler = ggRoute(ctx.params)?.onAskUser;
+        if (!handler) {
+          asksPending.delete(requestId);
+          return { action: "cancel" };
+        }
+        const route = ggRoute(ctx.params);
+        // Never timed out here: an ask stays open past its turn by design.
+        // Only the agent withdrawing it (or close) ends it unanswered.
+        ctx.signal?.addEventListener(
+          "abort",
+          () => {
+            const resolve = asksPending.get(requestId);
+            if (!resolve) return;
+            asksPending.delete(requestId);
+            route?.onAskClosed?.(requestId);
+            resolve(null);
+          },
+          { once: true },
+        );
+        handler({ requestId, params: ctx.params });
+        return (await answered) ?? { action: "cancel" };
+      },
+    )
+    .onNotification(
+      "_gg/queue_update",
+      (params: unknown) => params,
+      async (ctx: { params: unknown }) => {
+        ggRoute(ctx.params)?.onQueueUpdate?.(ctx.params);
+      },
+    )
+    .onNotification(
+      "_gg/goal_state",
+      (params: unknown) => params,
+      async (ctx: { params: unknown }) => {
+        ggRoute(ctx.params)?.onGoalState?.(ctx.params);
+      },
+    )
+    .onNotification(
+      "_gg/plan_state",
+      (params: unknown) => params,
+      async (ctx: { params: unknown }) => {
+        ggRoute(ctx.params)?.onPlanState?.(ctx.params);
+      },
+    )
+    .onNotification(
+      "_gg/session_reset",
+      (params: unknown) => params,
+      async (ctx: { params: unknown }) => {
+        ggRoute(ctx.params)?.onSessionReset?.(ctx.params);
+      },
+    )
+    .onNotification(
+      "_gg/autopilot_state",
+      (params: unknown) => params,
+      async (ctx: { params: unknown }) => {
+        ggRoute(ctx.params)?.onAutopilotState?.(ctx.params);
+      },
+    )
+    .onNotification(
+      "_gg/autopilot_event",
+      (params: unknown) => params,
+      async (ctx: { params: unknown }) => {
+        ggRoute(ctx.params)?.onAutopilotEvent?.(ctx.params);
+      },
+    )
+    .onNotification(
+      "_gg/checklist_changed",
+      (params: unknown) => params,
+      async (ctx: { params: unknown }) => {
+        ggRoute(ctx.params)?.onChecklistChanged?.(ctx.params);
+      },
+    );
 
   const connection = app.connect(stream);
 
@@ -716,6 +886,9 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
         terminal: false,
         // Opt in to boolean selectors; agents must not send them otherwise.
         session: { configOptions: { boolean: {} } },
+        // GG Coder registers its ask_user tool only for clients that can answer
+        // it. Inert for every other agent: `_meta` is ACP's extension slot.
+        _meta: { gg: { askUser: true, planReview: true } },
       },
       clientInfo: { name: "pew2", title: "pew2", version: "0.1.0" },
     }),
@@ -744,6 +917,7 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
       loadSession?: boolean;
       promptCapabilities?: PromptCapabilities;
       sessionCapabilities?: { list?: unknown; resume?: unknown };
+      _meta?: { gg?: GgCapabilities };
     };
   };
 
@@ -766,6 +940,9 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
   // Asking an agent that never advertised `session/list` is a protocol error,
   // not an empty list, so the capability is checked rather than the call tried.
   const canListSessions = caps?.sessionCapabilities?.list !== undefined;
+  const rawGg = caps?._meta?.gg;
+  const ggCapabilities: GgCapabilities | undefined =
+    rawGg && typeof rawGg === "object" ? rawGg : undefined;
 
   type NewSessionResult = {
     sessionId: string;
@@ -775,7 +952,19 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
       currentModeId: string;
       availableModes: { id: string; name: string; description?: string }[];
     };
+    _meta?: { gg?: { goal?: unknown } };
   };
+
+  function readGoalMeta(created: NewSessionResult): GgGoalMeta | undefined {
+    const goal = created._meta?.gg?.goal as Partial<GgGoalMeta> | undefined;
+    if (!goal || typeof goal.id !== "string") return undefined;
+    return {
+      id: goal.id,
+      ...(typeof goal.phase === "string" ? { phase: goal.phase } : {}),
+      ...(typeof goal.paused === "boolean" ? { paused: goal.paused } : {}),
+      needsKickoff: goal.needsKickoff === true,
+    };
+  }
 
   // Three shapes, all live in the wild, and an agent may send more than one.
   // Claude Code returns `models` + `modes` and no `configOptions` at all, so
@@ -825,13 +1014,15 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
       onUpdate: (payload: unknown) => void;
       onPermissionRequest: ConnectOptions["onPermissionRequest"];
       onConfigOptions?: (options: ConfigOption[]) => void;
+      gg?: GgCallbacks;
     },
     /** The caller already has the transcript; see {@link ConnectOptions.haveHistory}. */
     haveHistory = false,
-  ): Promise<{ sessionId: string; configOptions: ConfigOption[] }> {
+  ): Promise<{ sessionId: string; configOptions: ConfigOption[]; goal?: GgGoalMeta }> {
     if (loadSessionId) {
       updateHandlers.set(loadSessionId, route.onUpdate);
       permissionHandlers.set(loadSessionId, route.onPermissionRequest);
+      if (route.gg) ggHandlers.set(loadSessionId, route.gg);
       if (route.onConfigOptions) configHandlers.set(loadSessionId, route.onConfigOptions);
     }
     // Belongs to the session being replaced, and the next one may be a
@@ -855,8 +1046,14 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
           })) as NewSessionResult);
       updateHandlers.set(created.sessionId, route.onUpdate);
       permissionHandlers.set(created.sessionId, route.onPermissionRequest);
+      if (route.gg) ggHandlers.set(created.sessionId, route.gg);
       if (route.onConfigOptions) configHandlers.set(created.sessionId, route.onConfigOptions);
-      return { sessionId: created.sessionId, configOptions: buildConfigOptions(created) };
+      const goal = readGoalMeta(created);
+      return {
+        sessionId: created.sessionId,
+        configOptions: buildConfigOptions(created),
+        ...(goal ? { goal } : {}),
+      };
     } finally {
       pendingRoute = undefined;
     }
@@ -883,6 +1080,7 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
           onUpdate: options.onUpdate,
           onPermissionRequest: options.onPermissionRequest,
           onConfigOptions: options.onConfigOptions,
+          gg: options.gg,
         },
         options.haveHistory,
       ),
@@ -911,6 +1109,10 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
     get availableCommands() {
       return availableCommands;
     },
+    get goal() {
+      return current.goal;
+    },
+    ggCapabilities,
     canLoadSession,
 
     async adopt(adoptOptions: AdoptOptions) {
@@ -921,6 +1123,7 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
           onUpdate: adoptOptions.onUpdate,
           onPermissionRequest: adoptOptions.onPermissionRequest,
           onConfigOptions: adoptOptions.onConfigOptions,
+          gg: adoptOptions.gg,
         },
         adoptOptions.haveHistory,
       );
@@ -1039,11 +1242,31 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
       }
     },
     promptCapabilities,
-    prompt: (text: string, attachments: readonly StoredAttachment[] = []) =>
-      connection.agent.request("session/prompt", {
-        sessionId: current.sessionId,
-        prompt: promptBlocks(text, attachments, promptCapabilities),
-      }),
+    prompt: (text: string, attachments: readonly StoredAttachment[] = [], promptOptions = {}) =>
+      promptOptions.goalTurn || promptOptions.planDecision
+        ? // A GG Goals turn or a plan decision: empty prompt, the turn kind rides in `_meta`.
+          connection.agent.request<unknown>("session/prompt", {
+            sessionId: current.sessionId,
+            prompt: [],
+            _meta: {
+              gg: promptOptions.goalTurn
+                ? { goalTurn: promptOptions.goalTurn }
+                : { planDecision: promptOptions.planDecision },
+            },
+          })
+        : connection.agent.request("session/prompt", {
+            sessionId: current.sessionId,
+            prompt: promptBlocks(text, attachments, promptCapabilities),
+          }),
+    extRequest: <T,>(method: string, params: Record<string, unknown>) =>
+      connection.agent.request<T>(method, params),
+    answerAsk(requestId, result) {
+      const resolve = asksPending.get(requestId);
+      if (!resolve) return false;
+      asksPending.delete(requestId);
+      resolve(result);
+      return true;
+    },
     cancel: () =>
       connection.agent.notify("session/cancel", { sessionId: current.sessionId }),
     answerPermission(requestId, optionId) {
@@ -1059,6 +1282,8 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
       // keeps this connection's entire closure reachable.
       for (const resolve of pending.values()) resolve(null);
       pending.clear();
+      for (const resolve of asksPending.values()) resolve(null);
+      asksPending.clear();
       connection.close();
       stop();
     },

@@ -1,4 +1,5 @@
 import { Easing } from "react-native";
+import { DUR, EASE } from "./motion";
 import { approvalActionColors, fallbackGlassTokens } from "./materialTokens";
 
 /**
@@ -12,55 +13,90 @@ import { approvalActionColors, fallbackGlassTokens } from "./materialTokens";
  * revealed by sliding the conversation aside rather than covering it, that
  * difference is what separates the planes: the darker surface reads as on top.
  *
- * Muted values clear WCAG AA (4.5:1) against the canvas, measured on #0a0a0b:
- * text 18.2:1, textDim 7.3:1, textFaint 5.7:1, accent 6.5:1, danger 6.1:1.
+ * Palette is GG Coder's desktop (gg-app App.css :root): near-black canvas
+ * separated by lightness alone, periwinkle accent, luminous semantics.
+ * Measured WCAG ratios on bg #0a0a0c / surface #141519 / raised #1c1e23 /
+ * pressed #24262c: text 17.8/16.5/15.0/13.6, textDim 7.2/6.6/6.0/5.5,
+ * textFaint #90919c 6.3/5.8/5.3/4.8 (the floor for dim text on raised
+ * surfaces), accent 10.3/9.5/8.7/7.9, danger 7.1/6.5/6.0/5.4,
+ * success 13.1/12.1/11.1/10.0, thought (critter pink) 9.5/8.8/8.0/7.3.
+ * accent on accentSoft 7.2, text on accentSoft 12.5, onAccent on accent 9.9.
  */
 export const theme = {
   color: {
     /** Conversation canvas. The upper plane, and the darker of the two. */
-    bg: "#111111",
+    bg: "#0a0a0c",
     /** Drawer canvas. The lower plane, revealed as the conversation slides. */
-    drawer: "#1c1c1e",
+    drawer: "#141519",
     /** Resting control: chips, composer. */
-    surface: "#1b1b1e",
+    surface: "#141519",
     /** Raised control: top bar pills, sheets. */
-    surfaceRaised: "#26262a",
+    surfaceRaised: "#1c1e23",
     /** Pressed feedback for any surface. */
-    surfacePressed: "#323238",
-    border: "#2e2e33",
+    surfacePressed: "#24262c",
+    border: "#2a2c33",
 
-    text: "#f2f2f3",
-    textDim: "#9a9aa0",
-    textFaint: "#86868c",
+    text: "#f2f3f7",
+    textDim: "#9a9ba5",
+    textFaint: "#90919c",
     /** Icon glyphs on a glass control. Sampled from the reference. */
-    glyph: "#e0e0e0",
+    glyph: "#c8c9d2",
     /** Placeholder text inside the composer. */
-    placeholder: "#828282",
+    placeholder: "#90919c",
 
-    accent: "#d97757",
+    accent: "#b0b6ff",
     /**
      * The accent at control-fill strength, for a button that is *on* rather
      * than merely tappable — the mic while it is listening. Opaque rather than
      * a transparency, so it reads the same over glass as over a flat surface.
      */
-    accentSoft: "#3a2620",
-    success: "#3fb950",
-    danger: "#f85149",
-    thought: "#8b5cf6",
+    accentSoft: "#262a4d",
+    success: "#7fe89a",
+    /**
+     * Needs a look, not broken: an interrupted goal, a check that is due.
+     * Amber so red stays reserved for real failures. 9.09:1 on surfaceRaised.
+     */
+    attention: "#f2b45a",
+    danger: "#ff6b60",
+    thought: "#ff8fd0",
     /** Neutral orb base, used when a provider declares no colour. */
-    orb: "#3d9bf5",
+    orb: "#b0b6ff",
+    /** Ink on an accent fill. */
+    onAccent: "#0c0e26",
   },
 
   /** Libraries.dev Beam composer: opaque card, quiet inset pills. */
   composer: {
     radius: 20,
-    fill: "#1d1d1d",
-    border: "#68686f",
-    chip: "#292929",
-    ink: "#caccd2",
-    placeholder: "#99999f",
-    beam: ["#ff975b", "#ef6fab", "#ac8fff", "#6ebdff", "#82dac7"] as const,
-    beamDuration: 3100,
+    fill: "#141519",
+    border: "#3a3c44",
+    chip: "#1c1e23",
+    ink: "#c8c9d2",
+    placeholder: "#9a9ba5",
+  },
+
+  /**
+   * Stage: pew2's LED look. Dashed rules instead of solid borders, a dot grid
+   * on the canvas, dot-matrix labels that glow in the agent's colour. The
+   * glow is the agent's colour, so these are geometry, not colours.
+   */
+  stage: {
+    /** Dashed rules and resting card outlines. 3.4:1 on bg: decoration, not text. */
+    dash: "#34363e",
+    /** Terminal sheet header strip. */
+    strip: "#121317",
+    /** Canvas dot grid: spacing, dot radius, dot colour. */
+    grid: 14,
+    gridDot: 1,
+    gridColor: "rgba(255,255,255,0.055)",
+    /** Strip/ticker texture: a finer grid. */
+    fine: 5,
+    fineColor: "rgba(255,255,255,0.06)",
+    /** LED label type. */
+    ledSize: 11,
+    ledSpacing: 1.6,
+    /** Glow radius on lit LED text. */
+    glow: 8,
   },
 
   /** 4pt base grid. */
@@ -109,7 +145,7 @@ export const theme = {
    * two in step: a radius below half the height reads as a slightly squared
    * box, which is exactly how this control looked beside its peers before.
    */
-  radius: { sm: 8, md: 12, lg: 18, composer: 32, pane: 34, pill: 999 },
+  radius: { sm: 8, md: 14, lg: 18, composer: 32, pane: 34, pill: 999 },
 
   /**
    * Control heights.
@@ -176,7 +212,12 @@ export const theme = {
   motion: {
     fast: 120,
     base: 200,
+    /** GG Coder durations (`--dur-*`), from motion.ts. */
+    ...DUR,
   },
+
+  /** GG Coder curves as bezier control points; `Easing.bezier(...theme.curve.out)`. */
+  curve: EASE,
 
   /**
    * One shared curve. Decelerating, so a control arrives and settles rather

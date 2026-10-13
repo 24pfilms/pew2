@@ -27,8 +27,8 @@
  * inert. A cut between two cards of different heights reads as the sheet
  * flinching; this reads as one object with somewhere to go.
  */
-import { memo, useEffect, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { memo, useEffect, useMemo, useState } from "react";
+import { FlatList, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import Animated, {
   interpolate,
   useAnimatedStyle,
@@ -37,11 +37,26 @@ import Animated, {
 } from "react-native-reanimated";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { theme } from "../theme";
+import { Dissolve } from "./motion/Dissolve";
+import { PressScale } from "./stage/PressScale";
+import { StageButton } from "./stage/StageButton";
+import { Led } from "./stage/Led";
+import { dashedOutline } from "./stage/DashedRule";
+import { useAgentColor } from "./stage/agentColor";
+import { withAlpha } from "../motion";
 import { touchSlop } from "./controls";
 import { Sheet, SHEET_ROW_HEIGHT, SHEET_VISIBLE_ROWS, sheetCardStyle } from "./Sheet";
 import { haptics } from "./haptics";
 import { useReducedMotion } from "./useReducedMotion";
 import type { Project } from "../projects";
+
+/** The grid's last cell when browsing is possible. */
+const BROWSE_CELL = { browse: true } as const;
+type GridCell = Project | typeof BROWSE_CELL;
+const isBrowse = (cell: GridCell): cell is typeof BROWSE_CELL => "browse" in cell;
+const cellKey = (cell: GridCell) => (isBrowse(cell) ? "browse" : cell.path);
+/** How many cards stagger in on open (about one screenful). */
+const STAGGERED = 8;
 import type { WorkspaceBrowse } from "../useDaemon";
 
 /**
@@ -92,15 +107,19 @@ function NewChatSheetView({
   onBrowse,
 }: NewChatSheetProps) {
   const [step, setStep] = useState(STEP_CHOICES);
-  const [listMode, setListMode] = useState<"projects" | "browse">("projects");
   const reduceMotion = useReducedMotion();
 
-  // Nothing to switch between, so there is no list step to offer: one project
-  // (or none known yet) makes it a dead end.
-  const canPick = projects.length > 1;
+  const agent = useAgentColor();
+  const [picked, setPicked] = useState<string | undefined>(undefined);
+  // Chosen card: the user's pick, else the project already open, else the newest.
+  const chosen = picked ?? currentCwd ?? projects[0]?.path;
+  const chosenName =
+    projects.find((p) => p.path === chosen)?.name ?? (chosen === currentCwd ? currentFolder : undefined) ?? (chosen ? folderOf(chosen) : undefined);
+  const [now, setNow] = useState(() => Date.now());
   // Offered whenever the daemon can answer — including, especially, when there
   // are no projects at all. That is the cold start this exists for.
   const canBrowse = onBrowse !== undefined;
+  const cells = useMemo<GridCell[]>(() => (canBrowse ? [...projects, BROWSE_CELL] : projects), [projects, canBrowse]);
 
   // One value for one movement. This used to be two — a native-driven spring
   // for the slide and a JS-driven one for the height, because legacy `Animated`
@@ -139,13 +158,10 @@ function NewChatSheetView({
   useEffect(() => {
     if (!visible) return;
     setStep(STEP_CHOICES);
+    setPicked(undefined);
+    setNow(Date.now());
     step$.value = STEP_CHOICES;
   }, [visible, step$]);
-
-  // Only as tall as it needs to be, up to five rows — the same rule as the
-  // command sheet, so the two read as one object at different lengths.
-  const listHeight = Math.min(projects.length, SHEET_VISIBLE_ROWS) * SHEET_ROW_HEIGHT;
-  const scrolls = projects.length > SHEET_VISIBLE_ROWS;
 
   // The browser adds an "up" row below a root, which occupies list space and is
   // counted here or the card comes out a row short.
@@ -187,13 +203,21 @@ function NewChatSheetView({
   // The fades run faster than the travel: a pane at the halfway point is already
   // mostly gone, which is what stops the two lists from reading as one doubled
   // list mid-push.
+  // The next step rises from below while the one it replaces sinks back and
+  // fades, the same direction the sheet itself arrives from. (It used to slide
+  // in from the right, which reads as navigating away rather than going deeper
+  // into the same sheet.)
+  const RISE = 36;
   const outgoingStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(step$.value, [0, 0.6], [1, 0], "clamp"),
-    transform: [{ translateX: interpolate(step$.value, [0, 1], [0, -width.value]) }],
+    opacity: interpolate(step$.value, [0, 0.5], [1, 0], "clamp"),
+    transform: [
+      { translateY: interpolate(step$.value, [0, 1], [0, -RISE / 2]) },
+      { scale: interpolate(step$.value, [0, 1], [1, 0.97]) },
+    ],
   }));
   const incomingStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(step$.value, [0.4, 1], [0, 1], "clamp"),
-    transform: [{ translateX: interpolate(step$.value, [0, 1], [width.value, 0]) }],
+    opacity: interpolate(step$.value, [0.35, 1], [0, 1], "clamp"),
+    transform: [{ translateY: interpolate(step$.value, [0, 1], [RISE, 0]) }],
   }));
 
   const goTo = (next: number) => {
@@ -201,35 +225,26 @@ function NewChatSheetView({
     setStep(next);
   };
 
-  const openProjects = () => {
-    setListMode("projects");
-    goTo(STEP_LIST);
-  };
-
   const openBrowser = () => {
     // Asked on the way in, every time. A listing goes stale the moment a
     // directory is made at the desk, and it is cheap — the daemon answered a
     // full scan of a real home directory in about 250ms.
     onBrowse?.(browse?.path);
-    setListMode("browse");
     goTo(STEP_LIST);
   };
-
-  const browsing = listMode === "browse";
 
   return (
     <Sheet
       visible={visible}
+      label="New chat"
       title={
         step === STEP_CHOICES
-          ? "New chat"
-          : browsing
-            ? // Named while browsing: several levels down, "Browse" alone gives
-              // no clue where you are, and the path is too long for a title.
-              browse?.path
-              ? folderOf(browse.path)
-              : "Browse"
-            : "Choose project"
+          ? "Where should it work?"
+          : // Named while browsing: several levels down, "Browse" alone gives
+            // no clue where you are, and the path is too long for a title.
+            browse?.path
+            ? folderOf(browse.path)
+            : "Browse folders"
       }
       onClose={onClose}
       onBack={step === STEP_CHOICES ? undefined : () => goTo(STEP_CHOICES)}
@@ -252,42 +267,55 @@ function NewChatSheetView({
             firstHeight.value = event.nativeEvent.layout.height;
           }}
         >
-          {/* Absent when the agent has never run: there is no "here" to
-              continue in, and a row offering one would start a chat in the
-              daemon's fallback directory rather than a project. */}
-          {(currentCwd || !canBrowse) && (
-            <Row
-              icon="add-circle-outline"
-              // Named, so the row is not a restatement of the sheet's own title.
-              // Before the daemon has answered there is no name to use, and the
-              // detail line carries the meaning instead.
-              title={currentFolder ? `New chat in ${currentFolder}` : "Start a new chat"}
-              detail={currentFolder ? "Continue in this project" : "Where the agent last worked"}
-              divided={canPick || canBrowse}
-              onPress={() => onStart(currentCwd)}
-            />
-          )}
-          {canPick && (
-            <Row
-              icon="folder-open-outline"
-              title="Different project"
-              detail={`${projects.length} projects`}
-              chevron
-              divided={canBrowse}
-              onPress={openProjects}
-            />
-          )}
-          {canBrowse && (
-            <Row
-              icon="search-outline"
-              title="Browse folders"
-              // Says where it looks. "Browse" alone reads as the phone's own
-              // files, which is the one place these directories are not.
-              detail={
-                projects.length === 0 ? "Find a project on your computer" : "On your computer"
-              }
-              chevron
-              onPress={openBrowser}
+          {/* Virtualised: only the cards on screen exist. Every project on the
+              computer used to be built at once, each with its own entrance
+              animation, and opening the sheet froze the app for seconds on a
+              machine with a few hundred (measured: ~3.3s of blocked JS). */}
+          <FlatList
+            style={{ maxHeight: GRID_MAX_HEIGHT }}
+            data={cells}
+            keyExtractor={cellKey}
+            numColumns={2}
+            columnWrapperStyle={styles.gridRow}
+            contentContainerStyle={styles.grid}
+            showsVerticalScrollIndicator={false}
+            initialNumToRender={8}
+            maxToRenderPerBatch={8}
+            windowSize={5}
+            removeClippedSubviews
+            renderItem={({ item, index }) =>
+              isBrowse(item) ? (
+                <Dissolve kind="row" delay={Math.min(index, STAGGERED) * 50} style={styles.cell}>
+                  <PressScale
+                    feel="tap"
+                    onPress={openBrowser}
+                    accessibilityLabel="Browse folders on your computer"
+                    style={[styles.tile, dashedOutline, styles.browseCard]}
+                  >
+                    <Ionicons name="search-outline" size={18} color={theme.color.textDim} />
+                    <Text style={styles.cardTitle} numberOfLines={1}>Browse folders</Text>
+                  </PressScale>
+                </Dissolve>
+              ) : (
+                <ProjectCard
+                  project={item}
+                  index={index}
+                  current={item.path === currentCwd}
+                  selected={item.path === chosen}
+                  agent={agent}
+                  now={now}
+                  onPick={setPicked}
+                />
+              )
+            }
+          />
+          {(chosen !== undefined || !canBrowse) && (
+            <StageButton
+              style={styles.primary}
+              feel="sent"
+              label={chosenName ? `Start in ${chosenName}` : "Start a chat"}
+              accessibilityLabel={chosenName ? `Start a chat in ${chosenName}` : "Start a chat"}
+              onPress={() => onStart(chosen)}
             />
           )}
         </Animated.View>
@@ -295,7 +323,7 @@ function NewChatSheetView({
         {/* Step two: whichever list was asked for. Mounted from the start so
             the push has something real to move; without it the first frame of
             the travel is an empty pane. */}
-        {(canPick || canBrowse) && (
+        {canBrowse && (
           <Animated.View
             style={[styles.pane, incomingStyle]}
             pointerEvents={step === STEP_LIST ? "auto" : "none"}
@@ -303,32 +331,7 @@ function NewChatSheetView({
               secondHeight.value = event.nativeEvent.layout.height;
             }}
           >
-            {!browsing && (
-              <ScrollView
-                style={{ height: listHeight }}
-                showsVerticalScrollIndicator={scrolls}
-                bounces={scrolls}
-              >
-                {projects.map((project, index) => (
-                  <Row
-                    key={project.path}
-                    icon="folder-outline"
-                    title={project.name}
-                    detail={
-                      project.path === currentCwd
-                        ? "Current project"
-                        : project.sessions === undefined
-                          ? project.path
-                          : `${project.sessions} conversation${project.sessions === 1 ? "" : "s"}`
-                    }
-                    divided={index < projects.length - 1}
-                    onPress={() => onStart(project.path)}
-                  />
-                ))}
-              </ScrollView>
-            )}
-
-            {browsing && (
+            {(
               <ScrollView
                 style={{ height: browseHeight }}
                 showsVerticalScrollIndicator={browseScrolls}
@@ -383,6 +386,79 @@ function NewChatSheetView({
         )}
       </Animated.View>
     </Sheet>
+  );
+}
+
+/** Three rows of cards, then the grid scrolls. */
+const GRID_MAX_HEIGHT = 3 * 84 + 2 * 8;
+
+/** "now", "5m", "3h", "2d" — the last time this project was worked in. */
+function agoLabel(iso: string | undefined, now: number): string | undefined {
+  if (!iso) return undefined;
+  const at = Date.parse(iso);
+  if (Number.isNaN(at)) return undefined;
+  const mins = Math.max(0, Math.round((now - at) / 60000));
+  if (mins < 1) return "now";
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.round(hours / 24)}d`;
+}
+
+/**
+ * One project as a Stage card: dashed at rest, solid in the agent colour when
+ * chosen. No sparkline — the daemon sends no per-project activity series, and
+ * a drawn one would be invented.
+ */
+function ProjectCard({
+  project,
+  index,
+  current,
+  selected,
+  agent,
+  now,
+  onPick,
+}: {
+  project: Project;
+  index: number;
+  current: boolean;
+  selected: boolean;
+  agent: string;
+  now: number;
+  onPick: (path: string) => void;
+}) {
+  const onPress = () => onPick(project.path);
+  const ago = agoLabel(project.updatedAt, now);
+  const meta = [
+    current ? "here" : undefined,
+    project.sessions !== undefined ? `${project.sessions} chat${project.sessions === 1 ? "" : "s"}` : undefined,
+    ago,
+  ].filter((part): part is string => part !== undefined);
+  return (
+    // Only the first screenful staggers in; cards further down appear as you
+    // scroll to them, which is no moment for a delay.
+    <Dissolve kind="row" delay={Math.min(index, STAGGERED) * 50} style={styles.cell}>
+      <PressScale
+        feel="select"
+        onPress={onPress}
+        accessibilityRole="radio"
+        accessibilityState={{ selected }}
+        accessibilityLabel={[project.name, ...meta].join(", ")}
+        style={[
+          styles.tile,
+          selected ? { borderWidth: 1, borderColor: agent, backgroundColor: withAlpha(agent, 0.1) } : dashedOutline,
+        ]}
+      >
+        <Text style={styles.cardTitle} numberOfLines={1}>
+          {project.name}
+        </Text>
+        {meta.length > 0 && (
+          <Led tone={selected ? "agent" : "dim"} size={theme.stage.ledSize}>
+            {meta.join(" · ")}
+          </Led>
+        )}
+      </PressScale>
+    </Dissolve>
   );
 }
 
@@ -500,6 +576,14 @@ const styles = StyleSheet.create({
     fontSize: theme.font.small,
     textAlign: "center",
   },
+  grid: { gap: theme.space(2), padding: theme.space(4), paddingBottom: theme.space(3) },
+  gridRow: { gap: theme.space(2) },
+  cell: { flex: 1, maxWidth: "50%" },
+  tile: { height: 84, borderRadius: theme.radius.md, padding: theme.space(3), justifyContent: "space-between" },
+  browseCard: { justifyContent: "center", gap: theme.space(1) },
+  cardTitle: { color: theme.color.text, fontSize: theme.font.body },
+  // On the sheet's rail, like the cards above it.
+  primary: { marginTop: theme.space(3), marginBottom: theme.space(4) },
   rowPressed: { backgroundColor: theme.glass.fillPressed },
   // Yields to the chevron rather than pushing it off the row.
   rowText: { flex: 1 },

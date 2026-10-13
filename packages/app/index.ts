@@ -9,6 +9,11 @@
 import "./src/cryptoPolyfill";
 
 import { registerRootComponent } from 'expo';
+import { LogBox } from 'react-native';
+
+// Simulator-only noise: iOS simulators can't mint a push token, and the
+// warning's banner sat over the bottom of every screen in development.
+LogBox.ignoreLogs(['expo-notifications: obtaining a push token may not work on iOS simulators']);
 import * as SplashScreen from 'expo-splash-screen';
 
 import { installCrashHandler } from './src/crashLog';

@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { showsStop } from "./composerState";
+import { pressStops, showsStop } from "./composerState";
 
 test("a working agent can be stopped", () => {
   expect(showsStop({ busy: true, loadingSession: false })).toBe(true);
@@ -14,4 +14,10 @@ test("loading a conversation's history is not something to stop", () => {
 test("an idle composer never offers to stop", () => {
   expect(showsStop({ busy: false, loadingSession: false })).toBe(false);
   expect(showsStop({ busy: false, loadingSession: true })).toBe(false);
+});
+
+test("a running turn never blocks a send", () => {
+  expect(pressStops({ busy: true, canSend: true })).toBe(false);
+  expect(pressStops({ busy: true, canSend: false })).toBe(true);
+  expect(pressStops({ busy: false, canSend: false })).toBe(false);
 });

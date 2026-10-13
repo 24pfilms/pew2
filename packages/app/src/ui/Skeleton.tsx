@@ -38,10 +38,10 @@ export function Skeleton({ style }: { style?: ViewStyle | ViewStyle[] }) {
   return <Animated.View style={[styles.block, { opacity }, style]} />;
 }
 
-/** The drawer's history list while agents answer what they have on disk. */
-export function HistorySkeleton() {
+/** The drawer's history list (chats or goals) while it is on its way. */
+export function HistorySkeleton({ label = "Loading chat history" }: { label?: string }) {
   return (
-    <View accessibilityLabel="Loading chat history">
+    <View accessibilityLabel={label}>
       {[0, 1, 2].map((row) => (
         <View key={row} style={styles.historyRow}>
           <Skeleton style={{ width: `${68 - row * 12}%`, height: 15 }} />

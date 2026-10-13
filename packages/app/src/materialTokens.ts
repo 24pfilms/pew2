@@ -1,10 +1,10 @@
 export const fallbackGlassTokens = {
   control: {
-    fill: "rgba(255,255,255,0.10)",
+    fill: "rgba(20,21,25,0.72)",
     rim: "rgba(255,255,255,0.36)",
   },
   raised: {
-    fill: "rgba(255,255,255,0.14)",
+    fill: "rgba(28,30,35,0.82)",
     rim: "rgba(255,255,255,0.42)",
   },
   fillActive: "rgba(255,255,255,0.16)",
@@ -13,9 +13,9 @@ export const fallbackGlassTokens = {
 } as const;
 
 export const approvalActionColors = {
-  allowFill: "#d97757",
-  allowText: "#111111",
-  rejectFill: "#1b1b1e",
-  rejectRim: "#9a9aa0",
-  rejectText: "#f2f2f3",
+  allowFill: "#b0b6ff",
+  allowText: "#0c0e26",
+  rejectFill: "#1c1e23",
+  rejectRim: "#9a9ba5",
+  rejectText: "#f2f3f7",
 } as const;

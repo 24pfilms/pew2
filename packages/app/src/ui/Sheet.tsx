@@ -31,6 +31,7 @@
  * where React cannot starve it. What is left is a single layout pass — which is
  * what the platform spends too.
  */
+import { Dissolve } from "./motion/Dissolve";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Dimensions, Keyboard, Pressable, StyleSheet, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
@@ -45,11 +46,18 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import Ionicons from "@expo/vector-icons/Ionicons";
+import { useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import { theme } from "../theme";
 import { CircleButton } from "./controls";
+import { DotGlyph, type DotGlyphName } from "./stage/DotGlyph";
 import { haptics } from "./haptics";
 import { useReducedMotion } from "./useReducedMotion";
+import { Pew } from "../pew/Pew";
+import type { PewMood } from "../pew/engine";
+import { Led } from "./stage/Led";
+import { DotGrid } from "./stage/DotGrid";
+import { dashedOutline } from "./stage/DashedRule";
+import { useAgentColor } from "./stage/agentColor";
 
 /** Rows visible in a list sheet before it scrolls. */
 export const SHEET_VISIBLE_ROWS = 5;
@@ -71,6 +79,22 @@ interface SheetProps {
   onBack?: () => void;
   /** Accessible name for the scrim and close button. */
   dismissLabel?: string;
+  /**
+   * Stage's Terminal header: an LED strip with a small Pew and this label in
+   * dot-matrix type, and the title on its own line under it. Without a label
+   * the strip carries the title itself, so every sheet gets the strip.
+   */
+  label?: string;
+  /** The strip's LED tone: attention for a sheet that blocks the agent. */
+  labelTone?: "agent" | "attention";
+  /** Pew's mood in the strip. Defaults to talking for a blocking sheet. */
+  pewMood?: PewMood;
+  /**
+   * Leave the keyboard up on open. For a picker opened mid-sentence (model,
+   * thinking level): switching a setting is not leaving the draft. The card
+   * rides above the keyboard instead of opening behind it.
+   */
+  keepKeyboard?: boolean;
   children: ReactNode;
 }
 
@@ -128,8 +152,18 @@ const INSTANT = { duration: 0 } as const;
  */
 const OFF_SCREEN = Dimensions.get("window").height;
 
-function SheetView({ visible, title, onClose, onBack, dismissLabel, children }: SheetProps) {
+/** How far the header panel sits inside the card's edges. */
+const STRIP_INSET = theme.space(2);
+
+/** The sheet's inner rail: title, rows and buttons all start here. */
+const SHEET_PAD = theme.space(5);
+
+/** The strip's Pew: chip-sized, with room in its box to bounce. */
+const STRIP_PEW = 40;
+
+function SheetView({ visible, title, onClose, onBack, dismissLabel, label, labelTone, pewMood, keepKeyboard = false, children }: SheetProps) {
   const insets = useSafeAreaInsets();
+  const agentColor = useAgentColor();
   const reduceMotion = useReducedMotion();
 
   // Present in the tree, which outlasts `visible` by exactly one closing
@@ -170,13 +204,19 @@ function SheetView({ visible, title, onClose, onBack, dismissLabel, children }: 
 
   useEffect(() => {
     if (!visible) return;
-    // A sheet rests against the bottom edge, which is exactly where the keyboard
-    // is. Opening one from the composer put the whole card behind it — invisible,
-    // and its rows unreachable. Every sheet in this app is a list or a set of
-    // buttons, none of them holds a text field, so there is never a reason for
-    // the keyboard to stay up over one.
-    Keyboard.dismiss();
-  }, [visible]);
+    // Opening a sheet from the composer leaves the conversation's draft: the
+    // keyboard goes down so the sheet is the whole focus. A sheet with its own
+    // field (a filter, an answer) raises it again on focus, and the card rides
+    // above it (`keyboardLift` below) instead of opening behind it.
+    if (!keepKeyboard) Keyboard.dismiss();
+  }, [visible, keepKeyboard]);
+
+  // The keyboard's live height, negative while open, tracked on the UI thread
+  // frame-for-frame with the keyboard's own curve. The card's bottom padding
+  // already clears the home indicator, which the keyboard covers, so that much
+  // of the lift is given back.
+  const keyboard = useReanimatedKeyboardAnimation();
+  const homeIndicator = insets.bottom;
 
   // Removed only once the card has actually left. Guarded against a sheet
   // reopened mid-exit: the callback for the old animation still arrives, and
@@ -247,7 +287,13 @@ function SheetView({ visible, title, onClose, onBack, dismissLabel, children }: 
     // Falls back to a whole screen only until the first measurement lands, and
     // only as a starting distance — the resting end of this is always exactly
     // zero, which is why a card that resizes after arriving still ends flush.
-    transform: [{ translateY: (1 - progress.value) * (travel.value || OFF_SCREEN) }],
+    transform: [
+      {
+        translateY:
+          (1 - progress.value) * (travel.value || OFF_SCREEN) +
+          Math.min(0, keyboard.height.value + homeIndicator * keyboard.progress.value),
+      },
+    ],
   }));
 
   // The scrim tracks the same value, so dragging the card away brings the
@@ -312,36 +358,49 @@ function SheetView({ visible, title, onClose, onBack, dismissLabel, children }: 
           <View collapsable={false}>
             <View style={styles.grabber} />
 
-            <View style={styles.header}>
-              {/* Keyed, and that is what makes the fade happen at all: both
-                  branches render a CircleButton at the same position, so without
-                  distinct keys React reconciles one instance, the icon never
-                  remounts, and the swap hard-cuts. */}
+            {/* The Terminal strip: Pew and an LED label on a dotted panel, the
+                way a machine labels its own displays. Full-bleed across the
+                card, ruled off with a dash. */}
+            <View style={styles.strip}>
+              <DotGrid fine />
               {onBack ? (
-                <CircleButton key="back" label="Back" onPress={onBack} size={theme.size.chip}>
-                  <CrossfadeIcon name="chevron-back" />
+                <CircleButton key="back" label="Back" onPress={onBack} size={36}>
+                  <CrossfadeIcon name="back" />
                 </CircleButton>
-              ) : onClose ? (
+              ) : null}
+              <Pew size={STRIP_PEW} mood={pewMood ?? (onClose ? "idle" : "talking")} color={agentColor} paused={!visible} style={styles.stripPew} />
+              <View style={styles.stripLabel}>
+                <Led tone={labelTone === "attention" ? "attention" : "agent"}>{label ?? title}</Led>
+              </View>
+              {/* Keyed, so swapping close for back remounts the icon and its
+                  fade plays instead of hard-cutting. */}
+              {onClose && !onBack ? (
                 <CircleButton
                   key="close"
                   label={dismissLabel ?? `Close ${title}`}
                   onPress={onClose}
-                  size={theme.size.chip}
+                  size={36}
                 >
                   <CrossfadeIcon name="close" />
                 </CircleButton>
               ) : (
                 <View style={styles.headerSpacer} />
               )}
-              <CrossfadeTitle title={title} />
-              {/* Balances the close button so the title stays optically
-                  centred. */}
-              <View style={styles.headerSpacer} />
             </View>
+            {label !== undefined ? (
+              <View style={styles.header}>
+                <CrossfadeTitle title={title} />
+              </View>
+            ) : (
+              <View style={styles.headerGap} />
+            )}
           </View>
         </GestureDetector>
 
-        {children}
+        {/* Contents resolve in on each open, after the card starts to land. */}
+        <Dissolve dissolveKey={visible ? "open" : "closed"} enabled={visible} delay={60} style={styles.dissolveBody}>
+          {children}
+        </Dissolve>
       </Animated.View>
     </View>
   );
@@ -385,7 +444,7 @@ function CrossfadeTitle({ title }: { title: string }) {
   const style = useAnimatedStyle(() => ({ opacity: fade.value }));
 
   return (
-    <Animated.Text style={[styles.title, style]} numberOfLines={2} accessibilityRole="header">
+    <Animated.Text style={[styles.title, style]} numberOfLines={1} accessibilityRole="header">
       {rendered}
     </Animated.Text>
   );
@@ -397,15 +456,16 @@ function CrossfadeTitle({ title }: { title: string }) {
  * Remounted by the keys on the buttons above, so this only ever plays the
  * arrival — the half that matters when close becomes back.
  */
-function CrossfadeIcon({ name }: { name: keyof typeof Ionicons.glyphMap }) {
+function CrossfadeIcon({ name }: { name: DotGlyphName }) {
   return (
     <Animated.View entering={FadeIn.duration(160)}>
-      <Ionicons name={name} size={18} color={theme.color.text} />
+      <DotGlyph name={name} size={14} />
     </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
+  dissolveBody: { flexShrink: 1 },
   host: { ...StyleSheet.absoluteFillObject, zIndex: 20, justifyContent: "flex-end" },
   scrim: { flex: 1, backgroundColor: "rgba(0,0,0,0.55)" },
   // Inset left and right so the thread stays visible down both sides, but sat
@@ -413,12 +473,14 @@ const styles = StyleSheet.create({
   // it would leave the home indicator stranded on the conversation behind.
   // Square where it meets that edge, for the same reason — rounding a corner
   // there implies a boundary the sheet does not actually have.
+  // Content sits on one rail with the title: the sheet's own padding. A sheet's
+  // body adds no horizontal padding of its own.
   sheet: {
     marginHorizontal: theme.gutter,
     backgroundColor: theme.color.surface,
     borderTopLeftRadius: theme.radius.pane,
     borderTopRightRadius: theme.radius.pane,
-    paddingHorizontal: theme.space(3),
+    paddingHorizontal: SHEET_PAD,
   },
   grabber: {
     alignSelf: "center",
@@ -428,19 +490,48 @@ const styles = StyleSheet.create({
     backgroundColor: theme.color.textFaint,
     marginTop: theme.space(2),
   },
+  // Full-bleed across the card: the sheet's own padding is cancelled so the
+  // strip's texture and rule reach both edges.
+  // A panel inside the card, rounded and inset STRIP_INSET from its edges.
+  // It used to run edge to edge as a square block, and sat high enough that
+  // the card's rounded top corners curved in past it: its corners poked out.
+  strip: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginHorizontal: -(SHEET_PAD - STRIP_INSET),
+    marginTop: theme.space(2),
+    borderRadius: theme.radius.lg,
+    ...dashedOutline,
+    // Pew's globe fills the middle ~60% of its box, so the box starts 8pt
+    // short of the rail and the globe's edge lands on it. The close button's
+    // edge lands 4pt inside the right rail.
+    paddingLeft: SHEET_PAD - 8 - STRIP_INSET,
+    paddingRight: SHEET_PAD - 4 - STRIP_INSET,
+    // Breathing room above and below the 36pt buttons, so the close/back never
+    // touches the strip's edge or the dashed rule under it. Every sheet.
+    minHeight: 56,
+    paddingVertical: theme.space(2.5),
+    backgroundColor: theme.stage.strip,
+    overflow: "hidden",
+  },
+  stripPew: { marginVertical: -4 },
+  stripLabel: { flex: 1, minWidth: 0 },
   header: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    paddingVertical: theme.space(3),
+    paddingTop: theme.space(4),
+    paddingBottom: theme.space(3),
   },
-  headerSpacer: { width: theme.size.chip },
+  headerGap: { height: theme.space(3) },
+  headerSpacer: { width: 36 },
+  // Left-aligned on the sheet's rail with everything under it; one line, so
+  // a long title truncates instead of pushing the content down.
   title: {
     flex: 1,
     minWidth: 0,
-    textAlign: "center",
     color: theme.color.text,
-    fontSize: theme.font.title,
+    fontSize: 19,
+    lineHeight: 24,
     fontWeight: "600",
   },
 });

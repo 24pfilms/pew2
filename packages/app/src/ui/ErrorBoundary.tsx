@@ -24,6 +24,13 @@
 import { Component, type ReactNode } from "react";
 import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { theme } from "../theme";
+import { Pew } from "../pew/Pew";
+import { haptics } from "./haptics";
+import { StageButton } from "./stage/StageButton";
+import { pewInk } from "../pew/palette";
+
+/** pew2's own coral. */
+const PEW_CORAL = pewInk();
 
 interface Props {
   children: ReactNode;
@@ -31,52 +38,122 @@ interface Props {
 
 interface State {
   error?: Error;
+  recovering: boolean;
+  details: boolean;
 }
 
-export class ErrorBoundary extends Component<Props, State> {
-  state: State = {};
+/** Pew is decoration here: if it throws too, the screen must still draw. */
+class Guard extends Component<{ children: ReactNode; fallback: ReactNode }, { broken: boolean }> {
+  state = { broken: false };
+  static getDerivedStateFromError() {
+    return { broken: true };
+  }
+  render() {
+    return this.state.broken ? this.props.fallback : this.props.children;
+  }
+}
 
-  static getDerivedStateFromError(error: Error): State {
-    return { error };
+/** How long Pew stands back up before the tree is retried. */
+const RECOVER_MS = 700;
+/** Amber "!" badge on the oops Pew. */
+const BADGE = 24;
+
+export class ErrorBoundary extends Component<Props, State> {
+  state: State = { recovering: false, details: false };
+  private timer: ReturnType<typeof setTimeout> | undefined;
+
+  static getDerivedStateFromError(error: Error): Partial<State> {
+    return { error, recovering: false, details: false };
   }
 
   componentDidCatch(error: Error) {
     // Also to the console, so `expo start` shows it during development. The
     // on-screen copy is for everyone who has no console attached.
     console.error("[pew2] render crashed:", error);
+    try {
+      haptics.failed();
+    } catch {
+      // A haptic is never worth a second crash.
+    }
   }
 
-  private reset = () => this.setState({ error: undefined });
+  componentWillUnmount() {
+    if (this.timer) clearTimeout(this.timer);
+  }
+
+  private reset = () => {
+    if (this.state.recovering) return;
+    this.setState({ recovering: true });
+    this.timer = setTimeout(() => this.setState({ error: undefined, recovering: false, details: false }), RECOVER_MS);
+  };
 
   render() {
-    const { error } = this.state;
+    const retry = () => {
+      try {
+        haptics.tap();
+      } catch {
+        // ignore
+      }
+      this.reset();
+    };
+    const plainRetry = (
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Try again"
+        onPress={retry}
+        style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}
+      >
+        <Text style={styles.buttonText}>Try again</Text>
+      </Pressable>
+    );
+    const { error, recovering, details } = this.state;
     if (!error) return this.props.children;
 
     return (
       <View style={styles.screen}>
-        <Text style={styles.title}>pew2 hit a problem</Text>
-        <Text style={styles.body}>
-          Something in the app failed to draw. Trying again usually works; if it keeps
-          happening, this message is worth reporting.
+        <Guard fallback={<View style={styles.pewSpace} />}>
+          <View style={styles.pewWrap}>
+            <Pew size={112} mood={recovering ? "happy" : "oops"} accessibilityLabel={recovering ? "Pew, recovering" : "Pew, hurt"} style={styles.pew} />
+            {!recovering && (
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>!</Text>
+              </View>
+            )}
+          </View>
+        </Guard>
+        <Text style={styles.title} numberOfLines={1} adjustsFontSizeToFit>
+          {recovering ? "Back on my feet" : "pew2 hit a problem"}
+        </Text>
+        <Text style={styles.body} numberOfLines={2}>
+          Something failed to draw. Trying again usually works.
         </Text>
 
-        {/* Scrollable: a stack is long, and truncating it removes the only part
-            that makes the report useful. */}
-        <ScrollView style={styles.detail} contentContainerStyle={styles.detailContent}>
-          <Text style={styles.detailText} selectable>
-            {error.message}
-            {error.stack ? `\n\n${error.stack}` : ""}
-          </Text>
-        </ScrollView>
+        {/* The Stage button, guarded: this is the crash screen, so if the
+            button itself can't draw, the plain one below still can. */}
+        <Guard fallback={plainRetry}>
+          <StageButton label="Try again" color={PEW_CORAL} feel="none" onPress={retry} />
+        </Guard>
 
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Try again"
-          onPress={this.reset}
-          style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}
+          accessibilityState={{ expanded: details }}
+          accessibilityLabel={details ? "Hide details" : "Show details"}
+          onPress={() => this.setState({ details: !details })}
+          style={styles.detailsToggle}
         >
-          <Text style={styles.buttonText}>Try again</Text>
+          <Text style={styles.detailsToggleText}>{details ? "Hide details" : "Details"}</Text>
         </Pressable>
+
+        {/* Scrollable and selectable: a stack is long, and truncating it
+            removes the only part that makes the report useful. */}
+        {details && (
+          <ScrollView style={styles.detail} contentContainerStyle={styles.detailContent}>
+            <Text style={styles.detailText} selectable>
+              {error.message}
+              {error.stack ? `\n\n${error.stack}` : ""}
+            </Text>
+          </ScrollView>
+        )}
       </View>
     );
   }
@@ -86,10 +163,27 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: theme.color.bg,
-    padding: theme.space(5),
+    paddingHorizontal: theme.gutter,
     justifyContent: "center",
     gap: theme.space(4),
   },
+  pewSpace: { height: theme.space(4) },
+  pewWrap: { alignSelf: "flex-start" },
+  // The globe fills ~60% of its box: pull the heading up under it.
+  pew: { margin: -theme.space(5) },
+  badge: {
+    position: "absolute",
+    right: theme.space(1),
+    top: 0,
+    width: BADGE,
+    height: BADGE,
+    borderRadius: BADGE / 2,
+    backgroundColor: theme.color.attention,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  badgeText: { color: theme.color.bg, fontSize: theme.font.body, fontWeight: "800" },
+  // System font only: the display face may be the thing that failed to load.
   title: { color: theme.color.text, fontSize: theme.font.greeting, fontWeight: "600" },
   body: { color: theme.color.textDim, fontSize: theme.font.body, lineHeight: theme.line.body },
   detail: {
@@ -98,11 +192,10 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.md,
   },
   detailContent: { padding: theme.space(3) },
-  // Monospace: this is a stack trace, and proportional text makes one unreadable.
   detailText: {
     color: theme.color.textDim,
     fontSize: theme.font.tiny,
-    // System monospace, always present. A stack trace in a proportional face is
+    // System monospace, always present: a stack trace in a proportional face is
     // materially harder to read, and this is the part worth reporting.
     fontFamily: Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" }),
   },
@@ -113,5 +206,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   buttonPressed: { opacity: 0.85 },
-  buttonText: { color: "#ffffff", fontSize: theme.font.body, fontWeight: "600" },
+  buttonText: { color: theme.color.onAccent, fontSize: theme.font.body, fontWeight: "600" },
+  detailsToggle: { minHeight: theme.size.touch, justifyContent: "center", alignSelf: "flex-start" },
+  detailsToggleText: { color: theme.color.textDim, fontSize: theme.font.body },
 });

@@ -282,3 +282,14 @@ test("cursors off a raw hello are taken only when they are usable seq numbers", 
   expect(readCursors("nonsense")).toEqual({});
   expect(readCursors(null)).toEqual({});
 });
+
+test("goal rows carry instructions, and workspace browsing can ask for files", async () => {
+  const { GoalSummary, WorkspaceEntry, WorkspacesRequest } = await import("./wire.js");
+  const row = { id: "g", name: "n", goal: "x", context: [], path: "/g", createdAt: "t", lastActiveMs: 1, status: "idle" };
+  expect(GoalSummary.parse({ ...row, instructions: "be brief" }).instructions).toBe("be brief");
+  expect(GoalSummary.parse(row).instructions).toBeUndefined();
+  expect(WorkspacesRequest.parse({ t: "workspaces", requestId: "r", path: "/a", files: true }).files).toBe(true);
+  expect(WorkspaceEntry.parse({ path: "/a/b", name: "b", repo: false, kind: "file" }).kind).toBe("file");
+  expect(WorkspaceEntry.parse({ path: "/a/b", name: "b", repo: false }).kind).toBeUndefined();
+  expect(WorkspaceEntry.safeParse({ path: "/a/b", name: "b", repo: false, kind: "link" }).success).toBe(false);
+});

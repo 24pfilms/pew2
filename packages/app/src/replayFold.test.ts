@@ -227,6 +227,18 @@ test("replay restores the context percentage, unlike busy", () => {
   expect(folded.busy).toBe(false);
 });
 
+test("a replayed reading is also kept on the conversation's row", () => {
+  // Reopening a chat later replays only events this phone hasn't seen, so the
+  // row is where its reading has to survive; without it the context sheet said
+  // the agent "doesn't report context usage" on every return to a chat.
+  const row: Session = { id: "s1", providerId: "ggcoder", title: "t", startedAt: 0, turns: [], configOptions: [] };
+  const folded = foldSessionEvents(
+    { turns: [], sessions: [row], busy: false },
+    [{ sessionId: "s1", seq: 1, payload: { update: { sessionUpdate: "usage_update", used: 46_670, size: 1_000_000 } } }],
+  );
+  expect(folded.sessions[0]!.usage).toEqual({ used: 46_670, size: 1_000_000 });
+});
+
 const toolCall = (seq: number, id: string, title: string) => ({
   sessionId: "s1",
   seq,

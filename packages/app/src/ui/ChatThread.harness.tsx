@@ -14,6 +14,7 @@ import { useEffect, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
+import * as SplashScreen from "expo-splash-screen";
 import { theme } from "../theme";
 import { ChatThread, type ChatThreadRef } from "./ChatThread";
 import type { Turn } from "../useDaemon";
@@ -73,6 +74,9 @@ const IMAGE: Turn = {
 type Fixture = "baseline" | "burst" | "replay" | "image" | "loading" | "fade";
 
 export default function ChatThreadHarness() {
+  useEffect(() => {
+    SplashScreen.hideAsync().catch(() => undefined);
+  }, []);
   const [count, setCount] = useState(12);
   const [failed, setFailed] = useState(false);
   const [atBottom, setAtBottom] = useState(true);

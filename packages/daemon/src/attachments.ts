@@ -132,6 +132,12 @@ export async function storeAttachments(
   sessionId: string,
   attachments: readonly PromptAttachment[],
   root: string = tmpdir(),
+  /**
+   * Prepended to every filename. A queued message's files wait on disk while
+   * later prompts store theirs into the same directory, and index-only names
+   * would let the next `0-image.jpg` overwrite one the agent has not read yet.
+   */
+  tag = "",
 ): Promise<StoredAttachment[]> {
   if (attachments.length === 0) return [];
   const limit = attachmentLimitError(attachments);
@@ -147,7 +153,7 @@ export async function storeAttachments(
 
   const stored: StoredAttachment[] = [];
   for (const [index, attachment] of attachments.entries()) {
-    const path = join(dir, attachmentFileName(attachment.name, index));
+    const path = join(dir, `${tag}${attachmentFileName(attachment.name, index)}`);
     const bytes = Buffer.from(attachment.data, "base64");
     await writeFile(path, bytes, { mode: 0o600 });
     stored.push({

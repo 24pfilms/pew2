@@ -15,6 +15,11 @@ const PROVIDERS_KEY = "pew2.providers";
 
 /** The agent last targeted on this device, or null if never chosen. */
 export async function loadLastProvider(): Promise<string | null> {
+  // Development only: `EXPO_PUBLIC_DEV_PROVIDER=<id>` picks the agent on launch.
+  // `__DEV__` is React Native's global; read through globalThis because this
+  // file is also typechecked outside the app.
+  const dev = (globalThis as { __DEV__?: boolean }).__DEV__ ? process.env.EXPO_PUBLIC_DEV_PROVIDER : undefined;
+  if (dev) return dev;
   try {
     return await SecureStore.getItemAsync(LAST_PROVIDER_KEY);
   } catch {

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { splitMarkdownBlocks } from "./markdownBlocks";
+import { hasFence, holdOpenInlineCode, splitMarkdownBlocks } from "./markdownBlocks";
 
 test("splits a message into its top-level blocks", () => {
   expect(splitMarkdownBlocks("# Title\n\nA paragraph.\n\nAnother.")).toEqual([
@@ -57,4 +57,24 @@ test("text with no block token is still returned rather than dropped", () => {
   // Whitespace parses to no tokens at all. Losing it silently would be worse
   // than laying it out oddly.
   expect(splitMarkdownBlocks("   ")).toEqual(["   "]);
+});
+
+test("a half-written inline code span is held back, a whole one is shown", () => {
+  expect(holdOpenInlineCode("see `curs")).toBe("see ");
+  expect(holdOpenInlineCode("see `cursors.ts` now")).toBe("see `cursors.ts` now");
+  expect(holdOpenInlineCode("a `b` and `c")).toBe("a `b` and ");
+  // Double-backtick spans may hold a single backtick.
+  expect(holdOpenInlineCode("x ``a`b`` y")).toBe("x ``a`b`` y");
+  expect(holdOpenInlineCode("x ``a`b")).toBe("x ");
+  // Only the block being written is considered.
+  expect(holdOpenInlineCode("done `x`\n\nnext `y")).toBe("done `x`\n\nnext ");
+  // A fence is left to the fence rules.
+  expect(holdOpenInlineCode("```ts\nconst a = `b")).toBe("```ts\nconst a = `b");
+  expect(holdOpenInlineCode("plain text")).toBe("plain text");
+});
+
+test("fences are recognised, inline code is not a fence", () => {
+  expect(hasFence("```ts\nx")).toBe(true);
+  expect(hasFence("~~~\nx")).toBe(true);
+  expect(hasFence("use `x` here")).toBe(false);
 });

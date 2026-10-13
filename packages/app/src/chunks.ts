@@ -22,14 +22,24 @@ import {
   imagesFromToolCall,
   type ChatImage,
 } from "./images";
+import { readGgEvent } from "./ggReview";
 
-export type ChunkRole = "user" | "agent" | "thought" | "system";
+/** "note": a neutral marker (plan decisions) — never an error, never a retry target. */
+export type ChunkRole = "user" | "agent" | "thought" | "system" | "ken" | "note";
+
+/** What an Autopilot (Ken) row says about itself, for its tint and round label. */
+export interface KenMeta {
+  phase: string;
+  round?: number;
+}
 
 export interface Chunk {
   role: ChunkRole;
   text: string;
   /** Present only when the chunk actually carried pictures. */
   images?: ChatImage[];
+  /** Only on role "ken". */
+  ken?: KenMeta;
 }
 
 /** True when a chunk has nothing to render — no text and no picture. */
@@ -105,6 +115,11 @@ export function readChunk(payload: any): Chunk | undefined {
     return images.length > 0
       ? { role: "user", text: payload.text ?? "", images }
       : { role: "user", text: payload.text ?? "" };
+  }
+  const gg = readGgEvent(payload);
+  if (gg) {
+    if (gg.role === "ken" && gg.ken) return { role: "ken", text: gg.text, ken: gg.ken };
+    return { role: gg.role === "note" ? "note" : "system", text: gg.text };
   }
   if (payload?.kind === "exit") {
     // Closing a session kills the child, so a clean or signalled exit is the

@@ -33,7 +33,12 @@ export interface WorkspaceEntry {
   repo: boolean;
   /** Last modification, ISO. Used to rank; may be absent if unreadable. */
   updatedAt?: string;
+  /** Absent means folder. Files are listed only on request and never browsed into. */
+  kind?: "folder" | "file";
 }
+
+/** Files listed per directory when a client asks for them. */
+const FILE_LIMIT = 200;
 
 /**
  * How deep to look for repositories.
@@ -169,7 +174,7 @@ async function isDirectory(path: string): Promise<boolean> {
  */
 export async function listDirectory(
   path: string,
-  options: { roots?: string[]; home?: string; limit?: number } = {},
+  options: { roots?: string[]; home?: string; limit?: number; files?: boolean } = {},
 ): Promise<{ path: string; parent?: string; entries: WorkspaceEntry[] } | undefined> {
   const home = options.home ?? homedir();
   // Read once: `browsableRoots()` consults the environment, and calling it three
@@ -188,12 +193,18 @@ export async function listDirectory(
   }
 
   const entries: WorkspaceEntry[] = [];
+  const files: WorkspaceEntry[] = [];
   for (const name of names.sort((a, b) => a.localeCompare(b))) {
-    if (name.startsWith(".") || SKIP.has(name)) continue;
-    if (entries.length >= (options.limit ?? 500)) break;
-
+    if (name.startsWith(".")) continue;
     const child = join(resolved, name);
-    if (!(await isDirectory(child))) continue;
+    if (!(await isDirectory(child))) {
+      // Folders first, files after, so files go to their own capped list.
+      if (options.files && files.length < FILE_LIMIT && (await isFile(child))) {
+        files.push({ path: child, name, repo: false, updatedAt: await modifiedAt(child), kind: "file" });
+      }
+      continue;
+    }
+    if (SKIP.has(name) || entries.length >= (options.limit ?? 500)) continue;
     entries.push({
       path: child,
       name,
@@ -202,7 +213,15 @@ export async function listDirectory(
     });
   }
 
-  return { path: resolved, parent: await parentOf(resolved, roots), entries };
+  return { path: resolved, parent: await parentOf(resolved, roots), entries: [...entries, ...files] };
+}
+
+async function isFile(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isFile();
+  } catch {
+    return false;
+  }
 }
 
 /**

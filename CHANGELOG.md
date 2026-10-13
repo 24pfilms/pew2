@@ -11,6 +11,29 @@ installs them separately, and what an app and a daemon must agree on is
 
 Dates are the day the tag was cut.
 
+## 0.9.20 — 2026-10-13
+
+### Added
+
+- **GG Goals works from the phone.** You can see your goals, start a new one
+  with a name, the goal itself, folders and files, and standing instructions,
+  and change those instructions later from the goal's settings. Goals run on
+  the computer exactly as they do from the desktop app.
+- **Files from your phone can go into a goal.** Pick them with the phone's own
+  file picker. pew2 saves a copy in its own folder on the computer
+  (`~/.pew2/goal-files`), not in your project, so they never end up in Git.
+  An older pew2 can't receive them yet; the phone then tells you the goal was
+  made without its files, rather than leaving that out silently.
+
+### Fixed
+
+- **Goal folders no longer show up as ordinary projects** in GG Coder's list,
+  or as the place a new GG Coder chat opens.
+- **The phone no longer shows the relay's address.** Its status line and the
+  connection settings name the computer instead.
+- **Autopilot's messages come back when you reopen a conversation**, in the
+  same place they were written.
+
 ## 0.9.14 — 2026-08-08
 
 ### Fixed

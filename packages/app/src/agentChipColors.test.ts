@@ -9,7 +9,7 @@ function token(name: string): string {
   if (!match) throw new Error(`Missing theme color ${name}`);
   return match[1]!;
 }
-const palette = { surface: token("surface"), surfaceRaised: token("surfaceRaised"), surfacePressed: token("surfacePressed"), text: token("text"), textDim: token("textDim"), orb: token("orb") };
+const palette = { surface: token("surface"), surfaceRaised: token("surfaceRaised"), surfacePressed: token("surfacePressed"), text: token("text"), textDim: token("textDim"), orb: token("orb"), accent: token("accent"), accentSoft: token("accentSoft") };
 test("actual normal, selected and disabled chip surfaces pair readable labels and markers", () => {
   for (const color of [undefined, "#000", "#fff", "#d97757", "#4285f4", "#00ff00", "invalid"]) {
     for (const selected of [false, true]) for (const enabled of [false, true]) {
@@ -18,6 +18,13 @@ test("actual normal, selected and disabled chip surfaces pair readable labels an
       expect(contrastRatio(style.marker, style.background)).toBeGreaterThanOrEqual(3);
     }
   }
+});
+test("selected is the accent pair, with no tick in the chip", () => {
+  const on = agentChipColors("#d97757", true, true, palette);
+  expect(on.background).toBe(palette.accentSoft);
+  expect(on.text).toBe(palette.accent);
+  const chip = readFileSync(join(import.meta.dir, "ui", "AgentChip.tsx"), "utf8");
+  expect(chip).not.toContain("checkmark");
 });
 test("selection changes the neutral fill; disabled does not dim a whole control", () => {
   expect(agentChipColors("#d97757", false, true, palette).background).not.toBe(agentChipColors("#d97757", true, true, palette).background);

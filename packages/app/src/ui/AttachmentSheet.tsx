@@ -12,11 +12,15 @@
  * user with a missing feature and no explanation.
  */
 import { memo } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { StyleSheet, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { theme } from "../theme";
-import { touchSlop } from "./controls";
-import { Sheet, SHEET_ROW_HEIGHT, sheetCardStyle } from "./Sheet";
+import { Sheet } from "./Sheet";
+import { PressScale } from "./stage/PressScale";
+import { Led } from "./stage/Led";
+import { dashedOutline } from "./stage/DashedRule";
+import { useAgentColor } from "./stage/agentColor";
+import { Dissolve } from "./motion/Dissolve";
 
 export type AttachmentSource = "library" | "camera" | "files";
 
@@ -32,40 +36,36 @@ const SOURCES: {
   label: string;
   hint: string;
 }[] = [
-  { id: "library", icon: "images-outline", label: "Photo Library", hint: "Screenshots and photos" },
-  { id: "camera", icon: "camera-outline", label: "Take Photo", hint: "Point at a screen or a whiteboard" },
+  { id: "camera", icon: "camera-outline", label: "Camera", hint: "Take a photo" },
+  { id: "library", icon: "images-outline", label: "Photos", hint: "Screenshots and photos" },
   { id: "files", icon: "document-outline", label: "Files", hint: "Logs, diffs, anything else" },
 ];
 
 function AttachmentSheetView({ visible, onSelect, onClose }: AttachmentSheetProps) {
+  const agent = useAgentColor();
   return (
-    <Sheet visible={visible} title="Attach" onClose={onClose} dismissLabel="Close attachments">
-      <View style={styles.card}>
+    <Sheet visible={visible} label="Attach" title="Add to the message" onClose={onClose} dismissLabel="Close attachments">
+      <View style={styles.tiles}>
         {SOURCES.map((source, index) => (
-          <Pressable
-            key={source.id}
-            style={({ pressed }) => [
-              styles.row,
-              // Never under the last row: a rule at the card's edge reads as a
-              // broken border.
-              index < SOURCES.length - 1 && styles.rowDivided,
-              pressed && styles.rowPressed,
-            ]}
-            hitSlop={touchSlop(theme.space(1))}
-            accessibilityRole="button"
-            accessibilityLabel={`${source.label}. ${source.hint}`}
-            onPress={() => onSelect(source.id)}
-          >
-            <Ionicons name={source.icon} size={20} color={theme.color.text} />
-            <View style={styles.labels}>
-              <Text style={styles.label} numberOfLines={1}>
+          <Dissolve key={source.id} kind="row" delay={visible ? index * 50 : 0} dissolveKey={String(visible)} style={styles.cell}>
+            <PressScale
+              feel="tap"
+              style={styles.tile}
+              accessibilityLabel={`${source.label}. ${source.hint}`}
+              onPress={() => onSelect(source.id)}
+            >
+              {/* The glyph glows in the agent colour, like an LED. */}
+              <Ionicons
+                name={source.icon}
+                size={26}
+                color={agent}
+                style={{ textShadowColor: agent, textShadowRadius: 8, textShadowOffset: { width: 0, height: 0 } }}
+              />
+              <Led tone="text" size={11} unlit numberOfLines={1}>
                 {source.label}
-              </Text>
-              <Text style={styles.hint} numberOfLines={1}>
-                {source.hint}
-              </Text>
-            </View>
-          </Pressable>
+              </Led>
+            </PressScale>
+          </Dissolve>
         ))}
       </View>
     </Sheet>
@@ -73,28 +73,15 @@ function AttachmentSheetView({ visible, onSelect, onClose }: AttachmentSheetProp
 }
 
 const styles = StyleSheet.create({
-  card: sheetCardStyle,
-  row: {
-    height: SHEET_ROW_HEIGHT,
-    flexDirection: "row",
+  tiles: { flexDirection: "row", gap: theme.space(3) },
+  cell: { flex: 1 },
+  tile: {
+    ...dashedOutline,
+    borderRadius: theme.space(3),
+    aspectRatio: 1,
     alignItems: "center",
+    justifyContent: "center",
     gap: theme.space(3),
-    paddingHorizontal: theme.space(4),
-  },
-  rowDivided: {
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: theme.color.border,
-  },
-  rowPressed: { backgroundColor: theme.color.surfacePressed },
-  labels: { flex: 1, gap: theme.space(0.5) },
-  label: {
-    color: theme.color.text,
-    fontSize: theme.font.body,
-    fontWeight: "600",
-  },
-  hint: {
-    color: theme.color.textDim,
-    fontSize: theme.font.small,
   },
 });
 

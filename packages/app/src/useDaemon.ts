@@ -1,3 +1,4 @@
+import { GOALS_PROVIDER_ID } from "./goalsAgent";
 /**
  * Daemon connection: one WebSocket, auto-reconnecting, translating the wire
  * envelope into rendered chat turns.
@@ -14,7 +15,7 @@ import { SecureChannel, e2e, envelopeHeader, wire } from "@pew2/protocol";
 
 const { WIRE_VERSION } = wire;
 import { USE_FIXTURES, isFixtureSession, sampleSessions } from "./fixtures";
-import { mergeAgentSessions, needsResume, replaceAgentSessionStub } from "./agentHistory";
+import { agentSessionKey, mergeAgentSessions, needsResume, replaceAgentSessionStub } from "./agentHistory";
 import { receiptOnOpen, receiptOnReplay, recordReceipt } from "./turnReceipts";
 import {
   adoptPendingSession,
@@ -44,7 +45,7 @@ import {
 } from "./activity";
 import { advance, alreadySeen, type Cursors } from "./cursors";
 import { findDuplicateError } from "./errorDedup";
-import { isEmptyChunk, readChunk } from "./chunks";
+import { isEmptyChunk, readChunk, type KenMeta } from "./chunks";
 import type { ChatImage } from "./images";
 import { emptyImageCache, putImage, type ImageCache } from "./imageCache";
 import {
@@ -77,6 +78,26 @@ import {
   type ReplayEvent,
 } from "./replayFold";
 import { readPermissionRequest } from "./permissions";
+import {
+  applyGoalMessage,
+  applyLiveEvent,
+  applyQueue,
+  applyReplayExtras,
+  applyReviewMessage,
+  closeAsk,
+  dropQueued,
+  EMPTY_GG,
+  type GgState,
+  type GoalSummary,
+} from "./ggState";
+import { decidedPlan, type PlanInfo } from "./ggReview";
+
+function withPlan(plans: Record<string, PlanInfo>, id: string, plan: PlanInfo | undefined): Record<string, PlanInfo> {
+  return plan ? { ...plans, [id]: plan } : plans;
+}
+import { sendsToQueue } from "./queue";
+import type { AskResult } from "./askUser";
+import type { WireAttachment } from "./attachments";
 
 export type Status = "connecting" | "online" | "offline";
 
@@ -118,8 +139,10 @@ export interface Turn {
    * on turns born with a server id, which never changes.
    */
   key?: string;
-  role: "user" | "agent" | "thought" | "system";
+  role: "user" | "agent" | "thought" | "system" | "ken" | "note";
   text: string;
+  /** Only on role "ken": the Autopilot phase and round. */
+  ken?: KenMeta;
   /**
    * Pictures the agent sent with this message, in order. Kept beside the text
    * rather than spliced into it: the bytes may be inline base64 (megabytes of
@@ -171,6 +194,13 @@ export interface Session {
   agentSessionId?: string;
   /** Working directory the agent recorded, needed to reopen it there. */
   cwd?: string;
+  /**
+   * This conversation's last context reading, held with it like its turns.
+   * Leaving a chat clears the on-screen reading, and coming back replays only
+   * events this phone hasn't seen, which never includes the old reading: the
+   * context sheet then said the agent "doesn't report context usage".
+   */
+  usage?: ContextUsage;
   /**
    * Project name for the drawer, as the daemon stamped it on a finished turn.
    * Only the desktop can resolve it, and a session this app started has no
@@ -236,6 +266,8 @@ export interface WorkspaceEntry {
   name: string;
   repo: boolean;
   updatedAt?: string;
+  /** Absent means folder (older daemons list folders only). */
+  kind?: "folder" | "file";
 }
 
 /**
@@ -254,6 +286,12 @@ export interface WorkspaceBrowse {
   loading: boolean;
   /** The daemon would not open that path: missing, a file, or out of bounds. */
   refused: boolean;
+  /**
+   * The request never left the phone (offline, or the socket not open yet).
+   * Distinct from an empty answer: a picker that opened before the connection
+   * did asks again once it is online, instead of saying "Nothing here".
+   */
+  unsent?: boolean;
 }
 
 /**
@@ -333,6 +371,12 @@ interface State {
    * desk, which has no screen to tell anyone with.
    */
   update?: { latest: string; automatic: boolean };
+  /**
+   * The paired computer's own name (its hostname), as it reports itself. Shown
+   * in settings in place of the relay's address. Absent from a daemon too old
+   * to send it: settings then falls back to the status alone.
+   */
+  machineName?: string;
   sessionId?: string;
   /** The agent the composer will talk to. Chosen before a session exists. */
   activeProviderId?: string;
@@ -608,6 +652,11 @@ export function useDaemon(
   // and then be silently replaced by the truth once a session opened. Only an
   // agent's own advertisement may populate this.
   const [knownConfigs, setKnownConfigs] = useState<Record<string, ConfigOption[]>>({});
+  // GG Coder's extensions — queued messages, open questions, goals — per
+  // session. Its own state so the main reducer is untouched; see `ggState.ts`.
+  const [gg, setGg] = useState<GgState>(EMPTY_GG);
+  // Counter behind goal request ids.
+  const goalCounter = useRef(0);
   // Pictures the daemon has been asked to read off the desktop's disk, keyed by
   // the path the agent named. Outside State because it is a cache belonging to
   // this device's viewport, not to the conversation: it is never replayed,
@@ -1157,6 +1206,38 @@ export function useDaemon(
           update.content?.type === "text" && typeof update.content.text === "string";
         if (!batchable) resetStream();
 
+        // GG extension frames: state beside the transcript, never in it.
+        if (message.t === "session.queue" && typeof message.sessionId === "string") {
+          setGg((g) => applyQueue(g, message));
+          return;
+        }
+        if (message.t === "goals" || message.t === "goal.result" || message.t === "goal.state") {
+          setGg((g) => applyGoalMessage(g, message));
+          return;
+        }
+        if (message.t === "plan.state" || message.t === "autopilot.state" || message.t === "checklist") {
+          setGg((g) => applyReviewMessage(g, message));
+          return;
+        }
+        // A finished turn may have changed the project checklist: an open
+        // checklist sheet re-asks. Not a filter on idle — it still falls through.
+        if (message.t === "provider.capabilities" && message.extensions) {
+          setGg((g) => applyReviewMessage(g, message));
+        }
+        if (message.t === "session.idle") {
+          setGg((g) => ({ ...g, checklistNonce: g.checklistNonce + 1 }));
+        }
+        // Live state a replay restates (absent = an older daemon said nothing).
+        // Only these fields: a logged `ask_user` in `events` is history and
+        // must never open a card.
+        if (message.t === "session.replay" && typeof message.sessionId === "string") {
+          setGg((g) => applyReplayExtras(g, message));
+        }
+        // An older daemon that has never heard of `goals`: stop the spinner.
+        if (message.t === "error" && message.code === "unknown_message") {
+          setGg((g) => (g.goalsLoading ? { ...g, goalsLoading: false } : g));
+        }
+
         // Replayed history, after a reconnect or a resume. Progressive batches
         // make long transcripts visible from the top while the agent continues
         // loading; each batch is still folded in one state update, avoiding the
@@ -1282,6 +1363,9 @@ export function useDaemon(
           // would duplicate agent output on screen.
           if (alreadySeen(cursors.current, message.sessionId, message.seq)) return;
           cursors.current = advance(cursors.current, message.sessionId, message.seq);
+          // A live question opens its card, on whichever session asked: it is
+          // filed per session, so it waits there while another is on screen.
+          setGg((g) => applyLiveEvent(g, message.sessionId, message.payload));
         }
 
         // Track the live session id here, as the message arrives, rather than
@@ -1705,6 +1789,7 @@ export function useDaemon(
             case "providers":
               return {
                 ...prev,
+                machineName: message.machine?.name || prev.machineName,
                 providers: message.providers ?? [],
                 // Absent means "nothing to report" *or* "a daemon too old to
                 // have the field", and both have to clear the notice — a
@@ -1922,8 +2007,11 @@ export function useDaemon(
               // events and another project's meter is not this one's.
               const usage = readUsage(payload);
               if (usage) {
-                if (message.sessionId !== sessionRef.current) return base;
-                return { ...base, usage };
+                // Kept on the conversation's row whether or not it's on screen,
+                // so reopening it shows the reading straight away.
+                const sessions = base.sessions.map((row) => (row.id === message.sessionId ? { ...row, usage } : row));
+                if (message.sessionId !== sessionRef.current) return { ...base, sessions };
+                return { ...base, usage, sessions };
               }
 
               const permission = readPermissionRequest(payload);
@@ -1969,7 +2057,7 @@ export function useDaemon(
                   : session,
               );
 
-              return { ...base, turns: capped, sessions, busy: chunk.role !== "system" };
+              return { ...base, turns: capped, sessions, busy: chunk.role === "ken" || chunk.role === "note" ? base.busy : chunk.role !== "system" };
             }
 
             case "error": {
@@ -2253,7 +2341,15 @@ export function useDaemon(
       const visible =
         sessionId === sessionRef.current ||
         (isPendingSession(sessionId) && sessionId === viewingRef.current);
-      setState((s) => ({
+      setState((s) => {
+        // Sent into a running turn: the daemon queues it, the strip above the
+        // composer shows it, and it reaches the transcript as a logged
+        // `user_message` when the agent reads it. No bubble, no new clock.
+        const targetBusy = visible
+          ? s.busy
+          : s.sessions.find((session) => session.id === sessionId)?.busy === true;
+        if (sendsToQueue({ sent, busy: targetBusy, loading: visible && s.loadingSession })) return s;
+        return {
         ...s,
         // Nothing is working while a message waits for a socket, so nothing
         // spins and no clock runs. Both start in `flushOutbox`, at the moment
@@ -2285,7 +2381,8 @@ export function useDaemon(
               }
             : session,
         ),
-      }));
+        };
+      });
       return true;
     },
     [post],
@@ -2456,6 +2553,63 @@ export function useDaemon(
         }));
       },
 
+      /** Withdraw one queued message before the agent reads it. */
+      cancelQueued: (sessionId: string, id: string) => {
+        if (post({ t: "session.queue.cancel", sessionId, id })) {
+          setGg((g) => dropQueued(g, sessionId, id));
+        }
+      },
+
+      /** Answer (or dismiss, with `{action:"cancel"}`) an open `ask_user`. */
+      answerAsk: (sessionId: string, requestId: string, result: AskResult) => {
+        post({ t: "session.ask", sessionId, requestId, result });
+        setGg((g) => closeAsk(g, sessionId, requestId));
+      },
+
+      /** Decide a pending plan (GG Coder plan review). */
+      decidePlan: (sessionId: string, generation: number, action: "accept" | "feedback" | "reject", feedback?: string) => {
+        const frame = { t: "plan.decide", sessionId, generation, action, ...(feedback ? { feedback } : {}) };
+        if (post(frame)) setGg((g) => ({ ...g, plans: withPlan(g.plans, sessionId, decidedPlan(g.plans[sessionId], generation)) }));
+      },
+
+      /** Turn Autopilot (Ken) on or off for this session's project. */
+      setAutopilot: (sessionId: string, enabled: boolean) => {
+        if (post({ t: "autopilot.set", sessionId, enabled })) {
+          setGg((g) => ({ ...g, autopilot: { ...g.autopilot, [sessionId]: { enabled, reviewing: g.autopilot[sessionId]?.reviewing ?? false } } }));
+        }
+      },
+
+      /** Ask for the project checklist of an open GG Coder session. */
+      requestChecklist: (sessionId: string) => {
+        post({ t: "checklist", requestId: `checklist_${++goalCounter.current}`, sessionId });
+      },
+
+      /** Ask for the goal list (GG Coder). */
+      refreshGoals: () => {
+        const requestId = `goals_${++goalCounter.current}`;
+        if (post({ t: "goals", requestId })) setGg((g) => ({ ...g, goalsLoading: true }));
+      },
+
+      /** Create a goal. Returns the request id to watch in `goalResults`. */
+      createGoal: (input: { name: string; goal: string; context: string[]; instructions?: string; files?: WireAttachment[] }): string | undefined => {
+        const requestId = `goal_${++goalCounter.current}`;
+        return post({ t: "goal.create", requestId, ...input }) ? requestId : undefined;
+      },
+
+      /** Pause, resume, delete, update or set the critter model of a goal. */
+      goalAction: (
+        goalId: string,
+        action: "delete" | "pause" | "resume" | "update" | "critterModel",
+        extra: { context?: string[]; instructions?: string; model?: string | null } = {},
+      ): string | undefined => {
+        const requestId = `goal_${++goalCounter.current}`;
+        const sent = post({ t: "goal.action", requestId, goalId, action, ...extra });
+        if (sent && action === "delete") {
+          setGg((g) => ({ ...g, goals: g.goals?.filter((goal) => goal.id !== goalId) }));
+        }
+        return sent ? requestId : undefined;
+      },
+
       answer: (requestId: string, optionId: string) => {
         const sessionId = sessionRef.current;
         if (sessionId) post({ t: "session.permission", sessionId, requestId, optionId });
@@ -2604,10 +2758,9 @@ export function useDaemon(
           // `sessionId` and the provider exactly as they were, so without it the
           // row stays blank rather than coming back.
           workspace: undefined,
-          // Belongs to the conversation being left: a context reading is about one
-          // agent's window, and carrying it across would put the previous chat's
-          // percentage beside this one's project.
-          usage: undefined,
+          // This conversation's own last reading (the one on screen belongs to
+          // the chat being left). Absent until it has reported one.
+          usage: s.sessions.find((row) => row.id === sessionId)?.usage,
           workspaceNonce: s.workspaceNonce + 1,
           turns: s.sessions.find((row) => row.id === sessionId)?.turns ?? session.turns,
           restoreTarget: undefined,
@@ -2677,13 +2830,13 @@ export function useDaemon(
        * an agent that has never been used: its project list comes from its own
        * past sessions, so a new agent offers nothing to pick.
        */
-      browseWorkspaces: (path?: string) => {
+      browseWorkspaces: (path?: string, options?: { files?: boolean }) => {
         // Monotonic, and compared on arrival: two listings can be in flight at
         // once if the user taps quickly, and only the newest may render.
         const requestId = `ws_${++browseCounter.current}`;
         browseRequest.current = requestId;
 
-        const sent = post({ t: "workspaces", requestId, path });
+        const sent = post({ t: "workspaces", requestId, path, ...(options?.files ? { files: true } : {}) });
         setState((s) => ({
           ...s,
           browse: {
@@ -2697,6 +2850,7 @@ export function useDaemon(
             // Not a refusal — the request never reached the daemon. The picker
             // shows the offline case from `status`, which is already on screen.
             refused: false,
+            unsent: !sent,
           },
         }));
       },
@@ -2799,6 +2953,44 @@ export function useDaemon(
     // change in practice, and listing it costs nothing if it ever does.
     [post, deliverPrompt, sendImageRequest, clearImages, deviceId],
   );
+
+  /**
+   * Open a GG Coder goal: its live session, else resume the agent's own
+   * conversation for it, else start one in the goal's folder (the daemon runs
+   * the kickoff turn itself when the goal needs one).
+   */
+  const openGoal = useCallback(
+    (goal: GoalSummary) => {
+      const providerId = GOALS_PROVIDER_ID;
+      const rows = sessionsRef.current;
+      if (goal.sessionId && rows.some((row) => row.id === goal.sessionId) &&
+          (liveSessions.current === undefined || liveSessions.current.has(goal.sessionId))) {
+        actions.openSession(goal.sessionId);
+        return;
+      }
+      if (goal.agentSessionId) {
+        const id = agentSessionKey(providerId, goal.agentSessionId);
+        if (!rows.some((row) => row.id === id)) {
+          restoring.current = { id, providerId, agentSessionId: goal.agentSessionId, title: goal.name, cwd: goal.path };
+        }
+        actions.openSession(id);
+        return;
+      }
+      actions.select(providerId);
+      actions.selectProject(providerId, goal.path);
+      actions.start(providerId);
+    },
+    [actions],
+  );
+
+  // Goals live on the desktop and change there too: ask whenever the socket
+  // comes up with GG Coder available. An older daemon answers with an error
+  // the reducer records, and the drawer simply says nothing about goals.
+  const hasGgCoder = state.providers.some((provider) => provider.id === GOALS_PROVIDER_ID && provider.available);
+  const refreshGoals = actions.refreshGoals;
+  useEffect(() => {
+    if (state.status === "online" && hasGgCoder) refreshGoals();
+  }, [state.status, hasGgCoder, refreshGoals]);
 
   // Give up on a conversation that is taking impossibly long to open.
   //
@@ -2929,8 +3121,13 @@ export function useDaemon(
     // and top bar must not show Claude Code while a prompt would go elsewhere.
     effectiveProviderId,
     configOptions,
+    /** Last selectors each provider advertised, by provider id (goal worker model picker). */
+    providerConfigs: knownConfigs,
     commands,
     loadingSessions,
     images,
+    gg,
+    hasGgCoder,
+    openGoal,
   };
 }

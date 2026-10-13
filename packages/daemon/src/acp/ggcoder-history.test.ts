@@ -111,3 +111,48 @@ test("loads a compacted GG Coder chain locally without the child summary or over
     { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Done" } },
   ]);
 });
+
+test("replays Ken's persisted Autopilot verdicts where they were written", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pew2-gg-ken-"));
+  roots.push(root);
+  const cwd = "/Users/test/ken-project";
+  const directory = path.join(root, "Users_test_ken-project");
+  await mkdir(directory, { recursive: true });
+  const id = "cccccccc-1234-1234-1234-123456789abc";
+  const marker = (phase: string, afterMessageCount: number, extra: Record<string, string> = {}) => ({
+    type: "custom",
+    kind: "autopilot_marker",
+    parentId: null,
+    data: { version: 1, phase, afterMessageCount, ...extra },
+  });
+  const hidden = { source: "runtime", kind: "automation", visibility: "hidden" };
+  await writeFile(
+    path.join(directory, `s_${id.slice(0, 8)}.jsonl`),
+    [
+      { type: "session", id, cwd, leafId: "a2" },
+      { type: "message", id: "u1", parentId: null, message: { role: "user", content: "Build it" } },
+      { type: "message", id: "a1", parentId: "u1", message: { role: "assistant", content: "Built" } },
+      marker("prompted", 2, { body: "Add a test" }),
+      // Same payload re-persisted by an old path: kept once.
+      marker("prompted", 2, { body: "Add a test" }),
+      { type: "message", id: "u2", parentId: "a1", message: { role: "user", content: "[injected]", provenance: hidden } },
+      { type: "message", id: "a2", parentId: "u2", message: { role: "assistant", content: "Tested" } },
+      // Anchor past what was on disk when written: clamped to 4.
+      marker("done", 9),
+      // A desktop-only phase name maps onto the wire's.
+      marker("plan_approved", 4, { reason: "solid" }),
+      // Unknown phases are ignored.
+      marker("mystery", 1),
+    ].map((entry) => JSON.stringify(entry)).join("\n"),
+  );
+
+  const updates = await loadGgCoderDisplayHistory(id, cwd, root);
+  expect(updates).toEqual([
+    { sessionUpdate: "user_message_chunk", content: { type: "text", text: "Build it" } },
+    { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Built" } },
+    { kind: "autopilot", phase: "prompted", body: "Add a test" },
+    { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Tested" } },
+    { kind: "autopilot", phase: "done" },
+    { kind: "autopilot", phase: "plan_accepted", reason: "solid" },
+  ]);
+});

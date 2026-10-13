@@ -209,3 +209,31 @@ test("the scan is bounded, so an enormous home cannot hang the daemon", async ()
   const found = await discoverRepos({ roots, scanLimit: 5 });
   expect(found.length).toBeLessThanOrEqual(5);
 });
+
+test("asked for files, browsing lists them after folders, capped, and never dotfiles", async () => {
+  const { home, roots } = await fixture();
+  await writeFile(join(home, "code/README.md"), "# x");
+  await writeFile(join(home, "code/.env"), "SECRET=1");
+  await writeFile(join(home, "code/a.txt"), "a");
+
+  const listing = await listDirectory(join(home, "code"), { roots, home, files: true });
+  const rows = listing!.entries.map((entry) => [entry.name, entry.kind ?? "folder"]);
+  expect(rows).toEqual([
+    ["api", "folder"],
+    ["notes", "folder"],
+    ["web", "folder"],
+    ["a.txt", "file"],
+    ["README.md", "file"],
+  ]);
+
+  // Same confinement as folders: a file outside the roots is refused.
+  expect(await listDirectory("/etc", { roots, home, files: true })).toBeUndefined();
+});
+
+test("goal rows from GG Coder keep their instructions through the daemon's reader", async () => {
+  const { Daemon } = await import("./index.js");
+  const read = (Daemon as unknown as { readGoal: (v: unknown) => { instructions?: string } | undefined }).readGoal;
+  const row = { id: "g", name: "n", goal: "x", context: [], path: "/g", createdAt: "t", lastActiveMs: 1, status: "idle" };
+  expect(read({ ...row, instructions: "be brief" })?.instructions).toBe("be brief");
+  expect(read(row)?.instructions).toBeUndefined();
+});

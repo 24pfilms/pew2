@@ -16,10 +16,29 @@ import { ActivityIndicator, Modal, Platform, Pressable, ScrollView, StyleSheet, 
 import { Image } from "expo-image";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@expo/vector-icons/Ionicons";
+import { DotGlyph } from "./stage/DotGlyph";
+import Animated, { useAnimatedStyle, useReducedMotion, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
 import { theme } from "../theme";
+import { Led } from "./stage/Led";
 import { haptics } from "./haptics";
 import { saveImageToDevice, shareImage, type SaveResult } from "./imageSaver";
 import type { ChatImage as ChatImageModel } from "../images";
+import { SPRING } from "../motion";
+
+/** The picture's file name for the top bar, from its path; data URIs have none. */
+function fileName(image: ChatImageModel): string {
+  if (!image.src.startsWith("data:")) {
+    const last = image.src.split(/[?#]/)[0]?.split("/").filter(Boolean).pop();
+    if (last) {
+      try {
+        return decodeURIComponent(last);
+      } catch {
+        return last;
+      }
+    }
+  }
+  return image.alt || "Image";
+}
 
 /** What the last save/share attempt did, shown under the buttons. */
 type Feedback = { tone: "ok" | "bad"; text: string };
@@ -100,19 +119,24 @@ export function ImageViewer({
           onPress={onClose}
         />
 
-        <View style={[styles.closeRow, { top: insets.top + theme.headerInset }]}>
+        <View style={[styles.topBar, { paddingTop: insets.top + theme.headerInset }]}>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Close image"
             hitSlop={12}
-            onPress={onClose}
+            onPress={() => {
+              haptics.tap();
+              onClose();
+            }}
             style={styles.closeButton}
           >
-            <Ionicons name="close" size={20} color={theme.color.text} />
+            <DotGlyph name="close" size={14} />
           </Pressable>
+          <Text style={styles.title} numberOfLines={1} ellipsizeMode="middle">{fileName(image)}</Text>
         </View>
 
         <ViewerImage key={resolvedSrc} uri={resolvedSrc} alt={image.alt || "Image from the agent"} />
+        <Led tone="dim" style={styles.hint}>Tap to zoom</Led>
 
         <View style={[styles.actions, { paddingBottom: insets.bottom + theme.space(4) }]}>
           {!!feedback && (
@@ -178,14 +202,26 @@ function ViewerImage({ uri, alt }: { uri: string; alt: string }) {
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [zoomed, setZoomed] = useState(false);
   const canZoom = Platform.OS === "ios";
+  const reduce = useReducedMotion();
+  // Android has no native zoom ScrollView: a tap springs the picture instead.
+  const scale = useSharedValue(1);
+  const springStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+  const toggleSpring = () => {
+    haptics.select();
+    const next = scale.value > 1 ? 1 : 2.5;
+    scale.value = reduce ? withTiming(next, { duration: 0 }) : withSpring(next, SPRING.settle);
+  };
   const toggleZoom = () => {
+    haptics.select();
     const scale = zoomed ? 1 : 3;
     scroll.current?.scrollResponderZoomTo({
       x: size.width * (1 - 1 / scale) / 2,
       y: size.height * (1 - 1 / scale) / 2,
       width: size.width / scale,
       height: size.height / scale,
-      animated: false,
+      // UIScrollView's own zoom curve: the native spring, and it holds still
+      // under Reduce Motion.
+      animated: !reduce,
     });
   };
   const picture = (
@@ -203,7 +239,18 @@ function ViewerImage({ uri, alt }: { uri: string; alt: string }) {
       style={styles.imageFill}
     />
   );
-  if (!canZoom) return <View style={styles.image} pointerEvents="none">{picture}</View>;
+  if (!canZoom) {
+    return (
+      <Pressable
+        style={styles.image}
+        accessibilityRole="button"
+        accessibilityLabel={`${alt}. Toggle zoom`}
+        onPress={toggleSpring}
+      >
+        <Animated.View style={[styles.imageFill, springStyle]}>{picture}</Animated.View>
+      </Pressable>
+    );
+  }
   return (
     <View style={styles.image} onLayout={({ nativeEvent: { layout } }) => {
       setSize({ width: layout.width, height: layout.height });
@@ -247,7 +294,16 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.94)",
     justifyContent: "center",
   },
-  closeRow: { position: "absolute", right: theme.gutter, zIndex: 2 },
+  topBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.space(3),
+    paddingHorizontal: theme.gutter,
+    paddingBottom: theme.space(2),
+    zIndex: 2,
+  },
+  title: { flex: 1, color: theme.color.text, fontSize: theme.font.body, fontWeight: "600" },
+  hint: { alignSelf: "center", marginTop: theme.space(2) },
   closeButton: {
     width: theme.size.control,
     height: theme.size.control,
