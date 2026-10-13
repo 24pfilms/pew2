@@ -52,26 +52,22 @@ export function shouldRing(reason: RingReason, foreground: boolean, settings: Li
   return reason === "approval" ? settings.ringApprovals : settings.ringFinished;
 }
 
-export interface PendingApproval {
-  requestId: string;
-  sessionId: string;
-  title: string;
-}
+/** How many approval ids are remembered, oldest forgotten first. */
+const SEEN_LIMIT = 256;
 
 /**
- * Approval requests not seen before, given every one open right now.
+ * True the first time an approval id is seen.
  *
- * `seen` is updated in place and pruned to what is still open, so a request
- * answered and later re-asked under the same id would ring again — and the set
- * never grows past the requests actually waiting.
+ * A reconnect restates every open request, and each must ring once, not once
+ * per connection. `seen` is updated in place and bounded, so a long-running app
+ * does not collect every id it has ever been asked about.
  */
-export function newApprovals(
-  seen: Set<string>,
-  open: readonly PendingApproval[],
-): PendingApproval[] {
-  const fresh = open.filter((approval) => !seen.has(approval.requestId));
-  const stillOpen = new Set(open.map((approval) => approval.requestId));
-  for (const id of seen) if (!stillOpen.has(id)) seen.delete(id);
-  for (const approval of fresh) seen.add(approval.requestId);
-  return fresh;
+export function firstSighting(seen: Set<string>, requestId: string): boolean {
+  if (seen.has(requestId)) return false;
+  seen.add(requestId);
+  if (seen.size > SEEN_LIMIT) {
+    const oldest = seen.values().next().value;
+    if (oldest !== undefined) seen.delete(oldest);
+  }
+  return true;
 }

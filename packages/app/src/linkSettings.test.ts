@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   DEFAULT_LINK_SETTINGS,
-  newApprovals,
+  firstSighting,
   parseLinkSettings,
   shouldRing,
 } from "./linkSettings";
@@ -33,20 +33,18 @@ test("off screen, each reason follows its own switch", () => {
   expect(shouldRing("finished", false, settings)).toBe(false);
 });
 
-test("an approval rings once, not on every re-render or reconnect", () => {
+test("an approval rings once, not again when a reconnect restates it", () => {
   const seen = new Set<string>();
-  const ask = { requestId: "r1", sessionId: "s1", title: "Run npm test" };
-  expect(newApprovals(seen, [ask])).toEqual([ask]);
-  // A reconnect restates every open request; that is not a new one.
-  expect(newApprovals(seen, [ask])).toEqual([]);
+  expect(firstSighting(seen, "r1")).toBe(true);
+  expect(firstSighting(seen, "r1")).toBe(false);
+  expect(firstSighting(seen, "r2")).toBe(true);
 });
 
-test("answered requests are forgotten, so the set never grows", () => {
+test("the memory of seen approvals stays bounded", () => {
   const seen = new Set<string>();
-  newApprovals(seen, [
-    { requestId: "r1", sessionId: "s1", title: "a" },
-    { requestId: "r2", sessionId: "s2", title: "b" },
-  ]);
-  newApprovals(seen, [{ requestId: "r2", sessionId: "s2", title: "b" }]);
-  expect([...seen]).toEqual(["r2"]);
+  for (let i = 0; i < 300; i++) firstSighting(seen, `r${i}`);
+  expect(seen.size).toBe(256);
+  // The oldest went first; the newest is still remembered.
+  expect(seen.has("r0")).toBe(false);
+  expect(firstSighting(seen, "r299")).toBe(false);
 });

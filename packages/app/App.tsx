@@ -43,10 +43,9 @@ import { dockHeightFor, recordDockHeight, type DockHeights } from "./src/dockHei
 import { finishedNotice } from "./src/notificationPolicy";
 import {
   DEFAULT_LINK_SETTINGS,
-  newApprovals,
+  firstSighting,
   shouldRing,
   type LinkSettings,
-  type PendingApproval,
 } from "./src/linkSettings";
 import { loadLinkSettings, saveLinkSettings } from "./src/preferences";
 import * as PewLink from "./modules/pew-link";
@@ -499,10 +498,29 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
     void notify(notice);
   }, []);
 
+  /**
+   * An agent somewhere is blocked on an approval. With pew2 off screen it rings,
+   * because nothing else will tell anyone and the agent waits until then. Each
+   * request rings once: a reconnect restates every open one.
+   */
+  const seenApprovals = useRef(new Set<string>());
+  const announceApproval = useCallback(
+    (approval: { requestId: string; sessionId: string; title: string }) => {
+      if (!firstSighting(seenApprovals.current, approval.requestId)) return;
+      if (!shouldRing("approval", foreground.current, linkSettingsRef.current)) return;
+      const rang = PewLink.ring(`approval:${approval.requestId}`, "Approval needed", approval.title, approval.sessionId);
+      if (rang) return;
+      console.warn("[pew2] could not ring for an approval; notifying instead");
+      void notify({ title: "Approval needed", body: approval.title, sessionId: approval.sessionId });
+    },
+    [],
+  );
+
   // The relay identifies devices by this, and it must match the id baked into
   // the stored pairing URL or the two look like different clients.
   const daemon = useDaemon(pairing.url, pairing.deviceId, pairing.key, {
     onTurnFinished: announceTurn,
+    onApprovalNeeded: announceApproval,
     // Supplied from here because obtaining it calls into the Expo SDK, which
     // `useDaemon` deliberately stays clear of. What it buys: the daemon can
     // announce a finished turn even after iOS has suspended this app and taken
@@ -823,32 +841,6 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
     }
     lastPermissionId.current = requestId;
   }, [daemon.permission]);
-
-  // An agent somewhere is blocked on an approval and pew2 is not on screen:
-  // ring, because nothing else will tell anyone and the agent waits until then.
-  // Every open request across conversations, not just the one on screen, and
-  // each rings once — a reconnect restates them all.
-  const seenApprovals = useRef(new Set<string>());
-  useEffect(() => {
-    const open: PendingApproval[] = [];
-    for (const session of daemon.sessions) {
-      if (session.permission) {
-        open.push({ requestId: session.permission.requestId, sessionId: session.id, title: session.permission.title });
-      }
-    }
-    const current = daemon.permission;
-    if (current && daemon.sessionId && !open.some((approval) => approval.requestId === current.requestId)) {
-      open.push({ requestId: current.requestId, sessionId: daemon.sessionId, title: current.title });
-    }
-    for (const approval of newApprovals(seenApprovals.current, open)) {
-      if (!shouldRing("approval", foreground.current, linkSettingsRef.current)) continue;
-      const rang = PewLink.ring(`approval:${approval.requestId}`, "Approval needed", approval.title, approval.sessionId);
-      if (!rang) {
-        console.warn("[pew2] could not ring for an approval; notifying instead");
-        void notify({ title: "Approval needed", body: approval.title, sessionId: approval.sessionId });
-      }
-    }
-  }, [daemon.sessions, daemon.permission, daemon.sessionId]);
 
   useBackgroundLink({
     enabled: linkSettings.background,

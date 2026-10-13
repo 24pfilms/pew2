@@ -565,6 +565,14 @@ interface DaemonOptions {
    * it keeps raising the local banner instead of going silent.
    */
   onPushRegistered?: (registered: boolean) => void;
+  /**
+   * An agent is blocked on an approval, in any conversation.
+   *
+   * Called as the request arrives, and again for each one a reconnect
+   * restates — so the receiver dedupes by `requestId`. Called from the message
+   * handler rather than an effect so it still fires with the screen off.
+   */
+  onApprovalNeeded?: (approval: { requestId: string; sessionId: string; title: string }) => void;
 }
 
 /**
@@ -1480,6 +1488,20 @@ export function useDaemon(
           return;
         }
 
+        // An agent blocked on an approval, announced as the frame arrives for
+        // the same reason as a finished turn below: effects wait for the screen.
+        if (message.t === "session.event" && typeof message.sessionId === "string") {
+          const asked = readPermissionRequest(message.payload);
+          if (asked) {
+            console.log(`[pew2] approval needed: ${message.sessionId}`);
+            optionsRef.current.onApprovalNeeded?.({
+              requestId: asked.requestId,
+              sessionId: message.sessionId,
+              title: asked.title,
+            });
+          }
+        }
+
         let completedTurn: TurnFinished | undefined;
         if (message.t === "session.idle") {
           const finished: string = message.sessionId;
@@ -1496,6 +1518,14 @@ export function useDaemon(
             lastText,
             activeSessionId: sessionRef.current,
           };
+          // Announced from here, not from the effect that drains
+          // `completedTurns`: with the screen off React defers effects until
+          // the app comes back, so a finished turn rang only once someone had
+          // already opened the app to look. This handler runs as the frame
+          // arrives. Marked as announced so the effect does not repeat it.
+          console.log(`[pew2] turn finished: ${finished}`);
+          notifiedTurns.current.add(completedTurn);
+          onTurnFinished.current?.(completedTurn);
 
           // A turn just ended, so the agent may have written files: the
           // uncommitted count beside the composer is stale the instant it
