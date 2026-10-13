@@ -75,20 +75,16 @@ class RingActivity : Activity() {
     root.addView(label(text, 18f, "#C8C8CC").apply { maxLines = 6 })
     root.addView(spacer(64))
 
-    val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
-    buttons.addView(
-      button("Dismiss", "#F85149") {
+    // Stacked full-width rather than side by side: two buttons in a row were
+    // clipped at both ends on a phone screen. The one people want goes on top.
+    root.addView(button("Open", "#3FB950") { open(session) })
+    root.addView(spacer(16))
+    root.addView(
+      button("Close", "#F85149") {
         ringId?.let { PewLinkRinger.cancel(this, it) }
         finish()
       },
     )
-    buttons.addView(spacer(0).apply { layoutParams = LinearLayout.LayoutParams(dp(32), 1) })
-    buttons.addView(
-      button("Open", "#3FB950") {
-        open(session)
-      },
-    )
-    root.addView(buttons)
     setContentView(root)
 
     // The ring stops on its own after a while; so does this screen.
@@ -145,7 +141,9 @@ class RingActivity : Activity() {
           setColor(Color.parseColor(color))
           cornerRadius = dp(32).toFloat()
         }
-      layoutParams = LinearLayout.LayoutParams(dp(130), dp(64))
+      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(64))
+      minWidth = 0
+      minimumWidth = 0
       setOnClickListener { onClick() }
     }
 
