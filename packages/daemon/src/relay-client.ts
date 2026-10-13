@@ -53,6 +53,10 @@ export interface RelayClientOptions {
   admitDevice?: (deviceId: string) => { ok: boolean; message?: string };
   /** Injectable for tests. Defaults to the global WebSocket. */
   createSocket?: (url: string) => WebSocket;
+  /** Injectable for tests. Defaults to {@link HEARTBEAT_MS}. */
+  heartbeatMs?: number;
+  /** Injectable for tests. Defaults to {@link CONNECT_TIMEOUT_MS}. */
+  connectTimeoutMs?: number;
 }
 
 export type RelayStatus = "connecting" | "online" | "offline";
@@ -69,6 +73,26 @@ const MAX_BACKOFF_MS = 30_000;
 const HEARTBEAT_MS = 25_000;
 
 /**
+ * Heartbeats that may pass unanswered before the socket is presumed dead.
+ *
+ * The relay answers every ping, so a healthy link is heard from at least once
+ * per heartbeat. Two and a half allows for one lost pong and a slow one without
+ * holding a dead socket for minutes: a half-open TCP connection otherwise
+ * survives until the operating system gives up retransmitting, while the relay
+ * goes on admitting phones into a room whose daemon cannot hear them — and
+ * refuses this daemon's own fresh reconnect until it times the old one out.
+ */
+const SILENT_HEARTBEATS = 2.5;
+
+/**
+ * How long a connection attempt may take before it is abandoned.
+ *
+ * Opening is TCP, TLS and the upgrade — a few round trips. Ten seconds is well
+ * past any real one and well short of an operating-system connect timeout.
+ */
+const CONNECT_TIMEOUT_MS = 10_000;
+
+/**
  * The keepalive, in cleartext and byte-for-byte fixed.
  *
  * The relay answers this exact string from the Durable Object's hibernation
@@ -81,6 +105,9 @@ const HEARTBEAT_MS = 25_000;
  * the relay can already see the timing of every frame that passes through it.
  */
 export const KEEPALIVE_FRAME = '{"t":"ping"}';
+
+/** The relay's answer, which the LAN socket gives too. See `KEEPALIVE_RESPONSE` in the relay. */
+export const KEEPALIVE_REPLY = '{"t":"pong"}';
 
 export class RelayClient {
   private socket: WebSocket | null = null;
@@ -96,6 +123,9 @@ export class RelayClient {
   private stopped = false;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private heartbeat: ReturnType<typeof setInterval> | null = null;
+  private connectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** When the relay last sent anything at all — a pong counts. */
+  private lastHeardAt = 0;
 
   constructor(private readonly options: RelayClientOptions) {}
 
@@ -183,7 +213,17 @@ export class RelayClient {
     }
     this.socket = socket;
 
+    this.connectTimer = setTimeout(() => {
+      if (this.socket === socket && socket.readyState !== WebSocket.OPEN) {
+        this.abandon(socket, "connect timed out");
+      }
+    }, this.options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS);
+    this.connectTimer.unref?.();
+
     socket.onopen = () => {
+      if (this.connectTimer) clearTimeout(this.connectTimer);
+      this.connectTimer = null;
+      this.lastHeardAt = Date.now();
       this.attempts = 0;
       this.status("online");
       this.channel = new SecureChannel(e2e.fromHex(this.options.key), "daemon");
@@ -215,6 +255,8 @@ export class RelayClient {
     };
 
     socket.onmessage = (event) => {
+      // Anything at all — a pong included — shows the path is alive.
+      this.lastHeardAt = Date.now();
       const raw = typeof event.data === "string" ? event.data : null;
       if (raw === null || !this.channel) return;
 
@@ -363,7 +405,7 @@ export class RelayClient {
       // two sockets for one failure.
     };
 
-    socket.onclose = () => {
+    socket.onclose = (event?: { code?: number; reason?: string }) => {
       this.clearTimers();
       // Only tear down state that still belongs to *this* socket. `rekey`
       // closes the old one and immediately opens a new one, and `onclose`
@@ -373,20 +415,56 @@ export class RelayClient {
       if (this.socket !== socket) return;
       this.socket = null;
       this.channel = null;
-      this.scheduleRetry();
+      // The code says who ended it and why \u2014 the relay refusing a second
+      // daemon, a deploy, a network drop \u2014 which is what the log needs to
+      // explain a disconnect after the fact.
+      const code = event?.code;
+      this.scheduleRetry(
+        code ? `closed ${code}${event?.reason ? `: ${event.reason}` : ""}` : undefined,
+      );
     };
+  }
+
+  /**
+   * Give up on a socket that has stopped working without closing.
+   *
+   * A half-open connection never fires `close` on its own \u2014 that is the
+   * failure \u2014 so its handlers are dropped and the retry starts here, rather
+   * than waiting on a close event that may not come for minutes.
+   */
+  private abandon(socket: WebSocket, detail: string): void {
+    if (this.socket !== socket) return;
+    socket.onopen = null;
+    socket.onmessage = null;
+    socket.onerror = null;
+    socket.onclose = null;
+    this.clearTimers();
+    this.socket = null;
+    this.channel = null;
+    try {
+      socket.close();
+    } catch {
+      // Already closed; nothing to do.
+    }
+    this.scheduleRetry(detail);
   }
 
   private startHeartbeat() {
     this.clearHeartbeat();
+    const interval = this.options.heartbeatMs ?? HEARTBEAT_MS;
     this.heartbeat = setInterval(() => {
-      if (this.socket?.readyState !== WebSocket.OPEN) return;
+      const socket = this.socket;
+      if (socket?.readyState !== WebSocket.OPEN) return;
+      if (Date.now() - this.lastHeardAt > interval * SILENT_HEARTBEATS) {
+        this.abandon(socket, "no reply from relay");
+        return;
+      }
       try {
-        this.socket.send(KEEPALIVE_FRAME);
+        socket.send(KEEPALIVE_FRAME);
       } catch {
         // The socket is already gone; `close` fires and reconnection takes over.
       }
-    }, HEARTBEAT_MS);
+    }, interval);
     // Do not hold the process open for the sake of a keepalive.
     this.heartbeat.unref?.();
   }
@@ -398,6 +476,8 @@ export class RelayClient {
 
   private clearTimers() {
     this.clearHeartbeat();
+    if (this.connectTimer) clearTimeout(this.connectTimer);
+    this.connectTimer = null;
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.retryTimer = null;
   }

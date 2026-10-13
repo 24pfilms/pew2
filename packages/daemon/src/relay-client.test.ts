@@ -622,3 +622,72 @@ test("a phone that names no cursors is not sent a catch-up it never asked for", 
   expect(cursorsSeen).toEqual([{}]);
   relay.stop();
 });
+
+/** Statuses with their details, for the tests that care why. */
+function detailedClient(overrides: Partial<RelayClientOptions> = {}) {
+  const events: string[] = [];
+  const made = client({
+    onStatus: (status, detail) => events.push(detail ? `${status}: ${detail}` : status),
+    ...overrides,
+  });
+  return { ...made, events };
+}
+
+test("a relay that stops answering is abandoned rather than trusted for minutes", async () => {
+  // A half-open socket never fires close: the daemon went on believing it was
+  // connected while the relay admitted phones into a room it could not hear.
+  const { relay, events } = detailedClient({ heartbeatMs: 20 });
+  relay.start();
+  const first = FakeSocket.instances[0]!;
+  first.open();
+
+  await new Promise((r) => setTimeout(r, 20 * 2.5 + 40));
+
+  expect(events).toContain("offline: no reply from relay");
+  expect(first.readyState).toBe(3);
+  expect(relay.online).toBe(false);
+  relay.stop();
+});
+
+test("a relay that answers its pings keeps the connection", async () => {
+  const { relay, events } = detailedClient({ heartbeatMs: 20 });
+  relay.start();
+  const socket = FakeSocket.instances[0]!;
+  socket.open();
+
+  for (let i = 0; i < 8; i++) {
+    await new Promise((r) => setTimeout(r, 15));
+    socket.receive({ t: "pong" });
+  }
+
+  expect(events.filter((e) => e.startsWith("offline"))).toEqual([]);
+  expect(relay.online).toBe(true);
+  relay.stop();
+});
+
+test("a connection that never opens is given up on", async () => {
+  const { relay, events } = detailedClient({ connectTimeoutMs: 20 });
+  relay.start();
+
+  await new Promise((r) => setTimeout(r, 60));
+
+  expect(events).toContain("offline: connect timed out");
+  expect(FakeSocket.instances[0]!.readyState).toBe(3);
+  relay.stop();
+});
+
+test("a close says why, so the log can explain the disconnect", () => {
+  const { relay, events } = detailedClient();
+  relay.start();
+  const socket = FakeSocket.instances[0]!;
+  socket.open();
+
+  socket.readyState = 3;
+  (socket.onclose as unknown as (event: { code: number; reason: string }) => void)({
+    code: 4009,
+    reason: "another daemon holds this room",
+  });
+
+  expect(events).toContain("offline: closed 4009: another daemon holds this room");
+  relay.stop();
+});
