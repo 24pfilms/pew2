@@ -10,34 +10,27 @@
  * Stage "launch pad" at the bottom: hold Ken until the dot ring fills.
  */
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { AccessibilityInfo, Alert, Modal, Pressable, StyleSheet, Text, TextInput, View, useWindowDimensions, type TextInputProps } from "react-native";
+import { Alert, Modal, StyleSheet, Text, View } from "react-native";
 import Reanimated, {
-  cancelAnimation,
   Easing,
   FadeIn,
   FadeInDown,
   FadeOut,
-  LinearTransition,
   runOnJS,
-  useAnimatedReaction,
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
   withTiming,
-  ZoomIn,
-  ZoomOut,
 } from "react-native-reanimated";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardAwareScrollView, KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
-import Ionicons from "@expo/vector-icons/Ionicons";
 import { theme } from "../theme";
 import { haptics } from "./haptics";
 import { CircleButton } from "./controls";
 import { DotGlyph } from "./stage/DotGlyph";
 import { FolderPicker } from "./FolderPicker";
 import { Led } from "./stage/Led";
-import { dashedOutline } from "./stage/DashedRule";
 import { StageButton } from "./stage/StageButton";
 import { Pew } from "../pew/Pew";
 import { AgentColorProvider } from "./stage/agentColor";
@@ -46,12 +39,16 @@ import { suggestGoalName } from "../goalsAgent";
 import type { GoalResult, GoalSummary } from "../ggState";
 import type { WorkspaceBrowse } from "../useDaemon";
 import { EASE_OUT } from "./motion/ease";
-import { DUR, SPRING } from "../motion";
+import { DUR } from "../motion";
 import { addAttachments, MAX_ATTACHMENTS, toWireAttachments, type PendingAttachment, type WireAttachment } from "../attachments";
 import { pickFiles } from "./attachmentPicker";
 import { LaunchFx, type LaunchFxValues } from "./LaunchFx";
 import { sounds } from "./sounds";
-import { BURST_MIN_S, fxKenScale, fxShake, RING_DOTS, RING_SCALE, type FxScene } from "../launchFx";
+import { BURST_MIN_S, type FxScene } from "../launchFx";
+import { LaunchPad, COVER_LAG_S, usePlainLaunch } from "./GoalLaunchPad";
+import { CHIP_LAYOUT, CONTEXT_MAX, ContextChips, GOAL_MAX, INSTRUCTIONS_MAX, INSTRUCTIONS_PLACEHOLDER, NAME_MAX, StageInput } from "./goalForm";
+// The form pieces moved to `goalForm.tsx`; re-exported so goal settings keeps importing them from here.
+export { CHIP_LAYOUT, CONTEXT_MAX, ContextChips, Field, GOAL_MAX, INSTRUCTIONS_MAX, INSTRUCTIONS_PLACEHOLDER, NAME_MAX, StageInput } from "./goalForm";
 
 interface NewGoalSheetProps {
   visible: boolean;
@@ -516,270 +513,10 @@ function NewGoalScreen({ visible, onClose, onCreate, results, onCreated, browse,
   );
 }
 
-export const NAME_MAX = 15;
-export const GOAL_MAX = 2000;
-export const CONTEXT_MAX = 20;
-export const INSTRUCTIONS_MAX = 4000;
-export const INSTRUCTIONS_PLACEHOLDER = "Keep the current design. Ask before adding dependencies.";
-
-export function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
-  return (
-    <View style={styles.field}>
-      <Led tone="dim">{label}</Led>
-      {hint ? <Text style={styles.hint} numberOfLines={2}>{hint}</Text> : null}
-      {children}
-    </View>
-  );
-}
-
-/** Text input on the surface with the composer border; focus lights it GG Goals purple. */
-export function StageInput(props: TextInputProps) {
-  const [focused, setFocused] = useState(false);
-  return (
-    <TextInput
-      placeholderTextColor={theme.composer.placeholder}
-      {...props}
-      editable={props.editable}
-      style={[styles.input, focused && styles.inputFocused, props.editable === false && styles.inputOff, props.style]}
-      onFocus={(e) => {
-        setFocused(true);
-        props.onFocus?.(e);
-      }}
-      onBlur={(e) => {
-        setFocused(false);
-        props.onBlur?.(e);
-      }}
-    />
-  );
-}
-
-/** Chosen context (folders and files) as dashed chips; tap × to remove. */
-export function ContextChips({
-  chosen,
-  onChange,
-  disabled,
-  phoneFiles = [],
-  onRemovePhoneFile,
-}: {
-  chosen: readonly string[];
-  onChange: (next: string[]) => void;
-  disabled?: boolean;
-  /** Files picked on this phone, shown in the same row (sent with the goal). */
-  phoneFiles?: readonly PendingAttachment[];
-  onRemovePhoneFile?: (id: string) => void;
-}) {
-  const reduce = useReducedMotion();
-  if (chosen.length === 0 && phoneFiles.length === 0) return null;
-  return (
-    // Each chip springs in where it lands and shrinks away when removed; the
-    // others slide to close the gap. The row's own height change is animated
-    // by the caller's layout transition, so what's under it glides too.
-    <Reanimated.View
-      style={styles.chips}
-      entering={reduce ? undefined : FadeIn.duration(180)}
-      exiting={reduce ? undefined : FadeOut.duration(160)}
-      layout={reduce ? undefined : CHIP_LAYOUT}
-    >
-      {chosen.map((path) => (
-        <Reanimated.View
-          key={path}
-          style={[styles.chip, dashedOutline]}
-          entering={reduce ? undefined : ZoomIn.duration(SPRING.arrive.duration).easing(EASE_OUT)}
-          exiting={reduce ? undefined : ZoomOut.duration(160)}
-          layout={reduce ? undefined : CHIP_LAYOUT}
-        >
-          <Text style={styles.chipText} numberOfLines={1}>{path.split("/").filter(Boolean).pop() ?? path}</Text>
-          {disabled ? null : (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`Remove ${path}`}
-              hitSlop={10}
-              onPress={() => {
-                haptics.tap();
-                onChange(chosen.filter((entry) => entry !== path));
-              }}
-            >
-              <Ionicons name="close" size={13} color={theme.color.textDim} />
-            </Pressable>
-          )}
-        </Reanimated.View>
-      ))}
-      {phoneFiles.map((file) => (
-        <Reanimated.View
-          key={file.id}
-          style={[styles.chip, dashedOutline]}
-          entering={reduce ? undefined : ZoomIn.duration(SPRING.arrive.duration).easing(EASE_OUT)}
-          exiting={reduce ? undefined : ZoomOut.duration(160)}
-          layout={reduce ? undefined : CHIP_LAYOUT}
-        >
-          <Ionicons name="phone-portrait-outline" size={12} color={theme.color.textDim} />
-          <Text style={styles.chipText} numberOfLines={1}>{file.name}</Text>
-          {disabled || !onRemovePhoneFile ? null : (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`Remove ${file.name}`}
-              hitSlop={10}
-              onPress={() => {
-                haptics.tap();
-                onRemovePhoneFile(file.id);
-              }}
-            >
-              <Ionicons name="close" size={13} color={theme.color.textDim} />
-            </Pressable>
-          )}
-        </Reanimated.View>
-      ))}
-    </Reanimated.View>
-  );
-}
-
-/** One spring for everything that moves to make room (chips, the list below). */
-export const CHIP_LAYOUT = LinearTransition.duration(SPRING.settle.duration).easing(EASE_OUT);
-
-/** True when the user wants motion off or uses a screen reader: offer a plain button instead of hold. */
-function usePlainLaunch(): boolean {
-  const reduce = useReducedMotion();
-  const [reader, setReader] = useState(false);
-  useEffect(() => {
-    const sub = AccessibilityInfo.addEventListener("screenReaderChanged", setReader);
-    void AccessibilityInfo.isScreenReaderEnabled().then(setReader);
-    return () => sub.remove();
-  }, []);
-  return reduce || reader;
-}
-
-/** How long into the blast the canvas has certainly painted its cover. */
-const COVER_LAG_S = 0.07;
-/** A full hold, start to blast. Long enough to feel the build. */
-const HOLD_MS = 1600;
 /** The opening onto the session. */
 const REVEAL_MS = 900;
 /** A beat for the goal's session to mount behind the cover before it opens. */
 const SESSION_MOUNT_MS = 260;
-const KEN_SIZE = 180;
-/** The globe fills about 60% of Pew's box. */
-const KEN_RADIUS = KEN_SIZE * 0.3;
-const RING_BOX = Math.ceil(KEN_RADIUS * RING_SCALE * 2 + 48);
-
-/**
- * The launch step's hold area: everything under the title. Hold anywhere and
- * Ken charges (the ring of dots and the streaming particles are LaunchFx's,
- * drawn round where he sits); let go early and it drains; hold to the end and
- * he blows. With Reduce Motion or a screen reader it is a plain button.
- */
-function LaunchPad({ ready, pending, plain, fx, onFire, onLaunch, onScene }: {
-  ready: boolean;
-  pending: boolean;
-  plain: boolean;
-  fx: LaunchFxValues;
-  onFire: () => void;
-  onLaunch: () => void;
-  onScene: (scene: FxScene) => void;
-}) {
-  const [holding, setHolding] = useState(false);
-  const ken = useRef<View>(null);
-  // Loaded as the step opens, so the first hold is not a beat late.
-  useEffect(() => sounds.preload(["charge", "drain", "burst", "reveal"]), []);
-  const { width, height } = useWindowDimensions();
-  const measure = useCallback(() => {
-    ken.current?.measureInWindow((x, y, w, h) => {
-      if (w > 0) onScene({ w: width, h: height, cx: x + w / 2, cy: y + h / 2, kenR: KEN_RADIUS });
-    });
-  }, [width, height, onScene]);
-  useEffect(() => {
-    if (!pending) setHolding(false);
-  }, [pending]);
-
-  // Haptics climb with the charge: sparse soft taps, then every other dot,
-  // then a rigid tick on every dot in the last stretch.
-  const felt = useCallback((n: number) => {
-    if (n >= RING_DOTS) return;
-    if (n >= 17) haptics.detent();
-    else if (n >= 9 ? n % 2 === 0 : n % 4 === 0) haptics.poke();
-  }, []);
-  useAnimatedReaction(
-    () => Math.floor(fx.charge.value * RING_DOTS),
-    (now, prev) => {
-      if (prev !== null && now > prev && fx.burst.value < 0) runOnJS(felt)(now);
-    },
-    [felt],
-  );
-
-  const press = () => {
-    if (plain || pending || fx.burst.value >= 0) return;
-    if (!ready) {
-      haptics.warned();
-      return;
-    }
-    measure();
-    setHolding(true);
-    haptics.tap();
-    if (!plain) sounds.charge(fx.charge.value, HOLD_MS);
-    const { charge, burst } = fx;
-    charge.value = withTiming(1, { duration: HOLD_MS * (1 - charge.value), easing: Easing.linear }, (done) => {
-      if (!done) return;
-      // The blast starts here, on the UI thread, on the very frame the charge
-      // completes; React hears about it after.
-      burst.value = 0;
-      runOnJS(onFire)();
-    });
-  };
-  const release = () => {
-    if (plain || fx.burst.value >= 0) return;
-    setHolding(false);
-    if (fx.charge.value > 0.02) {
-      sounds.stop("charge", 60);
-      sounds.play("drain");
-    }
-    cancelAnimation(fx.charge);
-    fx.charge.value = withTiming(0, { duration: DUR.dissolve, easing: EASE_OUT });
-  };
-
-  // `EXPO_PUBLIC_DEV_LAUNCH_DEMO=1` (development only): holds Ken by itself
-  // a moment after the step opens, for recording the launch on a simulator,
-  // which cannot hold a finger down.
-  useEffect(() => {
-    if (!__DEV__ || process.env.EXPO_PUBLIC_DEV_LAUNCH_DEMO !== "1" || !ready || !onScene) return;
-    const t = setTimeout(press, 2500);
-    return () => clearTimeout(t);
-    // Dev-only demo, armed once when the step is ready: `press` is recreated
-    // every render and would reset the 2.5s timer on each one.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready]);
-
-  const kenStyle = useAnimatedStyle(() => {
-    const c = fx.charge.value;
-    const t = fx.clock.value;
-    return {
-      opacity: fx.burst.value >= COVER_LAG_S ? 0 : 1,
-      transform: [{ translateX: fxShake(t, c) }, { translateY: fxShake(t + 0.37, c) * 0.6 }, { scale: fxKenScale(c) }],
-    };
-  });
-
-  const caption = pending ? "Launching" : ready ? (holding ? "Keep holding" : "Hold anywhere here") : "Name and goal first";
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel="Hold to launch goal"
-      accessibilityState={{ disabled: !ready }}
-      onPressIn={press}
-      onPressOut={release}
-      style={[styles.pad, !ready && !pending && styles.padOff]}
-    >
-      <View style={styles.ring}>
-        <Reanimated.View style={kenStyle}>
-          <View ref={ken} collapsable={false} onLayout={measure}>
-            <Pew size={KEN_SIZE} mood={holding || pending ? "working" : "happy"} color={KEN_COLOR} accessibilityLabel="Ken" />
-          </View>
-        </Reanimated.View>
-      </View>
-      <Led tone={ready ? "agent" : "dim"} color={ready ? KEN_COLOR : undefined} numberOfLines={1}>{caption}</Led>
-      {plain && (
-        <StageButton color={KEN_COLOR} disabled={!ready} feel="sent" label={pending ? "Launching…" : "Launch goal"} onPress={onLaunch} />
-      )}
-    </Pressable>
-  );
-}
 
 /** Close + Back on the left, Next on the right. */
 const BAR_SIDE = 40 + theme.space(2) + 40;
@@ -806,30 +543,8 @@ const styles = StyleSheet.create({
   wide: { alignSelf: "stretch", gap: theme.space(3) },
   goal: { alignSelf: "stretch", minHeight: 140, textAlignVertical: "top" },
   multi: { alignSelf: "stretch", minHeight: 120, textAlignVertical: "top" },
-  field: { gap: theme.space(2) },
-  hint: { color: theme.color.textDim, fontSize: theme.font.small },
-  input: {
-    minHeight: theme.size.touch,
-    borderRadius: theme.composer.radius,
-    borderWidth: 1,
-    borderColor: theme.composer.border,
-    backgroundColor: theme.composer.fill,
-    color: theme.color.text,
-    fontSize: theme.font.body,
-    paddingHorizontal: theme.space(3),
-    paddingVertical: theme.space(2.5),
-  },
-  inputFocused: { borderColor: KEN_COLOR },
-  inputOff: { opacity: 0.5 },
-  chips: { flexDirection: "row", flexWrap: "wrap", gap: theme.space(2) },
-  chip: { flexDirection: "row", alignItems: "center", gap: theme.space(1.5), maxWidth: "100%", paddingHorizontal: theme.space(3), paddingVertical: theme.space(1.5), borderRadius: theme.radius.pill },
-  chipText: { flexShrink: 1, color: theme.color.text, fontSize: theme.font.small },
   error: { color: theme.color.danger, fontSize: theme.font.small },
   errorCentred: { textAlign: "center", alignSelf: "stretch", lineHeight: 20 },
-  // The hold area: everything under the title, so a thumb can't miss it.
-  pad: { flex: 1, alignSelf: "stretch", alignItems: "center", justifyContent: "center", gap: theme.space(4) },
-  padOff: { opacity: 0.45 },
-  ring: { width: RING_BOX, height: RING_BOX, alignItems: "center", justifyContent: "center" },
   launchHead: { alignItems: "center", gap: theme.space(2), paddingHorizontal: theme.gutter, paddingTop: theme.space(6) },
   launching: { position: "absolute", left: 0, right: 0, bottom: theme.space(24), alignItems: "center" },
   pressed: { opacity: 0.7 },
