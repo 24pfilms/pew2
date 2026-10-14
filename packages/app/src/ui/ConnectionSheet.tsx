@@ -1,4 +1,5 @@
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { Alert, Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { StageScroll } from "./stage/StageScroll";
 import { Sheet } from "./Sheet";
 import { PrivacyLink } from "./PrivacyLink";
 import { haptics } from "./haptics";
@@ -41,7 +42,7 @@ export function ConnectionSheet({ visible, machineLabel, machineRemote, status, 
   const { height: screenHeight } = useWindowDimensions();
   const title = status === "online" ? "Connected" : status === "connecting" ? "Connecting…" : "Offline";
   return <Sheet visible={visible} label="Connection" labelTone={status === "connecting" ? "attention" : "agent"} pewMood={status === "online" ? "happy" : status === "connecting" ? "thinking" : "sleepy"} title={title} onClose={onClose} dismissLabel="Close connection details">
-    <ScrollView style={[styles.scroll, { maxHeight: Math.round(screenHeight * 0.75) }]} contentContainerStyle={styles.content}>
+    <StageScroll style={[styles.scroll, { maxHeight: Math.round(screenHeight * 0.75) }]} contentContainerStyle={styles.content}>
       <Handshake phase={PHASE[status]} />
       <DashedRule />
       <Row label="Computer" index={0}>
@@ -67,7 +68,7 @@ export function ConnectionSheet({ visible, machineLabel, machineRemote, status, 
           { text: "Forget", style: "destructive", onPress: () => { haptics.warned(); onUnpair(); } },
         ]);
       }}><Text style={styles.destructive}>Unpair this computer</Text></Pressable>
-    </ScrollView>
+    </StageScroll>
   </Sheet>;
 }
 const styles = StyleSheet.create({

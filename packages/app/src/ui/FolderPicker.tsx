@@ -5,7 +5,8 @@
  */
 import { Dissolve } from "./motion/Dissolve";
 import { memo, useCallback, useEffect, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
+import { StageScroll } from "./stage/StageScroll";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import Reanimated, { FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
 import { useReducedMotion } from "./useReducedMotion";
@@ -170,7 +171,7 @@ function FolderPickerView({ chosen, onChange, browse, onBrowse: browseTo, online
             </Pressable>
           ) : null}
         </View>
-        <ScrollView style={styles.list} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+        <StageScroll rail="inside" style={styles.list} nestedScrollEnabled keyboardShouldPersistTaps="handled">
           {/* Keyed by mode: switching tabs dissolves the old list out and the
               new one in, rather than swapping rows in place. */}
           <Reanimated.View key={mode} entering={reduce ? undefined : FadeIn.duration(200)} exiting={reduce ? undefined : FadeOut.duration(120)}>
@@ -219,7 +220,7 @@ function FolderPickerView({ chosen, onChange, browse, onBrowse: browseTo, online
                     : "Nothing here"}
             </Led>
           )}
-        </ScrollView>
+        </StageScroll>
         </>
         )}
       </View>

@@ -262,8 +262,10 @@ describe("sleeping styles", () => {
 // is *defined*, so one declared further down the file is captured as
 // undefined and crashes only on a device ("talkOpen is not a function"). The
 // JS-thread tests can't see that, so the ordering is checked from the source.
-test("no worklet calls a helper declared below it", () => {
-  const raw = readFileSync(join(import.meta.dir, "engine.ts"), "utf8");
+// Per file: the engine is split in two, and an import is always evaluated
+// before the importing file defines anything, so only same-file order matters.
+test.each(["engineBody.ts", "enginePaint.ts"])("no worklet in %s calls a helper declared below it", (file) => {
+  const raw = readFileSync(join(import.meta.dir, file), "utf8");
   const src = raw
     .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
     .replace(/\/\/[^\n]*/g, "")

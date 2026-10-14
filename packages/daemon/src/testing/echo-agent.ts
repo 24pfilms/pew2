@@ -92,7 +92,7 @@ const app = agent({ name: "pew2-echo" })
     agentInfo: { name: "pew2-echo", title: "Echo", version: "0.1.0" },
     authMethods: [],
   }))
-  .onRequest("session/new", async (ctx: any) => {
+  .onRequest("session/new", async (ctx) => {
     const sessionId = `echo_${++counter}`;
     sessions.add(sessionId);
     sessionCwd.set(sessionId, (ctx.params as { cwd?: string })?.cwd ?? "");
@@ -101,7 +101,7 @@ const app = agent({ name: "pew2-echo" })
   // A persisted conversation that exists before the phone opens it. It omits
   // optional count metadata so the daemon must inspect its replay, as it does
   // for existing GG Coder sessions.
-  .onRequest("session/list", async (ctx: any) => ({
+  .onRequest("session/list", async (ctx) => ({
     sessions: [
       {
         sessionId: "echo_history_1",
@@ -111,7 +111,7 @@ const app = agent({ name: "pew2-echo" })
       },
     ],
   }))
-  .onRequest("session/load", async (ctx: any) => {
+  .onRequest("session/load", async (ctx) => {
     const { sessionId } = ctx.params as { sessionId: string };
     if (sessionId !== "echo_history_1") throw new Error(`Unknown session '${sessionId}'`);
     const replay = [
@@ -130,7 +130,7 @@ const app = agent({ name: "pew2-echo" })
     }
     return { configOptions };
   })
-  .onRequest("session/set_config_option", async (ctx: any) => {
+  .onRequest("session/set_config_option", async (ctx) => {
     const { configId, value } = ctx.params as { configId: string; value: string };
     const option = configOptions.find((entry) => entry.id === configId);
     if (!option) throw new Error(`Unknown config option '${configId}'`);
@@ -145,11 +145,11 @@ const app = agent({ name: "pew2-echo" })
   })
   // A notification, not a request: cancellation is fire-and-forget in ACP, and
   // the turn answers for it by returning `cancelled` as its stop reason.
-  .onNotification("session/cancel", async (ctx: any) => {
+  .onNotification("session/cancel", async (ctx) => {
     const { sessionId } = (ctx.params ?? {}) as { sessionId?: string };
     if (sessionId) cancelled.add(sessionId);
   })
-  .onRequest("session/prompt", async (ctx: any) => {
+  .onRequest("session/prompt", async (ctx) => {
     const { sessionId, prompt } = ctx.params as {
       sessionId: string;
       prompt: { type: string; text?: string }[];

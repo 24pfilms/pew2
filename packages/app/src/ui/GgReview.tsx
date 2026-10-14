@@ -5,7 +5,8 @@
  * Rules live in `ggReview.ts` (Expo-free, tested).
  */
 import { memo, useEffect, useRef, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { StageScroll } from "./stage/StageScroll";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { theme } from "../theme";
 import { haptics } from "./haptics";
@@ -83,7 +84,7 @@ function PlanReviewSheetView({
       dismissLabel="Decide later"
       onClose={() => setDeferred(plan?.generation)}
     >
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
+      <StageScroll style={styles.scroll} contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
         {doc.steps.length > 0 ? (
           <>
             <Text style={styles.sub} numberOfLines={1}>{`${doc.steps.length} step${doc.steps.length === 1 ? "" : "s"}`}</Text>
@@ -133,7 +134,7 @@ function PlanReviewSheetView({
           />
           <StageButton compact kind="danger" style={styles.half} disabled={busy} feel="none" label="Reject" onPress={() => decide("reject")} />
         </View>
-      </ScrollView>
+      </StageScroll>
     </Sheet>
   );
 }
@@ -300,7 +301,7 @@ function ChecklistSheetView({
   let row = 0;
   return (
     <Sheet visible={visible} label="Checklist" title={items ? `${passing} of ${counted} passing` : "Checklist"} onClose={onClose}>
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.body}>
+      <StageScroll style={styles.scroll} contentContainerStyle={styles.body}>
         {error ? <Text style={styles.dimText}>{error}</Text> : null}
         {!items && !error ? <Text style={styles.dimText}>Loading…</Text> : null}
         {bands.map((b) => (
@@ -315,7 +316,7 @@ function ChecklistSheetView({
             </View>
           </View>
         ))}
-      </ScrollView>
+      </StageScroll>
     </Sheet>
   );
 }

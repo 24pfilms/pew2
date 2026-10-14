@@ -4,7 +4,8 @@
  * refuses an update mid-run; its error is shown.
  */
 import { memo, useEffect, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
+import { StageScroll } from "./stage/StageScroll";
 import { theme } from "../theme";
 import { haptics } from "./haptics";
 import { StageButton } from "./stage/StageButton";
@@ -110,7 +111,7 @@ function GoalSettingsSheetView({ visible, goal, state, onAction, results, modelO
     // GG Goals' purple for everything lit here, the sheet's strip included.
     <AgentColorProvider value={KEN_COLOR}>
     <Sheet visible={visible} label="Goal settings" title={goal?.name ?? "Goal"} onClose={onClose}>
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
+      <StageScroll style={styles.scroll} contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
         {working ? <Text style={styles.locked} numberOfLines={1}>Pause the goal to change its settings</Text> : null}
         <Field label="Instructions">
           <StageInput
@@ -158,7 +159,7 @@ function GoalSettingsSheetView({ visible, goal, state, onAction, results, modelO
         {error ? <Text style={styles.error}>{error}</Text> : null}
         {/* save() plays the haptic. */}
         <StageButton color={KEN_COLOR} disabled={!canSave} feel="none" label={pending.length > 0 ? "Saving…" : "Save"} onPress={save} />
-      </ScrollView>
+      </StageScroll>
     </Sheet>
     </AgentColorProvider>
   );

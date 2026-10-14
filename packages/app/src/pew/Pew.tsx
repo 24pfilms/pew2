@@ -16,10 +16,10 @@
  * Decorative by default (hidden from assistive tech); pass
  * `accessibilityLabel` when it carries meaning on its own.
  */
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import { StyleSheet, View, type StyleProp, type ViewStyle } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import { BlurStyle, Canvas, Picture, Skia, type SkPicture } from "@shopify/react-native-skia";
+import { BlurStyle, Canvas, Picture, Skia, type SkCanvas, type SkPicture } from "@shopify/react-native-skia";
 import { runOnJS, runOnUI, useFrameCallback, useSharedValue, type FrameInfo, type SharedValue } from "react-native-reanimated";
 import { haptics } from "../ui/haptics";
 import { useAppActive } from "../ui/useAppActive";
@@ -41,6 +41,7 @@ import {
   type RGB,
 } from "./engine";
 import { pewPalette } from "./palette";
+import { beginFrame, blankPicture, endFrame } from "../ui/skiaFrame";
 
 export interface PewProps {
   /** Edge of its square box, in points. */
@@ -97,6 +98,8 @@ interface PewTools {
   stroke: ReturnType<typeof Skia.Paint>;
   col: Float32Array;
   blurs: Record<number, ReturnType<typeof Skia.MaskFilter.MakeBlur>>;
+  /** One path, reset per shape: a recorded picture keeps its own copy. */
+  shape: ReturnType<typeof Skia.Path.Make>;
 }
 
 function pewTools(): PewTools {
@@ -112,14 +115,14 @@ function pewTools(): PewTools {
   stroke.setAntiAlias(true);
   stroke.setStyle(1); // Stroke
   stroke.setStrokeCap(1); // Round
-  g.__pewTools = { fill, halo, stroke, col: new Float32Array(4), blurs: {} };
+  g.__pewTools = { fill, halo, stroke, col: new Float32Array(4), blurs: {}, shape: Skia.Path.Make() };
   return g.__pewTools;
 }
 
 /** Paints one recorded frame through Skia. */
-function skiaPainter(canvas: ReturnType<ReturnType<typeof Skia.PictureRecorder>["beginRecording"]>): PewPainter {
+function skiaPainter(canvas: SkCanvas): PewPainter {
   "worklet";
-  const { fill, halo, stroke, col, blurs } = pewTools();
+  const { fill, halo, stroke, col, blurs, shape } = pewTools();
   // Writes the colour into the shared array; setColor copies it on the call.
   const color = (c: RGB, a: number) => {
     col[0] = c[0] / 255;
@@ -141,7 +144,8 @@ function skiaPainter(canvas: ReturnType<ReturnType<typeof Skia.PictureRecorder>[
     return (blurs[k] ??= Skia.MaskFilter.MakeBlur(BlurStyle.Normal, k, true));
   };
   const path = (pts: number[], close: boolean) => {
-    const p = Skia.Path.Make();
+    const p = shape;
+    p.reset();
     p.moveTo(pts[0]!, pts[1]!);
     for (let i = 2; i < pts.length; i += 2) p.lineTo(pts[i]!, pts[i + 1]!);
     if (close) p.close();
@@ -204,18 +208,12 @@ function skiaPainter(canvas: ReturnType<ReturnType<typeof Skia.PictureRecorder>[
   };
 }
 
-function emptyPicture(S: number): SkPicture {
-  const recorder = Skia.PictureRecorder();
-  recorder.beginRecording(Skia.XYWHRect(0, 0, S, S));
-  return recorder.finishRecordingAsPicture();
-}
-
+/** One frame, recorded with the runtime's shared recorder (see `skiaFrame.ts`). */
 function recordFrame(body: PewBody, t: number, mood: PewMood, pal: PewPalette): SkPicture {
   "worklet";
-  const recorder = Skia.PictureRecorder();
-  const canvas = recorder.beginRecording(Skia.XYWHRect(0, 0, body.S, body.S));
+  const canvas = beginFrame(body.S, body.S);
   paintPew(body, t, mood, pal, skiaPainter(canvas));
-  return recorder.finishRecordingAsPicture();
+  return endFrame();
 }
 
 interface TickerProps {
@@ -313,7 +311,8 @@ function PewView({ size, mood = "idle", color, interactive: interactiveProp = fa
   const moodSV = useSharedValue<PewMood>(mood);
   const paletteSV = useSharedValue<PewPalette>(palette);
   const shownPal = useSharedValue<PewPalette | null>(null);
-  const picture = useSharedValue<SkPicture>(useState(() => emptyPicture(S))[0]);
+  // The app-wide blank, never one of its own: see skiaFrame.ts (the crash).
+  const picture = useSharedValue<SkPicture>(blankPicture());
   const clock = useSharedValue(0);
   const sinceDraw = useSharedValue(1);
 

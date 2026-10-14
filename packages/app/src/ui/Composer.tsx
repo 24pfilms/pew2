@@ -15,6 +15,7 @@ import { Pixel } from "./stage/Pixel";
 import { StageChip } from "./StageChip";
 import { theme } from "../theme";
 import { haptics } from "./haptics";
+import { sounds } from "./sounds";
 import { CommandToken } from "./CommandToken";
 import { splitCommand } from "../slashCommands";
 import { AttachmentChips } from "./AttachmentChips";
@@ -208,7 +209,7 @@ function ComposerView({
             onPress={() => {
               if (stopping) { haptics.warned(); onStop?.(); }
               else if (showMic) dictation?.toggle();
-              else { haptics.sent(); onSend(); }
+              else { haptics.sent(); sounds.play("send"); onSend(); }
             }}
           >
             <View style={[styles.sendPill, ((!showMic && !sendDisabled) || dictation?.listening) && { backgroundColor: agent, shadowColor: agent, shadowOpacity: 0.6 }]}>

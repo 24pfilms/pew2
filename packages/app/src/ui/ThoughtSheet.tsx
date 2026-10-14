@@ -8,7 +8,8 @@
  * than truncated, because a thought worth opening is worth reading in full.
  */
 import { memo, useRef } from "react";
-import { ScrollView, StyleSheet, View, useWindowDimensions } from "react-native";
+import { StyleSheet, View, useWindowDimensions } from "react-native";
+import { StageScroll } from "./stage/StageScroll";
 import { MarkdownText } from "./MarkdownText";
 import { theme } from "../theme";
 import { Sheet } from "./Sheet";
@@ -36,11 +37,11 @@ function ThoughtSheetView({ visible, text, onClose }: ThoughtSheetProps) {
       dismissLabel="Close thought process"
     >
       <View>
-        <ScrollView style={[styles.scroll, { maxHeight: Math.round(screenHeight * 0.6) }]} contentContainerStyle={styles.content}>
+        <StageScroll style={[styles.scroll, { maxHeight: Math.round(screenHeight * 0.6) }]} contentContainerStyle={styles.content}>
           {/* The dim thinking tone it had inline, so opening it does not promote
               reasoning to the same weight as the agent's answer. */}
           <MarkdownText text={held.current.trimEnd()} tone="thought" />
-        </ScrollView>
+        </StageScroll>
       </View>
     </Sheet>
   );

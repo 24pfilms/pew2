@@ -10,7 +10,8 @@ export function matchesRestore(target: RestoreTarget | undefined, message: { pro
   return !!target && (!message.providerId || message.providerId === target.providerId) &&
     (!message.agentSessionId || message.agentSessionId === target.agentSessionId);
 }
-export type RestorePresentation = "loading" | "reconnecting" | "failed" | "empty" | undefined;
+/** `starting`: a goal just launched, its conversation not yet begun (never derived here; App sets it). */
+export type RestorePresentation = "loading" | "reconnecting" | "starting" | "failed" | "empty" | undefined;
 export function restorePresentation(target: RestoreTarget | undefined, loading: boolean, error: string | undefined, count: number, status: Status): RestorePresentation {
   if (!target) return undefined;
   if (error) return "failed";

@@ -15,6 +15,7 @@
  *
  * Pure and Expo-free, so `bun test` can load it.
  */
+import { asRecord } from "@pew2/protocol";
 
 /** The tokens an agent reported. Absent for agents that never send it. */
 export interface ContextUsage {
@@ -32,8 +33,8 @@ export interface ContextUsage {
  * are validated rather than trusted — this crosses a wire from a process this
  * app does not control, and a string `size` would render "NaN%".
  */
-export function readUsage(payload: any): ContextUsage | undefined {
-  const update = payload?.update;
+export function readUsage(payload: unknown): ContextUsage | undefined {
+  const update = asRecord(asRecord(payload)?.update);
   if (update?.sessionUpdate !== "usage_update") return undefined;
   const { used, size } = update;
   if (typeof used !== "number" || typeof size !== "number") return undefined;

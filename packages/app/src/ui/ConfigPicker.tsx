@@ -7,16 +7,16 @@
  *
  * Models are a compact list capped at ~5 rows that scrolls inside the sheet
  * (agents like GG Coder carry dozens), with a filter field once it is long. A thinking level, when the agent
- * advertises one, is a dial: an arc of dots lit up to the chosen level with Pew
- * in the middle, whose mood follows the level. An agent's plain list (opened
+ * advertises one, is a dial (`ThinkingDial.tsx`): an LED arc lit up to the
+ * chosen level with Pew in the middle, the level shown as energy round him. An agent's plain list (opened
  * for "mode") is a simple Stage list.
  *
  * A `Sheet`, like every other picker, so it gets the Terminal header.
  * `anchorX`/`anchorY` are kept for App.tsx's call but no longer position it.
  */
 import { memo, useEffect, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
-import Reanimated, { useAnimatedStyle, useSharedValue, withDelay, withTiming } from "react-native-reanimated";
+import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { StageScroll } from "./stage/StageScroll";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { theme } from "../theme";
 import { haptics } from "./haptics";
@@ -27,9 +27,7 @@ import { Led } from "./stage/Led";
 import { Dissolve } from "./motion/Dissolve";
 import { DashedRule, dashedOutline } from "./stage/DashedRule";
 import { useAgentColor } from "./stage/agentColor";
-import { Pew } from "../pew/Pew";
-import type { PewMood } from "../pew/engine";
-import { DUR } from "../motion";
+import { ThinkingDial, levelMood } from "./ThinkingDial";
 import { summarise, valueName } from "./configSlots";
 
 // Slot assignment lives in a react-native-free module so it can be unit tested.
@@ -51,24 +49,33 @@ const ROW = 56;
 const LIST_MAX = ROW * 5 + 20;
 const FILTER_AFTER = 8;
 
-/** Dial geometry: a 240° arc opening downward. */
-const DIAL = 200;
-const DIAL_RADIUS = 80;
-const DOT = 12;
-const ARC_START = 150; // degrees, clockwise from +x (screen coords)
-const ARC_SPAN = 240;
-
-/** Pew's mood for a position along the dial, 0..1. */
-function levelMood(fraction: number): PewMood {
-  if (fraction <= 0) return "sleepy";
-  if (fraction < 0.5) return "idle";
-  if (fraction < 0.85) return "thinking";
-  return "working";
-}
+/** How long a tapped level is shown before the agent's own answer must confirm it. */
+const LEVEL_CONFIRM_MS = 4000;
 
 function ConfigPickerView({ visible, onClose, options, onSelect }: ConfigPickerProps) {
   const agent = useAgentColor();
-  const { model, mode, level } = summarise(options);
+  const { model, mode, level: reported } = summarise(options);
+  // The level moves the moment it is tapped. Waiting for the agent's answer
+  // (phone → relay → computer → agent and back) made every step lag behind
+  // the finger. The tap is shown until the agent reports that same value. An
+  // answer for an earlier tap in a quick run does not pull the dial back to
+  // it; and if the agent never confirms (it refused, or nothing came back),
+  // the dial returns to what the agent says after a few seconds of quiet.
+  const [tapped, setTapped] = useState<string>();
+  const reportedValue = reported?.currentValue;
+  useEffect(() => {
+    if (tapped === undefined) return;
+    if (reportedValue === tapped) {
+      setTapped(undefined);
+      return;
+    }
+    const timer = setTimeout(() => setTapped(undefined), LEVEL_CONFIRM_MS);
+    return () => clearTimeout(timer);
+  }, [tapped, reportedValue]);
+  useEffect(() => {
+    if (!visible) setTapped(undefined);
+  }, [visible]);
+  const level = reported && tapped !== undefined ? { ...reported, currentValue: tapped } : reported;
   const modeOnly = !model && !level && mode;
   const list = modeOnly ? mode : undefined;
   const chips = list ? undefined : model;
@@ -85,10 +92,11 @@ function ConfigPickerView({ visible, onClose, options, onSelect }: ConfigPickerP
     onClose();
   };
 
+  // The dial plays its own haptic, climbing with the level.
   const step = (index: number) => {
     const value = level?.options?.[index];
     if (!level || !value || index === levelIndex) return;
-    haptics.detent();
+    setTapped(value.value);
     onSelect(level.id, value.value);
   };
 
@@ -113,10 +121,9 @@ function ConfigPickerView({ visible, onClose, options, onSelect }: ConfigPickerP
         )}
 
         {level && levelCount > 0 && (
-          <Dial
+          <ThinkingDial
             names={level.options?.map((v) => v.name) ?? []}
             index={Math.max(0, levelIndex)}
-            fraction={fraction}
             color={agent}
             paused={!visible}
             onStep={step}
@@ -190,7 +197,7 @@ function ModelList({ option, color, visible, onPick }: ModelListProps) {
           />
         </View>
       )}
-      <ScrollView
+      <StageScroll
         style={styles.modelList}
         contentOffset={{ x: 0, y: needle ? 0 : initialY }}
         keyboardShouldPersistTaps="handled"
@@ -209,7 +216,6 @@ function ModelList({ option, color, visible, onPick }: ModelListProps) {
                 onPress={() => onPick(value.value)}
                 style={({ pressed }) => [styles.modelRow, pressed && styles.pressed]}
               >
-                <View style={[styles.bar, selected && { backgroundColor: color }]} />
                 <View style={styles.modelText}>
                   <Text style={[styles.modelName, selected && { color }]} numberOfLines={1}>{value.name}</Text>
                   {!!value.description && (
@@ -226,114 +232,8 @@ function ModelList({ option, color, visible, onPick }: ModelListProps) {
             <Dissolve key={value.value} kind="row" delay={i * 40}>{row}</Dissolve>
           );
         })}
-      </ScrollView>
+      </StageScroll>
     </View>
-  );
-}
-
-interface DialProps {
-  names: string[];
-  index: number;
-  fraction: number;
-  color: string;
-  paused: boolean;
-  onStep: (index: number) => void;
-}
-
-function Dial({ names, index, fraction, color, paused, onStep }: DialProps) {
-  const count = names.length;
-  const centre = DIAL / 2;
-  const angleAt = (i: number) =>
-    ((ARC_START + (count > 1 ? (ARC_SPAN * i) / (count - 1) : ARC_SPAN / 2)) * Math.PI) / 180;
-  const end = (i: number) => ({
-    left: centre + DIAL_RADIUS * Math.cos(angleAt(i)),
-    top: centre + DIAL_RADIUS * Math.sin(angleAt(i)),
-  });
-  const first = end(0);
-  const last = end(count - 1);
-
-  return (
-    <View style={styles.dialWrap}>
-      <View style={styles.dial}>
-        {names.map((name, i) => {
-          const at = end(i);
-          return (
-            <DialDot
-              key={name}
-              lit={i <= index}
-              order={i}
-              color={color}
-              label={name}
-              style={{ left: at.left - DOT, top: at.top - DOT }}
-              onPress={() => onStep(i)}
-            />
-          );
-        })}
-        <View style={styles.dialPew} pointerEvents="box-none">
-          <Pew size={112} mood={levelMood(fraction)} color={color} paused={paused} accessibilityLabel="Pew" />
-        </View>
-        <StepButton icon="remove" label="Less thinking" disabled={index <= 0} at={{ left: first.left - 22, top: first.top + 14 }} onPress={() => onStep(index - 1)} />
-        <StepButton icon="add" label="More thinking" disabled={index >= count - 1} at={{ left: last.left - 22, top: last.top + 14 }} onPress={() => onStep(index + 1)} />
-      </View>
-      <Led size={theme.stage.ledSize + 4}>{names[index] ?? ""}</Led>
-    </View>
-  );
-}
-
-interface DialDotProps {
-  lit: boolean;
-  order: number;
-  color: string;
-  label: string;
-  style: { left: number; top: number };
-  onPress: () => void;
-}
-
-function DialDot({ lit, order, color, label, style, onPress }: DialDotProps) {
-  const reduceMotion = useReducedMotion();
-  const on = useSharedValue(lit ? 1 : 0);
-  useEffect(() => {
-    on.value = reduceMotion
-      ? lit ? 1 : 0
-      : withDelay(order * 30, withTiming(lit ? 1 : 0, { duration: DUR.row }));
-  }, [lit, order, reduceMotion, on]);
-  const animated = useAnimatedStyle(() => ({
-    opacity: 0.25 + on.value * 0.75,
-    transform: [{ scale: 0.8 + on.value * 0.3 }],
-  }));
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      accessibilityState={{ selected: lit }}
-      onPress={onPress}
-      style={[styles.dotHit, style]}
-    >
-      <Reanimated.View
-        style={[styles.dot, { backgroundColor: color, shadowColor: color }, animated]}
-      />
-    </Pressable>
-  );
-}
-
-function StepButton({ icon, label, disabled, at, onPress }: {
-  icon: "add" | "remove";
-  label: string;
-  disabled: boolean;
-  at: { left: number; top: number };
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      accessibilityState={{ disabled }}
-      disabled={disabled}
-      onPress={onPress}
-      style={({ pressed }) => [styles.stepButton, at, disabled && styles.disabled, pressed && styles.pressed]}
-    >
-      <Ionicons name={icon} size={18} color={theme.color.text} />
-    </Pressable>
   );
 }
 
@@ -353,26 +253,10 @@ const styles = StyleSheet.create({
   filterInput: { flex: 1, color: theme.color.text, fontSize: theme.font.small, paddingVertical: 0 },
   modelList: { maxHeight: LIST_MAX, flexGrow: 0 },
   modelRow: { flexDirection: "row", alignItems: "center", height: ROW - 1, gap: theme.space(3) },
-  bar: { width: 3, alignSelf: "stretch", marginVertical: theme.space(2), borderRadius: 2 },
   modelText: { flex: 1, minWidth: 0 },
   modelName: { color: theme.color.text, fontSize: theme.font.body, fontWeight: "600" },
   modelDetail: { color: theme.color.textDim, fontSize: theme.font.small },
   pressed: { opacity: 0.7 },
-  dialWrap: { alignItems: "center", gap: theme.space(2) },
-  dial: { width: DIAL, height: DIAL },
-  dialPew: { ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "center" },
-  dotHit: { position: "absolute", width: DOT * 2, height: DOT * 2, alignItems: "center", justifyContent: "center" },
-  dot: { width: DOT, height: DOT, borderRadius: DOT / 2, shadowOpacity: 0.8, shadowRadius: 6, shadowOffset: { width: 0, height: 0 } },
-  stepButton: {
-    ...dashedOutline,
-    position: "absolute",
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  disabled: { opacity: 0.35 },
   row: {
     flexDirection: "row",
     alignItems: "center",

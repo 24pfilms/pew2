@@ -13,6 +13,9 @@
     "test": "bun test ./packages/app/src ./packages/daemon/src ./packages/protocol/src ./packages/relay/src",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p packages/relay/tsconfig.json && (cd packages/app && tsc --noEmit)",
     "lint": "eslint .",
+    "//format": "Prettier is set up but the tree has never been run through it, so `format:check` fails until someone chooses to do the one-time reformat. Format the files you touch (`npm run format -- <paths>`); it is not in CI until that reformat lands.",
+    "format": "prettier --write",
+    "format:check": "prettier --check .",
     "relay:dev": "cd packages/relay && wrangler dev --port 8799",
     "relay:check": "bun run packages/relay/src/relay-check.mjs",
     "relay:deploy": "cd packages/relay && wrangler deploy",
@@ -28,6 +31,7 @@
     "@types/node": "^22.10.2",
     "eslint": "^10",
     "eslint-plugin-react-hooks": "^7",
+    "prettier": "^3",
     "typescript": "~5.9.2",
     "typescript-eslint": "^8"
   }

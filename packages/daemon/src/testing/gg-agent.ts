@@ -107,7 +107,7 @@ const app = agent({ name: "pew2-gg-test" })
     agentInfo: { name: "pew2-gg-test", version: "0.0.0" },
     authMethods: [],
   }))
-  .onRequest("session/new", async (ctx: any) => {
+  .onRequest("session/new", async (ctx) => {
     const sessionId = `gg_${++sessionCounter}`;
     return { sessionId, ...openSession(sessionId, ctx.params?.cwd ?? "") };
   })
@@ -120,9 +120,9 @@ const app = agent({ name: "pew2-gg-test" })
         ]
       : [],
   }))
-  .onRequest("session/resume", async (ctx: any) => openSession(ctx.params.sessionId, ctx.params.cwd))
-  .onRequest("session/load", async (ctx: any) => openSession(ctx.params.sessionId, ctx.params.cwd))
-  .onNotification("session/cancel", async (ctx: any) => {
+  .onRequest("session/resume", async (ctx) => openSession(ctx.params.sessionId, ctx.params.cwd))
+  .onRequest("session/load", async (ctx) => openSession(ctx.params.sessionId, ctx.params.cwd))
+  .onNotification("session/cancel", async (ctx) => {
     const sessionId = ctx.params?.sessionId as string;
     cancelled.add(sessionId);
     const returned = queues.get(sessionId)?.splice(0) ?? [];
@@ -130,7 +130,7 @@ const app = agent({ name: "pew2-gg-test" })
       await ctx.client.notify("_gg/queue_update", { sessionId, queued: [], returned });
     }
   })
-  .onRequest("session/prompt", async (ctx: any) => {
+  .onRequest("session/prompt", async (ctx) => {
     const { sessionId, prompt, _meta } = ctx.params as {
       sessionId: string;
       prompt: { type: string; text?: string }[];
@@ -222,7 +222,7 @@ const app = agent({ name: "pew2-gg-test" })
       }
     }
   })
-  .onRequest("_gg/autopilot/set", (p: unknown) => p, async (ctx: any) => {
+  .onRequest("_gg/autopilot/set", (p: unknown) => p, async (ctx) => {
     const { sessionId, enabled } = ctx.params as { sessionId: string; enabled: boolean };
     await ctx.client.notify("_gg/autopilot_state", { sessionId, enabled, reviewing: false });
     return { enabled };
@@ -238,7 +238,7 @@ const app = agent({ name: "pew2-gg-test" })
       },
     ],
   }))
-  .onRequest("_gg/queue", (p: unknown) => p, async (ctx: any) => {
+  .onRequest("_gg/queue", (p: unknown) => p, async (ctx) => {
     const { sessionId, text } = ctx.params as { sessionId: string; text: string };
     if (!running.has(sessionId)) throw invalid("No turn is running.");
     const id = `agent_${++queueCounter}`;
@@ -246,7 +246,7 @@ const app = agent({ name: "pew2-gg-test" })
     queue.push({ id, text });
     return { id, queued: queue };
   })
-  .onRequest("_gg/queue/cancel", (p: unknown) => p, async (ctx: any) => {
+  .onRequest("_gg/queue/cancel", (p: unknown) => p, async (ctx) => {
     const { sessionId, id } = ctx.params as { sessionId: string; id: string };
     const queue = queues.get(sessionId) ?? [];
     const index = queue.findIndex((item) => item.id === id);
@@ -256,7 +256,7 @@ const app = agent({ name: "pew2-gg-test" })
   .onRequest("_gg/goals/list", (p: unknown) => p, async () => ({
     goals: [...load().values()].map(summary),
   }))
-  .onRequest("_gg/goals/create", (p: unknown) => p, async (ctx: any) => {
+  .onRequest("_gg/goals/create", (p: unknown) => p, async (ctx) => {
     const { name, goal, context } = ctx.params as { name: string; goal: string; context: string[] };
     if (!name.trim()) throw invalid("A goal needs a name.");
     const goals = load();
@@ -280,23 +280,25 @@ const app = agent({ name: "pew2-gg-test" })
     save(goals);
     return { goal: summary(created) };
   })
-  .onRequest("_gg/goals/delete", (p: unknown) => p, async (ctx: any) => {
+  .onRequest("_gg/goals/delete", (p: unknown) => p, async (ctx) => {
     const goals = load();
     goals.delete((ctx.params as { id: string }).id);
     save(goals);
     return { ok: true };
   })
-  .onRequest("_gg/goal/pause", (p: unknown) => p, async (ctx: any) => {
-    withGoal(sessionGoal.get(ctx.params.sessionId), (goal) => {
+  .onRequest("_gg/goal/pause", (p: unknown) => p, async (ctx) => {
+    const { sessionId } = ctx.params as { sessionId: string };
+    withGoal(sessionGoal.get(sessionId), (goal) => {
       goal.paused = true;
     });
     return { paused: true };
   })
-  .onRequest("_gg/goal/critter_model", (p: unknown) => p, async (ctx: any) => {
-    withGoal(sessionGoal.get(ctx.params.sessionId), (goal) => {
-      goal.critterModel = ctx.params.model;
+  .onRequest("_gg/goal/critter_model", (p: unknown) => p, async (ctx) => {
+    const { sessionId, model } = ctx.params as { sessionId: string; model: string | null };
+    withGoal(sessionGoal.get(sessionId), (goal) => {
+      goal.critterModel = model;
     });
-    return { critterModel: ctx.params.model };
+    return { critterModel: model };
   });
 
 app.connect(

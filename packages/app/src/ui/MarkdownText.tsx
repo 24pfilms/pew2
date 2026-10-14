@@ -215,11 +215,13 @@ function stylesFor(
       lineHeight: Math.max(18, lineHeight - 2),
     },
     pre: { marginBottom: 0 },
+    // A dim panel, not a left rule: no coloured left edges anywhere (the user's call).
     blockquote: {
-      borderLeftWidth: 3,
-      borderLeftColor: theme.color.textDim,
+      backgroundColor: theme.color.surfaceRaised,
+      borderRadius: theme.radius.sm,
       paddingLeft: theme.space(3),
-      paddingRight: 0,
+      paddingRight: theme.space(3),
+      paddingVertical: theme.space(2),
       marginBottom: BLOCK_GAP,
     },
     list: { marginBottom: BLOCK_GAP },

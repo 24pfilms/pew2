@@ -2,7 +2,11 @@
  * Dev-only visual harness for the redesign: the screens the user actually sees,
  * with no daemon, pairing or network. `EXPO_PUBLIC_SHOWCASE` picks the view at
  * bundle time: `home` (empty state), `chat` (a working conversation with an
- * error card), `stream` (a reply streaming in).
+ * error card), `stream` (a reply streaming in), `ask` (an ask_user sheet with
+ * long questions and a recommended option, for the pill and the scroll rail),
+ * `goal` (the New goal wizard; `EXPO_PUBLIC_DEV_GOAL_STEP` picks the step, and
+ * `EXPO_PUBLIC_DEV_LAUNCH_DEMO=1` on the launch step holds Ken by itself),
+ * `think` (the model sheet, stepping the thinking level up and back down by itself).
  *
  *   EXPO_PUBLIC_HARNESS=Showcase EXPO_PUBLIC_SHOWCASE=chat npx expo start
  */
@@ -20,6 +24,12 @@ import { ComposerDock } from "./ComposerDock";
 import { HomeGreeting } from "./HomeGreeting";
 import { GgControlStrip, PlanReviewSheet } from "./GgReview";
 import { QueuedStrip } from "./QueuedStrip";
+import { AskUserSheet } from "./AskUserSheet";
+import { NewGoalSheet } from "./NewGoalSheet";
+import { ConfigPicker } from "./ConfigPicker";
+import type { ConfigOption } from "../useDaemon";
+import type { AskRequest } from "../askUser";
+import type { GoalResult, GoalSummary } from "../ggState";
 import type { Turn } from "../useDaemon";
 
 const VIEW = process.env.EXPO_PUBLIC_SHOWCASE ?? "chat";
@@ -56,6 +66,51 @@ const PLAN = {
     "Verification: `bun test ./packages/app/src` and a simulator screenshot.",
 };
 
+const ASK: AskRequest = {
+  requestId: "ask-1",
+  questions: [
+    {
+      id: "store",
+      kind: "choice",
+      question: "Where should the queued messages live while the phone is offline and the daemon restarts in between?",
+      options: [
+        { label: "In the daemon's session log, replayed to every client that reconnects", hint: "Survives a restart and shows on the desktop too.", recommended: true },
+        { label: "Only on the phone, in the outbox, until the socket is back", hint: "Simplest, but the desktop never sees them." },
+        { label: "Both, deduplicated by message id when they meet" },
+      ],
+    },
+    {
+      id: "motion",
+      kind: "multi",
+      question: "Which surfaces should use the dissolve animation when their content changes?",
+      options: [
+        { label: "Streaming replies" },
+        { label: "Sheets and pickers as rows arrive", recommended: true },
+        { label: "Status pills and the ticker under the chat title" },
+      ],
+    },
+  ],
+};
+
+const LEVELS = ["off", "low", "medium", "high", "max"];
+const thinkOptions = (level: number): ConfigOption[] => [
+  { id: "model", name: "Model", category: "model", type: "select", currentValue: "opus", options: [{ value: "opus", name: "Claude Opus 4.5" }, { value: "sonnet", name: "Claude Sonnet 4.5" }] },
+  { id: "thinking", name: "Thinking", category: "thought_level", type: "select", currentValue: LEVELS[level]!, options: LEVELS.map((v) => ({ value: v, name: v[0]!.toUpperCase() + v.slice(1) })) },
+];
+/** Up to the top, then back down: 1 2 3 4 3 2 1 0 … */
+const THINK_PATH = [1, 2, 3, 4, 4, 3, 2, 1, 0, 0];
+
+const DEMO_GOAL: GoalSummary = {
+  id: "g1",
+  name: "Pew2 polish",
+  goal: "Make every screen feel alive.",
+  context: [],
+  path: "/tmp/pew2-polish",
+  createdAt: "2026-10-14T00:00:00Z",
+  lastActiveMs: 0,
+  status: "briefing",
+};
+
 const WORKING: Activity = {
   startedAt: 0,
   speaking: false,
@@ -68,6 +123,28 @@ function Screen() {
   const noop = useCallback(() => {}, []);
   const send = useCallback(() => true, []);
   const [streamed, setStreamed] = useState(VIEW === "stream" ? 0 : REPLY.length);
+  // The `goal` view's launch: a create answered after a short wait, then the
+  // goal's conversation behind the sheet, "Starting" as in the app.
+  const [goalOpen, setGoalOpen] = useState(true);
+  const [thinkStep, setThinkStep] = useState(-1);
+  // A tap takes over from the automatic run, answered after a realistic delay
+  // (the agent's round trip), so the dial's own instant response shows.
+  const [thinkPicked, setThinkPicked] = useState<number>();
+  useEffect(() => {
+    if (VIEW !== "think" || thinkPicked !== undefined) return;
+    const timer = setInterval(() => setThinkStep((n) => (n + 1) % THINK_PATH.length), 1100);
+    return () => clearInterval(timer);
+  }, [thinkPicked]);
+  const pickThink = useCallback((_id: string, value: string | boolean) => {
+    const at = LEVELS.indexOf(String(value));
+    setTimeout(() => setThinkPicked(at), 450);
+  }, []);
+  const [goalStarted, setGoalStarted] = useState(false);
+  const [goalResults, setGoalResults] = useState<Record<string, GoalResult>>({});
+  const createGoal = useCallback(() => {
+    setTimeout(() => setGoalResults({ g1: { t: "goal.result", requestId: "g1", ok: true, goal: DEMO_GOAL } }), 700);
+    return "g1";
+  }, []);
 
   useEffect(() => {
     if (VIEW !== "stream") return;
@@ -106,7 +183,8 @@ function Screen() {
       ) : (
         <ChatThread
           ref={list}
-          turns={turns}
+          turns={goalStarted ? [] : turns}
+          restore={goalStarted ? { title: DEMO_GOAL.name, state: "starting", onRetry: noop } : undefined}
           activeStream={VIEW === "stream" ? { sessionId: "s", turnKey: "a1", generation: 0 } : undefined}
           threadTop={insets.top + theme.space(4)}
           threadBottom={dock + theme.space(2)}
@@ -117,6 +195,21 @@ function Screen() {
           onAtBottomChange={noop}
           onOpenThought={noop}
           onRetry={noop}
+        />
+      )}
+      {VIEW === "ask" && <AskUserSheet ask={ASK} onAnswer={noop} />}
+      {VIEW === "think" && (
+        <ConfigPicker visible onClose={noop} options={thinkOptions(thinkPicked ?? (thinkStep < 0 ? 0 : THINK_PATH[thinkStep]!))} onSelect={pickThink} />
+      )}
+      {VIEW === "goal" && (
+        <NewGoalSheet
+          visible={goalOpen}
+          onClose={() => setGoalOpen(false)}
+          onCreate={createGoal}
+          results={goalResults}
+          onCreated={() => setGoalStarted(true)}
+          onBrowse={noop}
+          online={false}
         />
       )}
       {VIEW === "plan" && <PlanReviewSheet plan={PLAN} busy={false} onDecide={noop} />}

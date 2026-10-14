@@ -4,7 +4,8 @@
  * An agent that sends no `usage_update` gets an honest "no reading", never 0%.
  */
 import { useEffect } from "react";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
+import { StageScroll } from "./stage/StageScroll";
 import { Canvas, Circle, Group, Path, Skia } from "@shopify/react-native-skia";
 import { Easing, useDerivedValue, useReducedMotion, useSharedValue, withTiming } from "react-native-reanimated";
 import { Sheet, SHEET_CARD_HEIGHT } from "./Sheet";
@@ -93,7 +94,7 @@ export function ContextDetailsSheet({
   const ringColor = percent !== undefined && percent > 85 ? theme.color.danger : agent;
   return (
     <Sheet visible={visible} label="Context" title={title} onClose={onClose} dismissLabel="Close context details">
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
+      <StageScroll style={styles.scroll} contentContainerStyle={styles.content}>
         <Text style={styles.sub} numberOfLines={1} accessibilityLabel={details.usageAccessibility}>
           {sub}
         </Text>
@@ -120,7 +121,7 @@ export function ContextDetailsSheet({
             </View>
           )}
         </View>
-      </ScrollView>
+      </StageScroll>
     </Sheet>
   );
 }

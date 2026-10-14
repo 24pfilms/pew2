@@ -81,6 +81,7 @@ import { ContextDetailsSheet } from "./src/ui/ContextDetailsSheet";
 import { projectsForProvider, projectSourceKey } from "./src/projects";
 import { greetingFor, hashSeed } from "./src/greeting";
 import { HomeGreeting } from "./src/ui/HomeGreeting";
+import { sounds } from "./src/ui/sounds";
 import { AgentCarousel } from "./src/ui/AgentCarousel";
 import { orderProvidersByRecency } from "./src/providerRecency";
 import { AgentColorProvider } from "./src/ui/stage/agentColor";
@@ -118,6 +119,9 @@ const RESTORE_HOLD_MS = 2500;
 const NO_TURNS: never[] = [];
 /** Pew's smile on home before the agent switcher opens and carries it on. */
 const PEW_HANDOFF_MS = 320;
+
+/** For a prop that needs a function where there is nothing to do. */
+const NOOP = () => {};
 
 export default function App() {
   const [fontsLoaded, fontError] = useFonts({
@@ -530,6 +534,8 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
   // Files staged for the next message. Cleared with the draft on send, because
   // the two are one message.
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
+  /** The name of a goal just launched, until its conversation has something in it. */
+  const [launchingGoal, setLaunchingGoal] = useState<string>();
   // Mirror, for the async gap while a photo is being read and downscaled.
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
@@ -700,8 +706,15 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
     [activeId, selectDaemonProject],
   );
 
-  const inThread = daemon.turns.length > 0;
+  // A goal just launched from the New goal sheet opens straight into its
+  // conversation, empty and "Starting" until the kickoff turn arrives. Before
+  // this the screen fell back to home for that moment, with the agent's recent
+  // chats as cards under a thumb that had just let go of Ken: one stray tap
+  // opened some other conversation instead of the goal.
+  const launching = launchingGoal !== undefined && daemon.turns.length === 0 && !daemon.restoreTarget;
+  const inThread = daemon.turns.length > 0 || launching;
   const sessionTitle = daemon.restoreTarget?.title
+    ?? (launching ? launchingGoal : undefined)
     ?? daemonSessions.find((session) => session.id === (daemon.sessionId ?? threadKey))?.title
     ?? "New conversation";
 
@@ -852,7 +865,10 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
     // A turn that ended in an error already pulsed as a failure below; a success
     // buzz on top of it would contradict what the screen says.
     const last = daemon.turns[daemon.turns.length - 1];
-    if (last?.role !== "system") haptics.finished();
+    if (last?.role !== "system") {
+      haptics.finished();
+      sounds.play("done");
+    }
   }, [daemon.busy, daemon.turns]);
 
   // The agent is blocked on an approval and cannot continue without one.
@@ -862,6 +878,7 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
     if (requestId && requestId !== lastPermissionId.current) {
       Keyboard.dismiss();
       haptics.attention();
+      sounds.play("attention");
     }
     lastPermissionId.current = requestId;
   }, [daemon.permission]);
@@ -1089,6 +1106,7 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
       // commits nothing but `menuOpen`, the effect fires, and the drawer is
       // already travelling while the turns are built behind it.
       setMenuOpen(false);
+      setLaunchingGoal(undefined);
       startTransition(() => {
         // Remounts the thread so it re-arms at this transcript's own bottom.
         // Deliberately not `daemon.sessionId`: a fresh conversation renders its
@@ -1142,6 +1160,8 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
   // Same reason as the daemon actions above: the hook's object is new each
   // render, the function on it is not.
   const cancelDictation = dictation.cancel;
+  // No sounds while the recogniser listens: a chime would be heard by it.
+  useEffect(() => sounds.setListening(dictation.listening), [dictation.listening]);
 
   // Handed the text by the dock, which owns it.
   //
@@ -1289,6 +1309,7 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
       // drawer sat still until home had finished building, then slid.
       setMenuOpen(false);
       setNewChatOpen(false);
+      setLaunchingGoal(undefined);
       startTransition(() => {
         if (cwd && activeId) selectDaemonProject(activeId, cwd);
         leaveDaemon();
@@ -1385,6 +1406,16 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
   const openSessionId = daemon.sessionId;
   const queuedHere = openSessionId ? gg.queues[openSessionId] : undefined;
   const askHere = openSessionId ? gg.asks[openSessionId]?.[0] : undefined;
+  // A question the agent is blocked on gets the same call as an approval.
+  const askId = askHere?.requestId;
+  const lastAskId = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (askId && askId !== lastAskId.current) {
+      haptics.attention();
+      sounds.play("attention");
+    }
+    lastAskId.current = askId;
+  }, [askId]);
   const goalState = openSessionId ? gg.goalStates[openSessionId] : undefined;
   const goalHere =
     isGoalsProvider(daemon.effectiveProviderId ?? activeId) && (openSessionId || daemon.workspace)
@@ -1525,13 +1556,27 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
     setNewGoalOpen(true);
   }, []);
   const closeNewGoal = useCallback(() => setNewGoalOpen(false), []);
+  // The sheet closes itself once its launch has opened onto the session.
   const goalCreated = useCallback(
     (goal: GoalSummary | undefined) => {
-      setNewGoalOpen(false);
-      if (goal) openGoalDaemon(goal);
+      if (!goal) return;
+      setLaunchingGoal(goal.name);
+      openGoalDaemon(goal);
     },
     [openGoalDaemon],
   );
+  // "Starting" ends when the kickoff turn lands, when the user goes to another
+  // agent, or (nothing having arrived in a minute) on its own, leaving the
+  // ordinary empty conversation rather than a spinner for ever.
+  useEffect(() => {
+    if (launchingGoal === undefined) return;
+    if (daemon.turns.length > 0 || (activeId !== undefined && !isGoalsProvider(activeId))) {
+      setLaunchingGoal(undefined);
+      return;
+    }
+    const timer = setTimeout(() => setLaunchingGoal(undefined), 60_000);
+    return () => clearTimeout(timer);
+  }, [launchingGoal, daemon.turns.length, activeId]);
   const closeGoalSettings = useCallback(() => setGoalSettingsOpen(false), []);
   const openGoalSettings = useCallback(() => setGoalSettingsOpen(true), []);
   const goalId = goalHere?.id ?? goalState?.goalId;
@@ -1746,7 +1791,11 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
             ref={scroller}
             turns={holdingRestore ? NO_TURNS : shownTurns}
             activeStream={daemon.activeStream}
-            restore={daemon.restoreTarget ? {
+            restore={launching ? {
+              title: launchingGoal!,
+              state: "starting",
+              onRetry: NOOP,
+            } : daemon.restoreTarget ? {
               title: daemon.restoreTarget.title,
               state: restorePresentation(daemon.restoreTarget, daemon.loadingSession, daemon.restoreError, holdingRestore ? 0 : daemon.turns.length, daemon.status),
               error: daemon.restoreError,

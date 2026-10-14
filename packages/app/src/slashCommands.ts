@@ -17,6 +17,7 @@
  * `hapticsPolicy.ts`, and for the same reason — `bun test` cannot parse React
  * Native's Flow syntax.
  */
+import { asRecord, asString } from "@pew2/protocol";
 
 export interface SlashCommand {
   name: string;
@@ -96,16 +97,19 @@ function normalise(name: string): string {
 export function offeredCommands(raw: unknown): SlashCommand[] {
   if (!Array.isArray(raw)) return [];
   return raw
-    .filter((command: any) => typeof command?.name === "string" && command.name.trim())
-    .map((command: any) => ({
-      name: normalise(command.name),
-      description: typeof command.description === "string" ? command.description : "",
-      ...(typeof command.hint === "string"
-        ? { hint: command.hint }
-        : typeof command.input?.hint === "string"
-          ? { hint: command.input.hint }
-          : {}),
-    }))
+    .flatMap((entry: unknown) => {
+      const command = asRecord(entry);
+      const name = asString(command?.name);
+      if (!command || !name?.trim()) return [];
+      const hint = asString(command.hint) ?? asString(asRecord(command.input)?.hint);
+      return [
+        {
+          name: normalise(name),
+          description: asString(command.description) ?? "",
+          ...(hint !== undefined ? { hint } : {}),
+        },
+      ];
+    })
     .filter((command: SlashCommand) => isOfferedCommand(command.name));
 }
 
@@ -115,8 +119,8 @@ export function offeredCommands(raw: unknown): SlashCommand[] {
  * Returns undefined for every other payload so a caller can keep its previous
  * list: the agent sends this once and does not repeat it per turn.
  */
-export function readAvailableCommands(payload: any): SlashCommand[] | undefined {
-  const update = payload?.update;
+export function readAvailableCommands(payload: unknown): SlashCommand[] | undefined {
+  const update = asRecord(asRecord(payload)?.update);
   if (update?.sessionUpdate !== "available_commands_update") return undefined;
   if (!Array.isArray(update.availableCommands)) return undefined;
   return offeredCommands(update.availableCommands);

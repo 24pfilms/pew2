@@ -28,7 +28,8 @@
  * flinching; this reads as one object with somewhere to go.
  */
 import { memo, useEffect, useMemo, useState } from "react";
-import { FlatList, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
+import { StageScroll } from "./stage/StageScroll";
 import Animated, {
   interpolate,
   useAnimatedStyle,
@@ -332,9 +333,9 @@ function NewChatSheetView({
             }}
           >
             {(
-              <ScrollView
+              <StageScroll
+                rail="inside"
                 style={{ height: browseHeight }}
-                showsVerticalScrollIndicator={browseScrolls}
                 bounces={browseScrolls}
               >
                 {browse?.parent !== undefined && (
@@ -380,7 +381,7 @@ function NewChatSheetView({
                     </Text>
                   </View>
                 )}
-              </ScrollView>
+              </StageScroll>
             )}
           </Animated.View>
         )}

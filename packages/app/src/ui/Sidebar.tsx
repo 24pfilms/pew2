@@ -297,7 +297,7 @@ function GoalsSection({ goals, activeSessionId, reduceMotion, paused }: { goals:
   );
 }
 
-/** One agent on the rail: its Pew, a lit bar when chosen, a status pixel. */
+/** One agent on the rail: its Pew, a tinted tile when chosen (no edge bar: the user wants no coloured left edges anywhere), a status pixel. */
 const RailAgent = memo(function RailAgent({
   provider, selected, mark, index, paused, reduceMotion, onPress,
 }: { provider: Provider; selected: boolean; mark: Mark; index: number; paused: boolean; reduceMotion: boolean; onPress: (id: string) => void }) {
@@ -319,7 +319,6 @@ const RailAgent = memo(function RailAgent({
         }}
         style={({ pressed }) => [styles.railButton, selected && { backgroundColor: withAlpha(ink, 0.13) }, !enabled && styles.unavailable, pressed && styles.pressed]}
       >
-        {selected && <View style={[styles.railBar, { backgroundColor: ink, shadowColor: ink }]} />}
         <Pew size={RAIL_PEW} color={provider.color} mood={!enabled ? "sleepy" : selected ? "idle" : "sleepy"} sleepKey={provider.id} sleepStyle={RAIL_SLEEP[index % RAIL_SLEEP.length]} paused={paused || !enabled} />
         {mark && <View style={styles.railBadge}><Pixel kind={mark} color={mark === "attention" ? undefined : ink} paused={paused} /></View>}
       </Pressable>
@@ -619,19 +618,6 @@ const styles = StyleSheet.create({
     borderRadius: theme.space(4),
     alignItems: "center",
     justifyContent: "center",
-  },
-  // The chosen agent's lit bar, flush with the rail's left edge.
-  railBar: {
-    position: "absolute",
-    left: -(RAIL_WIDTH - RAIL_BUTTON) / 2,
-    top: (RAIL_BUTTON - 28) / 2,
-    width: 4,
-    height: 28,
-    borderTopRightRadius: 3,
-    borderBottomRightRadius: 3,
-    shadowOpacity: 0.9,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 0 },
   },
   railBadge: { position: "absolute", top: theme.space(1), right: theme.space(1) },
 

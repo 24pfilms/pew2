@@ -13,6 +13,7 @@
  *
  * Pure and React-free so both the extraction and the source rules are testable.
  */
+import { asRecord } from "@pew2/protocol";
 
 export interface ChatImage {
   /**
@@ -86,8 +87,9 @@ export function isDisplayableImage(src: string): boolean {
   return IMAGE_EXTENSION.test(value.split("?")[0]!.split("#")[0]!);
 }
 
-function imageFromBlock(block: any): ChatImage | undefined {
-  if (!block || typeof block !== "object") return undefined;
+function imageFromBlock(value: unknown): ChatImage | undefined {
+  const block = asRecord(value);
+  if (!block) return undefined;
 
   if (block.type === "image") {
     // An explicit type that cannot be painted is a refusal, not a reason to
@@ -118,8 +120,8 @@ function imageFromBlock(block: any): ChatImage | undefined {
   }
 
   if (block.type === "resource") {
-    const resource = block.resource;
-    if (!resource || typeof resource !== "object") return undefined;
+    const resource = asRecord(block.resource);
+    if (!resource) return undefined;
     const mimeType = isImageMime(resource.mimeType) ? resource.mimeType : undefined;
     if (typeof resource.blob === "string" && resource.blob && mimeType) {
       return { src: `data:${mimeType};base64,${resource.blob}`, mimeType };
@@ -145,11 +147,12 @@ export function imagesFromContent(content: unknown): ChatImage[] {
  * lifting their text would put file contents and command output into the
  * transcript; a generated picture is the one part that is the answer itself.
  */
-export function imagesFromToolCall(update: any): ChatImage[] {
-  const content = update?.content;
+export function imagesFromToolCall(update: unknown): ChatImage[] {
+  const content = asRecord(update)?.content;
   if (!Array.isArray(content)) return [];
   const images: ChatImage[] = [];
-  for (const entry of content) {
+  for (const value of content as unknown[]) {
+    const entry = asRecord(value);
     if (entry?.type !== "content") continue;
     images.push(...imagesFromContent(entry.content));
   }
@@ -167,14 +170,15 @@ export function imagesFromToolCall(update: any): ChatImage[] {
 export function imagesFromAttachments(attachments: unknown): ChatImage[] {
   if (!Array.isArray(attachments)) return [];
   const images: ChatImage[] = [];
-  for (const file of attachments) {
+  for (const value of attachments as unknown[]) {
+    const file = asRecord(value);
     const uri = typeof file?.uri === "string" ? file.uri : "";
-    if (!uri) continue;
-    if (!isImageMime(file?.mimeType) && !isDisplayableImage(uri)) continue;
+    if (!file || !uri) continue;
+    if (!isImageMime(file.mimeType) && !isDisplayableImage(uri)) continue;
     images.push({
       src: uri,
-      mimeType: isImageMime(file?.mimeType) ? file.mimeType : undefined,
-      alt: typeof file?.name === "string" ? file.name : undefined,
+      mimeType: isImageMime(file.mimeType) ? file.mimeType : undefined,
+      alt: typeof file.name === "string" ? file.name : undefined,
     });
   }
   return images;

@@ -29,6 +29,9 @@ export interface ConversationRestoreProps {
 export function ConversationRestore({ title, state, error, onRetry }: ConversationRestoreProps) {
   const agent = useAgentColor();
   const waiting = state === "loading" || state === "reconnecting";
+  // A launched goal is already being watched for (the launch just opened onto
+  // it), so it shows at once rather than after the grace a fast reopen gets.
+  const starting = state === "starting";
   const [graced, setGraced] = useState(false);
 
   useEffect(() => {
@@ -45,6 +48,16 @@ export function ConversationRestore({ title, state, error, onRetry }: Conversati
   }, [state]);
 
   if (!state) return null;
+  if (starting) {
+    return (
+      <View style={styles.loading} accessibilityLabel={`Starting ${title}`}>
+        <View style={styles.loadingInner}>
+          <Pew size={96} mood="working" color={agent} />
+          <Led>Starting goal</Led>
+        </View>
+      </View>
+    );
+  }
   if (waiting && !graced) return null;
 
   if (state === "failed") {

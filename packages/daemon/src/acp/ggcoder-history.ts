@@ -3,6 +3,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import readline from "node:readline";
+import { asRecord, asString } from "@pew2/protocol";
 import { promisify } from "node:util";
 import { createGunzip, gunzip } from "node:zlib";
 import type { AgentSession } from "./connect.js";
@@ -48,24 +49,23 @@ async function countFile(filePath: string, expectedSessionId: string): Promise<n
 
   try {
     for await (const line of lines) {
-      let entry: any;
+      let parsed: unknown;
       try {
-        entry = JSON.parse(line);
+        parsed = JSON.parse(line);
       } catch {
         continue;
       }
+      const entry = asRecord(parsed);
       if (entry?.type === "session") {
-        sessionId = entry.id;
-        leafId = entry.leafId;
+        sessionId = asString(entry.id);
+        leafId = asString(entry.leafId);
       } else if (entry?.type === "message" && typeof entry.id === "string") {
+        const message = asRecord(entry.message);
         lastMessageId = entry.id;
         messages.set(entry.id, {
           parentId: typeof entry.parentId === "string" ? entry.parentId : null,
-          role:
-            entry.message?.role === "user" || entry.message?.role === "assistant"
-              ? entry.message.role
-              : undefined,
-          hasText: hasVisibleText(entry.message?.content),
+          role: message?.role === "user" || message?.role === "assistant" ? message.role : undefined,
+          hasText: hasVisibleText(message?.content),
         });
       }
     }
@@ -223,12 +223,13 @@ async function readCheckpoint(filePath: string): Promise<DisplayCheckpoint | und
 
   for (const line of text.split("\n")) {
     if (!line) continue;
-    let entry: any;
+    let parsed: unknown;
     try {
-      entry = JSON.parse(line);
+      parsed = JSON.parse(line);
     } catch {
       continue;
     }
+    const entry = asRecord(parsed);
     if (entry?.type === "session" && typeof entry.id === "string") {
       header = {
         id: entry.id,
@@ -238,13 +239,16 @@ async function readCheckpoint(filePath: string): Promise<DisplayCheckpoint | und
         leafId: typeof entry.leafId === "string" ? entry.leafId : undefined,
       };
     } else if (entry?.type === "message" && typeof entry.id === "string") {
+      const message = asRecord(entry.message);
       lastMessageId = entry.id;
-      order.push({ message: entry.id, system: entry.message?.role === "system" });
+      order.push({ message: entry.id, system: message?.role === "system" });
       messages.set(entry.id, {
         parentId: typeof entry.parentId === "string" ? entry.parentId : null,
-        role: entry.message?.role,
-        content: entry.message?.content,
-        provenance: entry.message?.provenance,
+        // Kept as written, like `content`: the readers below compare these to
+        // the values they expect, so an unfamiliar one simply matches nothing.
+        role: asString(message?.role) as DisplayStoredMessage["role"],
+        content: message?.content,
+        provenance: asRecord(message?.provenance) as DisplayStoredMessage["provenance"],
       });
     } else if (entry?.type === "custom" && entry.kind === "autopilot_marker") {
       const marker = readMarker(entry.data);

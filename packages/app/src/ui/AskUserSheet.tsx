@@ -9,7 +9,8 @@
  */
 import { Dissolve } from "./motion/Dissolve";
 import { memo, useEffect, useRef, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { StageScroll } from "./stage/StageScroll";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { withAlpha } from "../motion";
 import { dashedOutline } from "./stage/DashedRule";
@@ -64,7 +65,7 @@ function AskUserSheetView({ ask, onAnswer }: AskUserSheetProps) {
         if (ask) onAnswer(ask.requestId, CANCEL_RESULT);
       }}
     >
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
+      <StageScroll style={styles.scroll} contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
         {shown?.questions.map((question, index) => (
           <QuestionBlock
             key={question.id}
@@ -84,7 +85,7 @@ function AskUserSheetView({ ask, onAnswer }: AskUserSheetProps) {
             onAnswer(shown.requestId, result);
           }}
         />
-      </ScrollView>
+      </StageScroll>
     </Sheet>
   );
 }
@@ -121,34 +122,41 @@ function QuestionBlock({
             const value = optionValue(option);
             const on = picks.includes(value);
             return (
-              <Dissolve key={`${option.label}:${index}`} kind="row" delay={index * 40}>
-              <Pressable
-                accessibilityRole={multi ? "checkbox" : "radio"}
-                accessibilityState={{ checked: on }}
-                accessibilityLabel={option.recommended ? `${option.label}, recommended` : option.label}
-                style={({ pressed }) => [
-                  styles.option,
-                  on && { borderStyle: "solid", borderColor: agent, backgroundColor: withAlpha(agent, 0.1) },
-                  pressed && styles.optionPressed,
-                ]}
-                onPress={() => {
-                  haptics.select();
-                  onChange(pickOption(draft, question, value));
-                }}
+              <Dissolve
+                key={`${option.label}:${index}`}
+                kind="row"
+                delay={index * 40}
+                // The pill straddles the top border, half above it: the extra
+                // room keeps it clear of the option (or heading) above.
+                style={option.recommended && styles.recommendedRoom}
               >
-                <Radio on={on} square={multi} color={agent} />
-                <View style={styles.optionMain}>
-                  <View style={styles.optionTop}>
-                    <Text style={styles.optionLabel} numberOfLines={1}>{option.label}</Text>
-                    {option.recommended ? (
-                      <View style={styles.badge}>
-                        <Text style={styles.badgeText}>recommended</Text>
-                      </View>
-                    ) : null}
+                <Pressable
+                  accessibilityRole={multi ? "checkbox" : "radio"}
+                  accessibilityState={{ checked: on }}
+                  accessibilityLabel={option.recommended ? `${option.label}, recommended` : option.label}
+                  style={({ pressed }) => [
+                    styles.option,
+                    on && { borderStyle: "solid", borderColor: agent, backgroundColor: withAlpha(agent, 0.1) },
+                    pressed && styles.optionPressed,
+                  ]}
+                  onPress={() => {
+                    haptics.select();
+                    onChange(pickOption(draft, question, value));
+                  }}
+                >
+                  <Radio on={on} square={multi} color={agent} />
+                  {/* Never truncated: an option the user can't read in full
+                      is one they can't choose. */}
+                  <View style={styles.optionMain}>
+                    <Text style={styles.optionLabel}>{option.label}</Text>
+                    {option.hint ? <Text style={styles.optionHint}>{option.hint}</Text> : null}
                   </View>
-                  {option.hint ? <Text style={styles.optionHint} numberOfLines={2}>{option.hint}</Text> : null}
-                </View>
-              </Pressable>
+                  {option.recommended ? (
+                    <View style={styles.badge} pointerEvents="none">
+                      <Text style={styles.badgeText} numberOfLines={1}>Recommended</Text>
+                    </View>
+                  ) : null}
+                </Pressable>
               </Dissolve>
             );
           })}
@@ -187,6 +195,8 @@ function Radio({ on, square, color }: { on: boolean; square: boolean; color: str
   );
 }
 
+const BADGE_HEIGHT = 18;
+
 const styles = StyleSheet.create({
   scroll: { maxHeight: 520 },
   body: { gap: theme.space(5), paddingBottom: theme.space(2) },
@@ -210,18 +220,24 @@ const styles = StyleSheet.create({
   radioDot: { width: 8, height: 8, borderRadius: 4 },
   optionPressed: { backgroundColor: theme.color.surfacePressed },
   optionMain: { flex: 1, gap: theme.space(0.5) },
-  optionTop: { flexDirection: "row", alignItems: "center", gap: theme.space(2), flexWrap: "wrap" },
-  optionLabel: { color: theme.color.text, fontSize: theme.font.body },
-  optionHint: { color: theme.color.textDim, fontSize: theme.font.small },
+  optionLabel: { color: theme.color.text, fontSize: theme.font.body, lineHeight: theme.line.body },
+  optionHint: { color: theme.color.textDim, fontSize: theme.font.small, lineHeight: 18 },
+  // Sat on the option's top border, centred on the line, like a legend: an
+  // opaque fill so the dashes stop either side of it.
+  recommendedRoom: { marginTop: BADGE_HEIGHT / 2 + theme.space(1) },
   badge: {
+    position: "absolute",
+    top: -BADGE_HEIGHT / 2 - 1,
+    right: theme.space(4),
+    height: BADGE_HEIGHT,
+    justifyContent: "center",
     borderRadius: theme.radius.pill,
-    borderWidth: StyleSheet.hairlineWidth,
+    borderWidth: 1,
     borderColor: theme.color.accent,
     backgroundColor: theme.color.accentSoft,
     paddingHorizontal: theme.space(2),
-    paddingVertical: 1,
   },
-  badgeText: { color: theme.color.accent, fontSize: theme.font.tiny, fontWeight: "600" },
+  badgeText: { color: theme.color.accent, fontSize: theme.font.tiny, lineHeight: 14, fontWeight: "600" },
   input: { flex: 1, color: theme.color.text, fontSize: theme.font.body, padding: 0 },
   submit: { marginTop: theme.space(2) },
   pressed: { opacity: 0.7 },

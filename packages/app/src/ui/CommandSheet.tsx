@@ -9,7 +9,8 @@
  * filtered live. Names only: the point is to find one quickly.
  */
 import { memo, useEffect, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, TextInput, View } from "react-native";
+import { Pressable, StyleSheet, TextInput, View } from "react-native";
+import { StageScroll } from "./stage/StageScroll";
 import { theme } from "../theme";
 import { haptics } from "./haptics";
 import { Sheet, SHEET_ROW_HEIGHT, SHEET_VISIBLE_ROWS } from "./Sheet";
@@ -54,9 +55,8 @@ function CommandSheetView({ visible, commands, onSelect, onClose }: CommandSheet
           accessibilityLabel="Filter commands"
         />
       </View>
-      <ScrollView
+      <StageScroll
         style={{ height: listHeight }}
-        showsVerticalScrollIndicator={scrolls}
         bounces={scrolls}
         keyboardShouldPersistTaps="handled"
       >
@@ -81,7 +81,7 @@ function CommandSheetView({ visible, commands, onSelect, onClose }: CommandSheet
             </Pressable>
           </Dissolve>
         ))}
-      </ScrollView>
+      </StageScroll>
     </Sheet>
   );
 }
