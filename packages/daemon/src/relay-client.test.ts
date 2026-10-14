@@ -7,7 +7,14 @@
  * anything, so reconnection is the feature under test here.
  */
 import { test, expect } from "bun:test";
-import { RelayClient, backoffBounds, type RelayClientOptions } from "./relay-client.js";
+import {
+  RelayClient,
+  backoffBounds,
+  describeRefusal,
+  probeRefusal,
+  type RelayClientOptions,
+  type RelayRefusal,
+} from "./relay-client.js";
 import { SecureChannel, e2e, wire } from "@pew2/protocol";
 
 const { WIRE_VERSION } = wire;
@@ -690,4 +697,171 @@ test("a close says why, so the log can explain the disconnect", () => {
 
   expect(events).toContain("offline: closed 4009: another daemon holds this room");
   relay.stop();
+});
+
+/**
+ * A relay stand-in for the refusal tests: a real HTTP server, because the thing
+ * under test is what a real WebSocket client and `fetch` make of its answer.
+ * Refuses the way `admission.ts` refuses a second daemon, or admits.
+ */
+function fakeRelay(answer: "refuse" | "admit") {
+  const seen: { role: string | null; upgrade: string | null }[] = [];
+  let socketsClosed = 0;
+  const server = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    fetch(request, srv) {
+      const url = new URL(request.url);
+      seen.push({ role: url.searchParams.get("role"), upgrade: request.headers.get("upgrade") });
+      if (answer === "refuse") {
+        return new Response("a live daemon is already connected", { status: 409 });
+      }
+      if (srv.upgrade(request)) return undefined;
+      return new Response("expected websocket upgrade", { status: 426 });
+    },
+    websocket: {
+      message() {},
+      close() {
+        socketsClosed++;
+      },
+    },
+  });
+  return {
+    url: `ws://127.0.0.1:${server.port}`,
+    seen,
+    socketsClosed: () => socketsClosed,
+    stop: () => server.stop(true),
+  };
+}
+
+async function until(check: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error("timed out waiting");
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
+/** Close a fake socket the way Bun reports a refused upgrade: before it ever opened. */
+function refuseUpgrade(socket: FakeSocket) {
+  socket.readyState = 3;
+  (socket.onclose as unknown as (event: { code: number; reason: string }) => void)({
+    code: 1002,
+    reason: "Expected 101 status code",
+  });
+}
+
+const TOKEN = "t".repeat(48);
+
+test("a refused upgrade logs the relay's status and reason, not just 'Expected 101'", async () => {
+  // The incident: another daemon held the room, the relay said 409 and why,
+  // and the log said only "closed 1002: Expected 101 status code".
+  const relayServer = fakeRelay("refuse");
+  const { relay, events } = detailedClient({
+    url: relayServer.url,
+    createSocket: (url) => new WebSocket(url),
+  });
+  try {
+    relay.start();
+    await until(() => events.some((e) => e.startsWith("offline")));
+
+    const offline = events.find((e) => e.startsWith("offline"))!;
+    expect(offline).toBe(
+      "offline: relay refused the connection: 409 a live daemon is already connected" +
+        " (is another pew2 daemon running with this pairing?)",
+    );
+    // The same request both times: a daemon-role upgrade to the same room.
+    expect(relayServer.seen).toEqual([
+      { role: "daemon", upgrade: "websocket" },
+      { role: "daemon", upgrade: "websocket" },
+    ]);
+    for (const event of events) expect(event).not.toContain(TOKEN);
+  } finally {
+    relay.stop();
+    await relayServer.stop();
+  }
+});
+
+test("a refusal that has passed by the second look says so, and lets that socket go", async () => {
+  // The room freed up between the refusal and the probe. The probe must not
+  // keep its socket, or the relay would refuse the real retry as a second daemon.
+  const relayServer = fakeRelay("admit");
+  const { relay, events } = detailedClient({ url: relayServer.url });
+  try {
+    relay.start();
+    refuseUpgrade(FakeSocket.instances[0]!);
+    await until(() => events.some((e) => e.startsWith("offline")));
+
+    expect(events).toContain(
+      "offline: closed 1002: Expected 101 status code" +
+        " (the relay let a second attempt in, so the refusal has passed)",
+    );
+    await until(() => relayServer.socketsClosed() === 1);
+  } finally {
+    relay.stop();
+    await relayServer.stop();
+  }
+});
+
+test("a probe still out when the client stops reports nothing and retries nothing", async () => {
+  let answer: (refusal: RelayRefusal) => void = () => {};
+  const { relay, events } = detailedClient({
+    probeRefusal: () => new Promise((resolve) => (answer = resolve)),
+  });
+  relay.start();
+  refuseUpgrade(FakeSocket.instances[0]!);
+
+  relay.stop();
+  answer({ kind: "refused", status: 409, reason: "a live daemon is already connected" });
+  await new Promise((r) => setTimeout(r, 20));
+
+  expect(events.filter((e) => e.startsWith("offline"))).toEqual([]);
+  expect(FakeSocket.instances).toHaveLength(1);
+});
+
+test("a socket that opened and then closed is not probed", () => {
+  // 1002 after the upgrade is a protocol error on a live socket, not a refusal.
+  let probes = 0;
+  const { relay, events } = detailedClient({
+    probeRefusal: async () => {
+      probes++;
+      return { kind: "admitted" };
+    },
+  });
+  relay.start();
+  const socket = FakeSocket.instances[0]!;
+  socket.open();
+  refuseUpgrade(socket);
+
+  expect(probes).toBe(0);
+  expect(events).toContain("offline: closed 1002: Expected 101 status code");
+  relay.stop();
+});
+
+test("a relay that cannot be asked is reported without the pairing token", async () => {
+  // Nothing listens here once the server is stopped. Fetch errors can carry the
+  // URL, and the URL carries the token.
+  const relayServer = fakeRelay("refuse");
+  const endpoint = `${relayServer.url}/connect?pairing=${TOKEN}&role=daemon&deviceId=x`;
+  await relayServer.stop();
+
+  const refusal = await probeRefusal(endpoint, 2_000);
+
+  expect(refusal.kind).toBe("error");
+  const line = describeRefusal(refusal, "closed 1002: Expected 101 status code", TOKEN);
+  expect(line).toStartWith("closed 1002: Expected 101 status code (could not ask the relay why: ");
+  expect(line).not.toContain(TOKEN);
+});
+
+test("a refusal body is shortened, flattened, and scrubbed of the token", () => {
+  const line = describeRefusal(
+    { kind: "refused", status: 400, reason: `bad pairing ${TOKEN} ${"x".repeat(500)}` },
+    undefined,
+    TOKEN,
+  );
+  expect(line).not.toContain(TOKEN);
+  expect(line).toContain("relay refused the connection: 400 bad pairing [pairing]");
+  expect(line.length).toBeLessThan(260);
+  // A 409 hint is only for a 409.
+  expect(line).not.toContain("another pew2 daemon");
 });
