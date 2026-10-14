@@ -23,6 +23,7 @@ import { hostname } from "node:os";
 import { daemonLogPaths, rotateLog, startLogRotation } from "./logs.js";
 import { sweepOrphans } from "./children.js";
 import { startUpdateScheduler } from "./update/scheduler.js";
+import { acquireDaemonLock, describeHeldLock } from "./daemon-lock.js";
 import type { ServerWebSocket } from "bun";
 
 const PORT = Number(process.env.PEW2_PORT ?? 8787);
@@ -30,6 +31,20 @@ const PORT = Number(process.env.PEW2_PORT ?? 8787);
 // Before anything is written: a log without times cannot say when a connection
 // dropped or how long it stayed down, which is the question it is read for.
 stampConsole();
+
+// Before anything else touches this pew2 home — its logs, its orphaned agents,
+// its relay room. A second daemon on the same pairing does not run beside the
+// first; it takes the relay from it the next time the first one blips, and
+// neither log says there are two. See `daemon-lock.ts`.
+const locked = await acquireDaemonLock({ port: PORT });
+if (!locked.ok) {
+  console.error(describeHeldLock(locked));
+  process.exit(1);
+}
+const lock = locked.lock;
+// `exit` rather than the signal handlers below, because every orderly way out —
+// a signal, an update restart, a fatal error — ends up here.
+process.on("exit", () => lock.release());
 
 // Under launchd this process's stdout is an append-only file that nothing else
 // ever trims. Done here first, before anything is written.
@@ -364,6 +379,10 @@ const server = Bun.serve({
     },
   },
 });
+
+// The configured port was recorded with the lock; with `PEW2_PORT=0` only now
+// is the real one known, and it is what a refused second daemon reports.
+await lock.setPort(server.port ?? PORT);
 
 const url = pairingUrl({
   token: pairing.token,

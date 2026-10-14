@@ -205,7 +205,7 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
   });
 }
 
-function alive(pid: number): boolean {
+export function alive(pid: number): boolean {
   try {
     // Signal 0 performs the permission and existence checks without delivering.
     process.kill(pid, 0);
@@ -226,7 +226,7 @@ function alive(pid: number): boolean {
  * the image name, a weaker check that still separates a stray `node.exe` from
  * an unrelated process that inherited the number.
  */
-async function identityOf(pid: number): Promise<string | undefined> {
+export async function identityOf(pid: number): Promise<string | undefined> {
   try {
     const { stdout } = WINDOWS
       ? await run("tasklist", ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"])
