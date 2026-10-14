@@ -2,7 +2,7 @@
  * Haptics and sounds for what the agent does on its own.
  */
 import { useEffect, useRef } from "react";
-import { Keyboard } from "react-native";
+import { AppState, Keyboard } from "react-native";
 import type { PermissionRequest, Turn } from "../useDaemon";
 import { haptics } from "./haptics";
 import { sounds } from "./sounds";
@@ -16,6 +16,11 @@ export function useAgentFeedback(
   // touched the screen. This is the point of a remote control: the agent runs
   // for minutes on another machine, and the phone is usually in a pocket. Each
   // effect compares against the previous value so nothing fires on mount.
+  //
+  // Only while the app is on screen. Off screen the socket stays open, so these
+  // effects still run, and the phone rings for the same moment instead: a chime
+  // and a buzz here landed just before the ringtone faded in, a ding on top of
+  // the ring.
 
   // A turn landed. The single most useful pulse in the app.
   const wasBusy = useRef(false);
@@ -26,7 +31,7 @@ export function useAgentFeedback(
     // A turn that ended in an error already pulsed as a failure below; a success
     // buzz on top of it would contradict what the screen says.
     const last = turns[turns.length - 1];
-    if (last?.role !== "system") {
+    if (last?.role !== "system" && AppState.currentState === "active") {
       haptics.finished();
       sounds.play("done");
     }
@@ -36,7 +41,7 @@ export function useAgentFeedback(
   const lastPermissionId = useRef<string | undefined>(undefined);
   useEffect(() => {
     const requestId = permission?.requestId;
-    if (requestId && requestId !== lastPermissionId.current) {
+    if (requestId && requestId !== lastPermissionId.current && AppState.currentState === "active") {
       Keyboard.dismiss();
       haptics.attention();
       sounds.play("attention");
