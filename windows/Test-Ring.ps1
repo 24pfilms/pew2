@@ -70,7 +70,7 @@ function Get-PhoneTime([string]$Line) {
 }
 
 if (-not (Test-Path $Adb)) { throw "adb not found at $Adb" }
-if ((& $Adb devices) -notmatch [regex]::Escape($Serial)) { throw "Phone $Serial is not connected over USB (adb devices)." }
+if ((& $Adb devices | Out-String) -notmatch "(?m)^$([regex]::Escape($Serial))\s+device\b") { throw "Phone $Serial is not connected over USB (adb devices)." }
 
 $wifi = Invoke-Adb @('shell', 'cmd', 'wifi', 'status')
 $network = if ($wifi -match 'is connected to') { 'Wi-Fi' } else { 'mobile data' }
