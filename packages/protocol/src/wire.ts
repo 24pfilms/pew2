@@ -168,6 +168,21 @@ export const ProviderAnnounce = z.object({
       automatic: z.boolean(),
     })
     .optional(),
+  /**
+   * Whether this machine can host a live voice conversation (GPT-Live).
+   *
+   * Absent means a daemon older than voice, and the app shows no voice button
+   * at all. Present but `available: false` means this daemon could, but has no
+   * OpenAI API key yet (or this month's voice budget is spent): the button
+   * stays, and tapping it says `reason`, because that is something the user can
+   * fix at their desk.
+   */
+  voice: z
+    .object({
+      available: z.boolean(),
+      reason: z.string().optional(),
+    })
+    .optional(),
 });
 
 /**
@@ -1067,6 +1082,113 @@ export const ProviderExtensions = z.object({
   checklist: z.boolean().optional(),
 });
 
+/**
+ * A live voice conversation, GPT-Live over WebRTC.
+ *
+ * The audio never touches pew2: the phone's microphone and speaker talk to
+ * OpenAI directly over WebRTC. What pew2 carries is the handshake, and the
+ * handshake has to come through the daemon because only the daemon holds the
+ * OpenAI API key. The phone makes an SDP offer, the daemon posts it to
+ * `POST /v1/live/sessions` with the key and the session configuration, and the
+ * SDP answer comes back. The key never leaves the desktop, and the relay only
+ * ever sees sealed frames.
+ *
+ * The daemon then attaches to the same live session over a server-side
+ * "sideband" WebSocket and runs the conversation's tools itself: starting and
+ * prompting coding agents, answering their approvals, reading back what they
+ * said. That is why the phone needs no tool logic, and why changing how the
+ * assistant behaves is a daemon release rather than an App Store review.
+ *
+ * Additive, not a `WIRE_VERSION` bump: an older daemon answers `voice.start`
+ * with `unknown_message`, and an older app never sends it because it never
+ * sees `voice` on the provider announcement.
+ */
+
+/** Ceiling on an SDP offer. Real offers are a few KB; this stops a junk frame. */
+export const MAX_SDP_BYTES = 64 * 1024;
+
+/** App -> daemon. Start a live voice conversation from this WebRTC offer. */
+export const VoiceStart = z.object({
+  t: z.literal("voice.start"),
+  /** Echoed on `voice.answer`. */
+  requestId: z.string().min(1),
+  /** The phone's SDP offer, with ICE gathering complete. */
+  sdp: z.string().min(1).max(MAX_SDP_BYTES),
+  /**
+   * The conversation on screen, if any: where coding work goes by default
+   * ("ask it to fix the tests" means *this* conversation).
+   */
+  sessionId: z.string().optional(),
+  /**
+   * The agent and project chosen on screen when no conversation exists yet,
+   * so "start on the login bug" lands where the user was looking. `cwd` is
+   * honoured only through `knownProject()`, like every client-named path.
+   */
+  providerId: z.string().optional(),
+  cwd: z.string().optional(),
+});
+
+/** Daemon -> app, as a reply. The SDP answer, or why there is none. */
+export const VoiceAnswer = z.object({
+  t: z.literal("voice.answer"),
+  requestId: z.string(),
+  /** OpenAI's live session id, used to stop it and to match `voice.status`. */
+  liveSessionId: z.string().optional(),
+  /**
+   * What a minute of this call costs, so the phone can show a running "about"
+   * figure. Absent on older daemons: the phone shows only the elapsed time.
+   * An estimate either way, since delegation turns add a little on top.
+   */
+  voiceRatePerMinuteUsd: z.number().positive().optional(),
+  /** Apply as the remote description. Absent when `error` explains why not. */
+  sdp: z.string().optional(),
+  error: z.string().optional(),
+});
+
+/**
+ * App -> daemon. End a live conversation.
+ *
+ * The phone also sends `session.close` on its own data channel; this is the
+ * belt to that, for when the data channel is already gone, so the daemon
+ * closes its sideband and stops the clock on a session nobody is listening to.
+ */
+export const VoiceStop = z.object({
+  t: z.literal("voice.stop"),
+  liveSessionId: z.string(),
+});
+
+/**
+ * Daemon -> every client. What the voice assistant's backend is doing.
+ *
+ * Broadcast, because it happens long after the request that started it (a
+ * coding turn can run for minutes), and clients ignore a `liveSessionId` they
+ * did not start. `sessionId` is the pew2 conversation the coding work went to,
+ * so the phone can open it and the transcript shows the work afterwards.
+ */
+export const VoiceStatus = z.object({
+  t: z.literal("voice.status"),
+  liveSessionId: z.string(),
+  state: z.enum([
+    /** Sideband attached; tools are live. */
+    "ready",
+    /** A coding agent is running a turn the assistant started. */
+    "agent_working",
+    /** That agent is blocked on an approval. */
+    "agent_waiting",
+    /** That turn finished; the assistant has been told. */
+    "agent_done",
+    /** The live session ended, for any reason. */
+    "closed",
+    /** Something failed; `detail` says what, in words for a person. */
+    "error",
+  ]),
+  sessionId: z.string().optional(),
+  providerId: z.string().optional(),
+  /** Project folder name, for "Claude Code is working in pew2". */
+  folder: z.string().optional(),
+  detail: z.string().optional(),
+});
+
 export const ErrorMessage = z.object({
   t: z.literal("error"),
   code: z.string(),
@@ -1122,6 +1244,8 @@ export const ClientMessage = z.discriminatedUnion("t", [
   PlanDecide,
   AutopilotSet,
   ChecklistRequest,
+  VoiceStart,
+  VoiceStop,
 ]);
 
 export const ServerMessage = z.discriminatedUnion("t", [
@@ -1145,6 +1269,8 @@ export const ServerMessage = z.discriminatedUnion("t", [
   PlanState,
   AutopilotState,
   Checklist,
+  VoiceAnswer,
+  VoiceStatus,
   ErrorMessage,
 ]);
 
@@ -1195,6 +1321,10 @@ export type Replay = z.output<typeof Replay>;
 export type SessionIdle = z.output<typeof SessionIdle>;
 export type PushRegister = z.output<typeof PushRegister>;
 export type DeviceJoined = z.output<typeof DeviceJoined>;
+export type VoiceStart = z.output<typeof VoiceStart>;
+export type VoiceAnswer = z.output<typeof VoiceAnswer>;
+export type VoiceStop = z.output<typeof VoiceStop>;
+export type VoiceStatus = z.output<typeof VoiceStatus>;
 export type WorkspaceEntry = z.output<typeof WorkspaceEntry>;
 export type Workspaces = z.output<typeof Workspaces>;
 export type ClientMessage = z.output<typeof ClientMessage>;

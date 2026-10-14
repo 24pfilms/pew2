@@ -68,6 +68,7 @@ export abstract class DaemonPromptQueue extends DaemonGg {
           // A new turn, so the previous turn's closing words must not be what
           // the push notification for this one quotes.
           session.turnText = undefined;
+          this.notify({ sessionId, kind: "turn_start" });
           // Echoed before the agent is ready: the paths ride along so every
           // client — including one replaying later — can show what was sent.
           // A goal turn has no user words, so nothing is logged for it.
@@ -119,6 +120,7 @@ export abstract class DaemonPromptQueue extends DaemonGg {
       // agent stopped rather than from when the user typed. A turn that ran for
       // twenty minutes would otherwise be reapable the moment it finished.
       session.lastUsedAt = Date.now();
+      this.notify({ sessionId, kind: "turn_end" });
     }
     return "ran";
   }

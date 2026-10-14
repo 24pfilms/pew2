@@ -32,6 +32,7 @@ import {
 } from "../providers/registry.js";
 import { CATALOG, detectProviders } from "../providers/detect.js";
 import { fetchRegistry, syncRegistry } from "./registry-sync.js";
+import { cmdVoice } from "./voice.js";
 import { verifyProvider } from "../providers/verify.js";
 import { doctorView } from "./doctor-view.js";
 import { registryView } from "./registry-view.js";
@@ -746,6 +747,7 @@ async function main() {
   if (group === "doctor") return cmdDoctor(flags);
   if (group === "detect") return cmdDetect(flags);
   if (group === "registry") return cmdRegistry(command, flags);
+  if (group === "voice") return cmdVoice(command, flags);
 
   if (group !== "providers") {
     console.log(helpView().join("\n"));

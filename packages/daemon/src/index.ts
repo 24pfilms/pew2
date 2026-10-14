@@ -18,6 +18,8 @@ import { writeConfigPref } from "./config-prefs.js";
 import { writeSessionPrefs } from "./session-prefs.js";
 import type { wire } from "@pew2/protocol";
 import { DaemonConnectSession } from "./daemon/connect-session.js";
+import { VoiceManager } from "./voice/manager.js";
+import { daemonHost, type SessionView } from "./voice/host.js";
 import {
   GG_GOALS_ID,
   GG_PROVIDER_ID,
@@ -38,6 +40,78 @@ export {
 } from "./daemon/types.js";
 
 export class Daemon extends DaemonConnectSession {
+  /**
+   * Live voice conversations (GPT-Live). Created with the daemon so `closeAll`
+   * and the announcement can reach it; it does nothing until `voice.start`.
+   */
+  readonly voice = new VoiceManager(daemonHost(this, this.env));
+
+  constructor(...args: ConstructorParameters<typeof DaemonConnectSession>) {
+    super(...args);
+    this.observe((observation) => this.voice.observe(observation));
+  }
+
+  /** Send to every client on every transport, as the handler's `broadcast` does. */
+  broadcast(message: unknown) {
+    this.send(message);
+  }
+
+  /** Agents a voice request may address: the same list clients are shown. */
+  voiceAgents(): { id: string; name: string; available: boolean }[] {
+    return this.providers
+      .filter((p) => !p.manifest.pew.experimental || this.includeExperimental)
+      .filter((p) => this.isEnabled(p.manifest.id) && !p.commandMissing)
+      .map((p) => ({ id: p.manifest.id, name: p.manifest.name, available: isAvailable(p) }));
+  }
+
+  /** A live session's state, read-only. Undefined once it is gone. */
+  sessionView(sessionId: string): SessionView | undefined {
+    const session = this.sessions.get(sessionId);
+    if (!session) return undefined;
+    return {
+      sessionId,
+      providerId: session.providerId,
+      cwd: session.cwd,
+      agentSessionId: session.agentSessionId,
+      working: session.working === true,
+      permissions: [...(session.permissions ?? [])].map(([requestId, params]) => ({ requestId, params })),
+    };
+  }
+
+  /**
+   * The last user request and everything the agent said after it, from the log.
+   *
+   * Read without touching `lastUsedAt`: the voice assistant glancing at a
+   * conversation is not someone using it.
+   */
+  lastExchange(sessionId: string): { request?: string; reply: string } | undefined {
+    const session = this.sessions.get(sessionId);
+    if (!session) return undefined;
+    let request: string | undefined;
+    let reply = "";
+    for (const event of session.log.since(-1)) {
+      const payload = event.payload as {
+        kind?: unknown;
+        text?: unknown;
+        update?: { sessionUpdate?: unknown; content?: unknown };
+      } | null;
+      if (payload?.kind === "user_message" && typeof payload.text === "string") {
+        request = payload.text;
+        reply = "";
+        continue;
+      }
+      if (payload?.update?.sessionUpdate === "agent_message_chunk") {
+        const content = payload.update.content as { type?: unknown; text?: unknown } | unknown[];
+        const parts = Array.isArray(content) ? content : [content];
+        for (const part of parts) {
+          const block = part as { text?: unknown } | null;
+          if (typeof block?.text === "string") reply = `${reply}${block.text}`.slice(-20_000);
+        }
+      }
+    }
+    return { request, reply };
+  }
+
   /** Point the daemon at a transport. Called with the relay socket's `send`. */
   attach(send: (message: unknown) => void) {
     this.send = send;
@@ -206,6 +280,9 @@ export class Daemon extends DaemonConnectSession {
     // restarting the daemon.
     this.disabled = await readDisabled();
     this.closeDisabled();
+    // Re-read on every refresh, which every `hello` triggers, so a key added
+    // with `pew2 voice key` shows up on the next connect.
+    await this.voice.refresh();
     this.announceProviders();
     return { errors };
   }
@@ -281,6 +358,7 @@ export class Daemon extends DaemonConnectSession {
       // Omitted entirely when there is nothing to say, so an app that has been
       // told once does not keep a stale banner when the update lands.
       update: this.updateStatus,
+      voice: this.voice.status,
     };
     this.send(announce);
   }
@@ -294,6 +372,7 @@ export class Daemon extends DaemonConnectSession {
   protected record(session: ActiveSession, payload: unknown) {
     rememberTurnText(session, payload);
     const event = session.log.append(payload);
+    this.notify({ sessionId: session.log.sessionId, kind: "update", payload });
     if (!session.live) return;
     if (!session.streamingReplay) {
       this.send(event);
@@ -658,6 +737,7 @@ export class Daemon extends DaemonConnectSession {
   }
 
   closeAll() {
+    this.voice.closeAll();
     if (this.reaper) {
       clearInterval(this.reaper);
       this.reaper = undefined;

@@ -510,6 +510,23 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
         break;
       }
 
+      case "voice.start": {
+        // Replied, not broadcast: the SDP answer belongs to the one phone that
+        // made the offer. Failures are part of the answer, in words.
+        try {
+          reply(await daemon.voice.start(message));
+        } catch (error) {
+          reply({ t: "voice.answer", requestId: message.requestId, error: humanError(error) });
+        }
+        break;
+      }
+
+      case "voice.stop": {
+        // The `closed` status is broadcast by the session as it ends.
+        await daemon.voice.stop(message.liveSessionId);
+        break;
+      }
+
       default:
         // Reached only by a sealed envelope, which is a transport concern and has
         // already been opened long before anything arrives here. A type this

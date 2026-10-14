@@ -10,6 +10,7 @@ import type { AcpSessionHandle, AgentSession } from "../acp/connect.js";
 import { PushRegistry } from "../push.js";
 import type { wire } from "@pew2/protocol";
 import type { ActiveSession, ProviderCapabilities } from "./types.js";
+import type { VoiceObservation } from "../voice/host.js";
 
 export abstract class DaemonState {
   protected providers: LoadedProvider[] = [];
@@ -17,6 +18,30 @@ export abstract class DaemonState {
   /** Mints queued-message ids (`q_<n>`), unique for this process. */
   protected queueCounter = 0;
   protected send: (message: unknown) => void = () => {};
+
+  /** Who hears about session activity besides clients: the voice assistant. */
+  private readonly observers = new Set<(observation: VoiceObservation) => void>();
+
+  /**
+   * Watch every session's events, turn starts and turn ends.
+   *
+   * A listener must never be able to break the session it watches, so each
+   * call is isolated.
+   */
+  observe(listener: (observation: VoiceObservation) => void): () => void {
+    this.observers.add(listener);
+    return () => this.observers.delete(listener);
+  }
+
+  protected notify(observation: VoiceObservation) {
+    for (const listener of this.observers) {
+      try {
+        listener(observation);
+      } catch (error) {
+        console.error("[observe] listener failed:", error);
+      }
+    }
+  }
   // What a provider offers, learned by probing it: selectors, and the
   // conversations it already has on disk. Keyed by provider id, and stored in
   // flight rather than resolved so concurrent asks share one spawn.
