@@ -82,6 +82,7 @@ export type FrameRefs = Pick<
   | "setRefreshingList"
   | "notifiedTurns"
   | "onTurnFinished"
+  | "voiceListener"
 >;
 
 export function handleSealedFrame(refs: FrameRefs, connection: FrameConnection, frame: unknown): void {
@@ -115,6 +116,7 @@ export function handleSealedFrame(refs: FrameRefs, connection: FrameConnection, 
     setRefreshingList,
     notifiedTurns,
     onTurnFinished,
+    voiceListener,
   } = refs;
   const { ws, secure, resetStream, batch, flushOutbox, watch } = connection;
 
@@ -715,6 +717,12 @@ export function handleSealedFrame(refs: FrameRefs, connection: FrameConnection, 
         refused,
       },
     }));
+    return;
+  }
+
+  // A voice call's handshake and progress: for the call, never the transcript.
+  if (message.t === "voice.answer" || message.t === "voice.status") {
+    voiceListener.current?.(message);
     return;
   }
 

@@ -3,6 +3,7 @@
  * state shape, timeouts and the small turn builders it shares with the socket
  * handler and the actions. Platform-free; nothing here imports React.
  */
+import type { wire as VoiceWire } from "@pew2/protocol";
 import type { LiveStreamIdentity } from "./smoothText";
 import type { RestoreTarget } from "./restoreState";
 import type { Activity, TurnReceipt } from "./activity";
@@ -102,6 +103,12 @@ export interface State {
    * desk, which has no screen to tell anyone with.
    */
   update?: { latest: string; automatic: boolean };
+  /**
+   * Whether the computer can host a voice call with Orca. Absent: a daemon
+   * older than voice, so no button. `available: false` keeps the button and
+   * says why (no key yet, or this month's budget is spent).
+   */
+  voice?: { available: boolean; reason?: string };
   /**
    * The paired computer's own name (its hostname), as it reports itself. Shown
    * in settings in place of the relay's address. Absent from a daemon too old
@@ -346,3 +353,6 @@ export interface DaemonOptions {
    */
   onPushRegistered?: (registered: boolean) => void;
 }
+
+/** What a live voice call hears from the daemon. */
+export type VoiceFrame = VoiceWire.VoiceAnswer | VoiceWire.VoiceStatus;

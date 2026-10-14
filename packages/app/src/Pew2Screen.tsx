@@ -68,6 +68,9 @@ import { loadLinkSettings, saveLinkSettings } from "./preferences";
 import { useBackgroundLink } from "./ui/useBackgroundLink";
 import NetInfo from "@react-native-community/netinfo";
 import { NetworkChange } from "./networkChange";
+import { useVoice, type IncomingCall } from "./ui/useVoice";
+import { VoiceScreen } from "./ui/VoiceScreen";
+import { VoiceBar, VoiceIncomingBar } from "./ui/VoiceBar";
 import { GoalSheets } from "./ui/GoalSheets";
 import type { ComposerAnchor, ComposerSelector } from "./ui/Composer";
 
@@ -95,12 +98,35 @@ export function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => 
     void saveLinkSettings(next);
   }, []);
 
-  const { choice, setChoice, pushExpected, announceTurn, announceApproval } = useTurnBanners(linkSettingsRef);
+  // Bridges to the voice call, which is set up further down (it needs the
+  // dictation and the conversation on screen): whether a ring may offer
+  // "Talk to Orca", a ring answered that way waiting for the connection, and
+  // the in-app offer for a turn finishing in another conversation.
+  const voiceOfferRef = useRef(false);
+  const [pendingVoice, setPendingVoice] = useState<string | undefined>(undefined);
+  const offerIncomingRef = useRef<((turn: IncomingCall) => void) | undefined>(undefined);
+
+  const { choice, setChoice, pushExpected, announceTurn, announceApproval } = useTurnBanners(
+    linkSettingsRef,
+    voiceOfferRef,
+  );
 
   // The relay identifies devices by this, and it must match the id baked into
   // the stored pairing URL or the two look like different clients.
   const daemon = useDaemon(pairing.url, pairing.deviceId, pairing.key, {
-    onTurnFinished: announceTurn,
+    onTurnFinished: (turn) => {
+      announceTurn(turn);
+      // On screen, a turn finishing in another conversation is offered as a
+      // call in the app; off screen the native ring does that.
+      if (AppState.currentState === "active") {
+        offerIncomingRef.current?.({
+          sessionId: turn.sessionId,
+          agentName: turn.agentName,
+          folder: turn.folder,
+          appActive: true,
+        });
+      }
+    },
     onApprovalNeeded: announceApproval,
     // Supplied from here because obtaining it calls into the Expo SDK, which
     // `useDaemon` deliberately stays clear of. What it buys: the daemon can
@@ -165,7 +191,10 @@ export function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => 
     enabled: linkSettings.background,
     title: `OrcaCoder · ${daemon.machineName ?? "Your computer"}`,
     resumeNow: resumeDaemon,
-    onAnswered: (sessionId) => setChoice({ sessionId }),
+    onAnswered: (answered) => {
+      if (answered.voice) setPendingVoice(answered.sessionId);
+      else setChoice({ sessionId: answered.sessionId });
+    },
   });
 
   // The rest of the hook's actions, pulled out for the same reason as
@@ -741,6 +770,43 @@ export function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => 
     deleteGoal,
     openNewGoal,
   } = goals;
+
+  // A voice call with Orca. The phone is only microphone, speaker and captions:
+  // the computer holds the OpenAI key and runs the coding work (`voice/`).
+  const providers = daemon.providers;
+  const providerName = useCallback(
+    (id: string | undefined) => providers.find((provider) => provider.id === id)?.name ?? "your agent",
+    [providers],
+  );
+  const voice = useVoice({
+    status: daemon.status,
+    voice: daemon.voice,
+    sendVoice: daemon.sendVoice,
+    setVoiceListener: daemon.setVoiceListener,
+    sessionId: daemon.sessionId,
+    providerId: active?.id,
+    cwd: daemon.workspace?.cwd,
+    providerName,
+    onBeforeStart: cancelDictation,
+    onOpenSession: (id) => {
+      if (daemonSessions.some((session) => session.id === id)) openSession(id);
+    },
+    onSessionShown: openSessionId,
+    onMessage: (message) => Alert.alert("Orca", message),
+  });
+  voiceOfferRef.current = daemon.voice?.available === true;
+  offerIncomingRef.current = voice.offerIncoming;
+
+  // A ring answered with "Talk to Orca": once the connection is back, show the
+  // conversation and start a call briefed on it.
+  const startVoiceFor = voice.startFor;
+  useEffect(() => {
+    if (!pendingVoice || daemon.status !== "online") return;
+    if (daemonSessions.some((session) => session.id === pendingVoice)) openSession(pendingVoice);
+    startVoiceFor(pendingVoice);
+    setPendingVoice(undefined);
+  }, [pendingVoice, daemon.status, daemonSessions, openSession, startVoiceFor]);
+
   const restoring = Boolean(daemon.restoreTarget) && daemon.loadingSession;
   useEffect(() => {
     if (!restoring) {
@@ -1032,6 +1098,7 @@ export function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => 
             onAttach={openAttach}
             onRemoveAttachment={removeAttachment}
             dictation={dictation}
+            onVoice={voice.offered ? (voice.active ? voice.expand : voice.start) : undefined}
           />
         </View>
       </Reanimated.View>
@@ -1039,6 +1106,9 @@ export function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => 
       {/* Outside the lifted pane: a sheet belongs to the screen's bottom edge,
           not to the composer, so it must not ride up with the keyboard. */}
       <ContextDetailsSheet visible={contextOpen} workspace={daemon.workspace} usage={daemon.usage} inConversation={daemon.sessionId !== undefined} onClose={closeContext} />
+      <VoiceScreen voice={voice} color={active?.color} />
+      <VoiceBar voice={voice} color={active?.color} />
+      <VoiceIncomingBar voice={voice} />
       <ConnectionSheet visible={connectionOpen} machineLabel={daemon.machineName ?? "Your computer"} machineRemote={pairing.remote} status={daemon.status} update={daemon.update} onClose={closeConnection} onUnpair={onUnpair} linkSettings={linkSettings} onLinkSettings={changeLinkSettings} />
       <CommandSheet
         visible={commandsOpen}

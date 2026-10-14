@@ -41,6 +41,7 @@ export function reduceMessage(prev: State, message: any, scope: MessageScope): S
         // banner the daemon can no longer take back would outlive the
         // update it describes.
         update: message.update,
+        voice: message.voice,
         loadingSessions: pendingCapabilities.current.size > 0,
       };
 

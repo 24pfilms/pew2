@@ -61,6 +61,7 @@ class RingActivity : Activity() {
     val title = intent.getStringExtra(EXTRA_TITLE) ?: "pew2"
     val text = intent.getStringExtra(EXTRA_TEXT) ?: ""
     val session = intent.getStringExtra(PewLinkRinger.EXTRA_SESSION)
+    val offerVoice = intent.getBooleanExtra(EXTRA_OFFER_VOICE, false)
 
     val root =
       LinearLayout(this).apply {
@@ -87,8 +88,15 @@ class RingActivity : Activity() {
     root.addView(spacer(64))
 
     // Stacked full-width rather than side by side: two buttons in a row were
-    // clipped at both ends on a phone screen. The one people want goes on top.
-    root.addView(button("Open", "#3FB950") { open(session) })
+    // clipped at both ends on a phone screen. The one people want goes on top:
+    // talking to Orca when the computer can host a call, otherwise opening it.
+    if (offerVoice) {
+      root.addView(button("Talk to Orca", "#3FB950") { open(session, voice = true) })
+      root.addView(spacer(16))
+      root.addView(button("Open chat", "#388BFD") { open(session, voice = false) })
+    } else {
+      root.addView(button("Open", "#3FB950") { open(session, voice = false) })
+    }
     root.addView(spacer(16))
     root.addView(
       button("Close", "#F85149") {
@@ -103,8 +111,11 @@ class RingActivity : Activity() {
     handler.postDelayed({ finish() }, SCREEN_MS)
   }
 
-  /** Unlock if needed, then open pew2 on the conversation; pew2 ends the ring. */
-  private fun open(session: String?) {
+  /**
+   * Unlock if needed, then open pew2 on the conversation; pew2 ends the ring.
+   * With [voice], pew2 starts a call with Orca about it as it opens.
+   */
+  private fun open(session: String?, voice: Boolean) {
     val launch =
       packageManager.getLaunchIntentForPackage(packageName)?.apply {
         addFlags(
@@ -114,6 +125,7 @@ class RingActivity : Activity() {
         )
         ringId?.let { putExtra(PewLinkRinger.EXTRA_RING_ID, it) }
         session?.let { putExtra(PewLinkRinger.EXTRA_SESSION, it) }
+        if (voice) putExtra(PewLinkRinger.EXTRA_VOICE, true)
       } ?: return finish()
     val keyguard = getSystemService(KeyguardManager::class.java)
     if (keyguard != null && keyguard.isKeyguardLocked && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -167,6 +179,7 @@ class RingActivity : Activity() {
   companion object {
     const val EXTRA_TITLE = "pew2.ring.title"
     const val EXTRA_TEXT = "pew2.ring.text"
+    const val EXTRA_OFFER_VOICE = "pew2.ring.offerVoice"
     /** Matches the ring's own timeout. */
     private const val SCREEN_MS = 30_000L
   }

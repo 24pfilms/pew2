@@ -15,7 +15,7 @@ import type { PendingAttachment } from "./attachments";
 import type { SlashCommand } from "./slashCommands";
 import type { GgState } from "./ggState";
 import type { ConfigOption, ImageEntry, Provider, Session } from "./daemonTypes";
-import type { DaemonOptions, State, TurnFinished } from "./daemonState";
+import type { DaemonOptions, State, TurnFinished, VoiceFrame } from "./daemonState";
 import type { CapabilityProbes } from "./capabilityProbes";
 import type { ConnectionWatch } from "./connectionWatch";
 import type { ListRefresh } from "./listRefresh";
@@ -70,4 +70,6 @@ export interface DaemonRefs {
   turnText: RefObject<Map<string, string>>;
   pushRegistered: RefObject<boolean>;
   targetProviderRef: RefObject<string | undefined>;
+  /** The voice call's ear on the socket: answers and status for a live call. */
+  voiceListener: RefObject<((message: VoiceFrame) => void) | undefined>;
 }

@@ -23,8 +23,8 @@ export function useBackgroundLink({
   title: string;
   /** Check the connection now; reconnect at once if it is down. */
   resumeNow: () => void;
-  /** A ring was answered: open this conversation. */
-  onAnswered: (sessionId: string) => void;
+  /** A ring was answered: open that conversation, or talk to Orca about it. */
+  onAnswered: (answered: PewLink.Answered) => void;
 }) {
   const latest = useRef({ resumeNow, onAnswered });
   latest.current = { resumeNow, onAnswered };
@@ -68,8 +68,8 @@ export function useBackgroundLink({
     if (!PewLink.available) return;
     const collect = () => {
       PewLink.cancelAllRings();
-      const sessionId = PewLink.takeAnswered();
-      if (sessionId) latest.current.onAnswered(sessionId);
+      const answered = PewLink.takeAnswered();
+      if (answered) latest.current.onAnswered(answered);
     };
     collect();
     const subscription = AppState.addEventListener("change", (next) => {

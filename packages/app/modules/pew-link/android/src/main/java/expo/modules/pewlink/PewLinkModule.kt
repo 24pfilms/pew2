@@ -22,8 +22,11 @@ class PewLinkModule : Module() {
   private val context: Context
     get() = appContext.reactContext?.applicationContext ?: throw IllegalStateException("React context lost")
 
-  /** Set when the app was opened by answering a ringing alert; taken once by JavaScript. */
-  @Volatile private var answered: String? = null
+  /**
+   * Set when the app was opened by answering a ringing alert; taken once by
+   * JavaScript as `{ sessionId, voice }`.
+   */
+  @Volatile private var answered: Map<String, Any>? = null
 
   override fun definition() =
     ModuleDefinition {
@@ -51,9 +54,11 @@ class PewLinkModule : Module() {
       Function("start") { title: String, text: String -> PewLinkService.start(context, title, text) }
       Function("stop") { PewLinkService.stop(context) }
       Function("isRunning") { PewLinkService.running }
+      Function("startCall") { title: String, text: String -> PewLinkService.startCall(context, title, text) }
+      Function("endCall") { PewLinkService.endCall(context) }
 
-      Function("ring") { id: String, title: String, text: String, sessionId: String ->
-        PewLinkRinger.ring(context, id, title, text, sessionId)
+      Function("ring") { id: String, title: String, text: String, sessionId: String, offerVoice: Boolean ->
+        PewLinkRinger.ring(context, id, title, text, sessionId, offerVoice)
       }
       Function("cancelRing") { id: String -> PewLinkRinger.cancel(context, id) }
       Function("cancelAllRings") { PewLinkRinger.cancelAll(context) }
@@ -106,9 +111,11 @@ class PewLinkModule : Module() {
     intent.getStringExtra(PewLinkRinger.EXTRA_RING_ID)?.let { PewLinkRinger.cancel(context, it) }
     // Read once: the activity keeps its launch intent, and a later
     // `takeAnswered` must not reopen the same conversation again.
+    val voice = intent.getBooleanExtra(PewLinkRinger.EXTRA_VOICE, false)
     intent.removeExtra(PewLinkRinger.EXTRA_SESSION)
     intent.removeExtra(PewLinkRinger.EXTRA_RING_ID)
-    answered = session
+    intent.removeExtra(PewLinkRinger.EXTRA_VOICE)
+    answered = mapOf("sessionId" to session, "voice" to voice)
   }
 
   private fun open(intent: Intent): Boolean {

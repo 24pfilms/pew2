@@ -14,8 +14,10 @@ import * as PewLink from "../../modules/pew-link";
  * @param linkSettings The background-link and ringing switches, read when
  *   something happens rather than captured, so changing one never rebuilds
  *   the callbacks the socket handler holds.
+ * @param voiceOffered Whether the computer can host a call with Orca right
+ *   now, so a ring can be answered by talking. Read the same way.
  */
-export function useTurnBanners(linkSettings: RefObject<LinkSettings>) {
+export function useTurnBanners(linkSettings: RefObject<LinkSettings>, voiceOffered: RefObject<boolean>) {
   // Whether the app is the thing on screen. A ref, not state: it is read when a
   // turn finishes, and re-rendering the whole screen because the app was
   // backgrounded would be work nobody can see.
@@ -60,12 +62,18 @@ export function useTurnBanners(linkSettings: RefObject<LinkSettings>) {
     });
     if (!notice) return;
     if (shouldRing("finished", foreground.current, linkSettings.current)) {
-      const rang = PewLink.ring(`turn:${notice.sessionId}:${Date.now()}`, notice.title, notice.body, notice.sessionId);
+      const rang = PewLink.ring(
+        `turn:${notice.sessionId}:${Date.now()}`,
+        notice.title,
+        notice.body,
+        notice.sessionId,
+        voiceOffered.current,
+      );
       if (rang) return;
       console.warn("[pew2] could not ring for a finished turn; notifying instead");
     }
     void notify(notice);
-  }, [linkSettings]);
+  }, [linkSettings, voiceOffered]);
 
   /**
    * An agent somewhere is blocked on an approval. With the app off screen it
@@ -77,12 +85,18 @@ export function useTurnBanners(linkSettings: RefObject<LinkSettings>) {
     (approval: { requestId: string; sessionId: string; title: string }) => {
       if (!firstSighting(seenApprovals.current, approval.requestId)) return;
       if (!shouldRing("approval", foreground.current, linkSettings.current)) return;
-      const rang = PewLink.ring(`approval:${approval.requestId}`, "Approval needed", approval.title, approval.sessionId);
+      const rang = PewLink.ring(
+        `approval:${approval.requestId}`,
+        "Approval needed",
+        approval.title,
+        approval.sessionId,
+        voiceOffered.current,
+      );
       if (rang) return;
       console.warn("[pew2] could not ring for an approval; notifying instead");
       void notify({ title: "Approval needed", body: approval.title, sessionId: approval.sessionId });
     },
-    [linkSettings],
+    [linkSettings, voiceOffered],
   );
 
   return { choice, setChoice, pushExpected, announceTurn, announceApproval };

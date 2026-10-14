@@ -15,7 +15,7 @@
 import { GOALS_PROVIDER_ID } from "./goalsAgent";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RestoreTarget } from "./restoreState";
-import { SecureChannel, envelopeHeader } from "@pew2/protocol";
+import { SecureChannel, envelopeHeader, type wire } from "@pew2/protocol";
 import { USE_FIXTURES, sampleSessions } from "./fixtures";
 import { agentSessionKey } from "./agentHistory";
 import type { OutboxEntry } from "./outbox";
@@ -56,6 +56,7 @@ import {
   type DaemonOptions,
   type State,
   type TurnFinished,
+  type VoiceFrame,
 } from "./daemonState";
 import { useImageCache } from "./useImageCache";
 import { openConnection } from "./daemonConnection";
@@ -63,7 +64,7 @@ import { CapabilityProbes } from "./capabilityProbes";
 import { ListRefresh } from "./listRefresh";
 import type { ConnectionWatch } from "./connectionWatch";
 import { createActions, deliverPrompt as deliverPromptVia } from "./daemonActions";
-export type { PushAddress, TurnFinished } from "./daemonState";
+export type { PushAddress, TurnFinished, VoiceFrame } from "./daemonState";
 
 /**
  * @param deviceId Identifies this phone to the relay, which uses it to tell
@@ -199,6 +200,8 @@ export function useDaemon(
   // skeleton, and a pull must keep the list on screen under its spinner.
   const listRefresh = useRef(new ListRefresh());
   const [refreshingList, setRefreshingList] = useState(false);
+  // Where voice answers and status go: the call screen, while one is up.
+  const voiceListener = useRef<((message: VoiceFrame) => void) | undefined>(undefined);
   // Capability requests in flight, keyed by provider. One slow or broken agent
   // must not keep another provider's already-loaded history behind a skeleton.
   const pendingCapabilities = useRef(new Set<string>());
@@ -403,6 +406,7 @@ export function useDaemon(
           streamGeneration,
           turnText,
           viewingRef,
+          voiceListener,
           watch,
         },
         url,
@@ -750,6 +754,11 @@ export function useDaemon(
     loadingSessions,
     refreshingList,
     refreshList,
+    /** Hand a voice frame to the daemon; false when there is no socket. */
+    sendVoice: post as (message: wire.VoiceStart | wire.VoiceStop) => boolean,
+    setVoiceListener: (listener: ((message: VoiceFrame) => void) | undefined) => {
+      voiceListener.current = listener;
+    },
     images,
     gg,
     hasGgCoder,

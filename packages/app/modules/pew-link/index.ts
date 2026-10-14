@@ -11,15 +11,23 @@ import { requireOptionalNativeModule } from "expo-modules-core";
 
 type Subscription = { remove(): void };
 
+/** A ring answered: the conversation, and whether to talk to Orca about it. */
+export interface Answered {
+  sessionId: string;
+  voice: boolean;
+}
+
 interface PewLinkNative {
   start(title: string, text: string): boolean;
   stop(): void;
   isRunning(): boolean;
-  ring(id: string, title: string, text: string, sessionId: string): boolean;
+  startCall(title: string, text: string): boolean;
+  endCall(): void;
+  ring(id: string, title: string, text: string, sessionId: string, offerVoice: boolean): boolean;
   cancelRing(id: string): void;
   cancelAllRings(): void;
   canRingFullScreen(): boolean;
-  takeAnswered(): string | null;
+  takeAnswered(): Answered | null;
   batteryUnrestricted(): boolean;
   requestBatteryUnrestricted(): boolean;
   openAppSettings(): boolean;
@@ -49,13 +57,21 @@ export const startLink = (title: string, text: string) => guarded(false, (m) => 
 export const stopLink = () => guarded(undefined, (m) => m.stop());
 export const linkRunning = () => guarded(false, (m) => m.isRunning());
 
-export const ring = (id: string, title: string, text: string, sessionId: string) =>
-  guarded(false, (m) => m.ring(id, title, text, sessionId));
+/**
+ * Keep the microphone alive with the screen locked, for a voice call. Only
+ * while the app is on screen with the microphone granted.
+ */
+export const startCall = (title: string, text: string) => guarded(false, (m) => m.startCall(title, text));
+export const endCall = () => guarded(undefined, (m) => m.endCall());
+
+/** @param offerVoice Answering talks to Orca about the conversation. */
+export const ring = (id: string, title: string, text: string, sessionId: string, offerVoice = false) =>
+  guarded(false, (m) => m.ring(id, title, text, sessionId, offerVoice));
 export const cancelRing = (id: string) => guarded(undefined, (m) => m.cancelRing(id));
 export const cancelAllRings = () => guarded(undefined, (m) => m.cancelAllRings());
 export const canRingFullScreen = () => guarded(true, (m) => m.canRingFullScreen());
-/** The conversation a ring was answered for, once, or null. */
-export const takeAnswered = () => guarded<string | null>(null, (m) => m.takeAnswered());
+/** The ring that was answered, once, or null. */
+export const takeAnswered = () => guarded<Answered | null>(null, (m) => m.takeAnswered());
 
 export const batteryUnrestricted = () => guarded(true, (m) => m.batteryUnrestricted());
 export const requestBatteryUnrestricted = () => guarded(false, (m) => m.requestBatteryUnrestricted());
