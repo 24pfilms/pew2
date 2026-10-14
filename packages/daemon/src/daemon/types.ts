@@ -136,20 +136,38 @@ export interface QueueEntry {
 export const GG_PROVIDER_ID = "ggcoder";
 /** GG Goals: the ggcoder command, offered as its own agent for goal folders only. */
 export const GG_GOALS_ID = "gg-goals";
+/**
+ * OrcaGoals' engine. When a manifest with this id is installed, it runs the
+ * goals instead of GG Coder, so `ggcoder` can be an engine without goals (such
+ * as OrcaCoder V5) and the phone's Goals still work. It is never offered as an
+ * agent of its own.
+ */
+export const ORCA_GOALS_ENGINE_ID = "orcagoals";
 
-/** The GG Coder goals root: `<GG_AGENT_DIR or ~/.gg>/goals`. */
-export function goalsRoot(env: NodeJS.ProcessEnv = process.env): string {
+/** The provider whose engine runs goals: OrcaGoals' when installed, otherwise GG Coder. */
+export function goalsEngineId(providers: readonly LoadedProvider[]): string {
+  return providers.some((p) => p.manifest.id === ORCA_GOALS_ENGINE_ID) ? ORCA_GOALS_ENGINE_ID : GG_PROVIDER_ID;
+}
+
+/**
+ * The goals root of an engine: `<GG_AGENT_DIR or ~/.gg>/goals` for GG Coder,
+ * `<ORCA_GOALS_DATA_DIR or ~/.orca-goals>/goals` for OrcaGoals.
+ */
+export function goalsRoot(env: NodeJS.ProcessEnv = process.env, engineId: string = GG_PROVIDER_ID): string {
+  if (engineId === ORCA_GOALS_ENGINE_ID) {
+    return join(env.ORCA_GOALS_DATA_DIR || join(homedir(), ".orca-goals"), "goals");
+  }
   return join(env.GG_AGENT_DIR || join(homedir(), ".gg"), "goals");
 }
 
-/** `gg-goals`, synthesised in memory from the ggcoder provider (no manifest file). */
+/** `gg-goals`, synthesised in memory from the goals engine's provider (no manifest file). */
 export function goalsProviderFrom(gg: LoadedProvider): LoadedProvider {
   return {
     ...gg,
     manifest: {
       ...gg.manifest,
       id: GG_GOALS_ID,
-      name: "GG Goals",
+      name: gg.manifest.id === ORCA_GOALS_ENGINE_ID ? "OrcaGoals" : "GG Goals",
       description: "Long-running goals: GG Goals plans, runs workers and checks in.",
       pew: { ...gg.manifest.pew, color: "#8b7cf6", requiresWorkspace: false },
     },

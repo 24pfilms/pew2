@@ -9,7 +9,8 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Daemon } from "./index.js";
+import { Daemon, goalsRoot } from "./index.js";
+import { goalsProviderFrom } from "./daemon/types.js";
 import { handleMessage } from "./handler.js";
 import { SessionLog } from "./session/log.js";
 import type { AcpSessionHandle } from "./acp/connect.js";
@@ -480,4 +481,56 @@ test("gg-goals: goal sessions split from ggcoder, goal cwd required, no autopilo
   await send({ t: "autopilot.set", sessionId: started.sessionId, enabled: true });
   expect(sent.some((m) => m.t === "autopilot.state" && m.sessionId === started.sessionId)).toBe(false);
   setEnv("GG_AGENT_DIR", undefined);
+});
+
+// ── OrcaGoals' engine runs goals when installed ─────────────
+
+const orcaGoalsProvider: LoadedProvider = {
+  ...ggProvider,
+  manifest: { ...ggProvider.manifest, id: "orcagoals", name: "OrcaGoals" },
+};
+
+test("goals root: GG Coder's under ~/.gg, OrcaGoals' under ~/.orca-goals", () => {
+  expect(goalsRoot({ GG_AGENT_DIR: join("x", "gg") }, "ggcoder")).toBe(join("x", "gg", "goals"));
+  expect(goalsRoot({ GG_AGENT_DIR: join("x", "gg") })).toBe(join("x", "gg", "goals"));
+  expect(goalsRoot({ ORCA_GOALS_DATA_DIR: join("x", "orca") }, "orcagoals")).toBe(join("x", "orca", "goals"));
+  expect(goalsRoot({}, "orcagoals").endsWith(join(".orca-goals", "goals"))).toBe(true);
+});
+
+test("goals entry is named after its engine", () => {
+  expect(goalsProviderFrom(ggProvider).manifest).toMatchObject({ id: "gg-goals", name: "GG Goals" });
+  expect(goalsProviderFrom(orcaGoalsProvider).manifest).toMatchObject({ id: "gg-goals", name: "OrcaGoals" });
+});
+
+test("with OrcaGoals installed, goals run on it even when GG Coder has no goals", async () => {
+  const { daemon, sent, send } = await ggDaemon();
+  // GG Coder here stands for an engine without goals, such as OrcaCoder V5:
+  // missing entirely, so any goals request that reached it would fail.
+  (daemon as any).providers = [{ ...ggProvider, commandMissing: true }, orcaGoalsProvider];
+
+  await send({ t: "goals", requestId: "r1" });
+  expect(sent.find((m) => m.t === "goals" && m.requestId === "r1")).toMatchObject({ goals: [] });
+  await send({ t: "goal.create", requestId: "r2", name: "Ship it", goal: "Ship pew2", context: [] });
+  expect(sent.find((m) => m.t === "goal.result" && m.requestId === "r2")).toMatchObject({ ok: true });
+  // The process that answered was OrcaGoals', parked for reuse.
+  expect([...(daemon as any).spares.values()].map((s: any) => s.providerId)).toEqual(["orcagoals"]);
+});
+
+test("with OrcaGoals installed, its goal chats are the goals list and it is never offered itself", async () => {
+  const { daemon, sent, root } = await ggDaemon();
+  setEnv("GG_AGENT_DIR", root);
+  setEnv("ORCA_GOALS_DATA_DIR", root);
+  (daemon as any).providers = [ggProvider, orcaGoalsProvider, goalsProviderFrom(orcaGoalsProvider)];
+
+  const goals = await daemon.capabilitiesFor("gg-goals");
+  expect(goals.sessions.map((s) => s.sessionId)).toEqual(["goal_1"]);
+  expect(goals.extensions).toEqual({ queue: true, askUser: true, goals: true });
+
+  (daemon as any).announceProviders();
+  const announced = sent.findLast((m) => m.t === "providers").providers.map((p: any) => [p.id, p.name]);
+  expect(announced).toEqual([
+    ["ggcoder", "GG Coder"],
+    ["gg-goals", "OrcaGoals"],
+  ]);
+  expect(daemon.voiceAgents().map((a) => a.id)).not.toContain("orcagoals");
 });

@@ -9,7 +9,7 @@ import { resolveWorkspace } from "../workspace.js";
 import { pushFinishedTurn } from "../push.js";
 import { wire } from "@pew2/protocol";
 import { DaemonProjects } from "./projects.js";
-import { AUTOPILOT_PHASES, GG_GOALS_ID, GG_PROVIDER_ID, type ActiveSession } from "./types.js";
+import { AUTOPILOT_PHASES, GG_GOALS_ID, ORCA_GOALS_ENGINE_ID, type ActiveSession } from "./types.js";
 
 export abstract class DaemonGg extends DaemonProjects {
   /** `_gg/plan_state`: the plan sheet's state, broadcast and kept for catch-up. */
@@ -157,33 +157,36 @@ export abstract class DaemonGg extends DaemonProjects {
    * booted (and parked as the spare, so it is reused and idles out).
    */
   protected async goalsConnection(): Promise<AcpSessionHandle> {
-    const provider = this.providers.find((p) => p.manifest.id === GG_PROVIDER_ID);
+    // OrcaGoals' engine when installed, otherwise GG Coder: see `goalsEngineId`.
+    const engine = this.goalsEngine;
+    const label = engine === ORCA_GOALS_ENGINE_ID ? "OrcaGoals" : "GG Coder";
+    const provider = this.providers.find((p) => p.manifest.id === engine);
     if (!provider || provider.commandMissing) {
-      throw new Error("GG Coder isn't installed on this machine.");
+      throw new Error(`${label} isn't installed on this machine.`);
     }
-    if (!this.isEnabled(GG_PROVIDER_ID)) throw new Error("GG Coder is turned off on this machine.");
-    if (!isAvailable(provider)) throw new Error(unavailableReason(provider) ?? "GG Coder is unavailable.");
+    if (!this.isEnabled(engine)) throw new Error(`${label} is turned off on this machine.`);
+    if (!isAvailable(provider)) throw new Error(unavailableReason(provider) ?? `${label} is unavailable.`);
     const supports = (handle: AcpSessionHandle) => {
       if (!handle.ggCapabilities?.goals) {
-        throw new Error("This GG Coder is too old for goals. Update it on your computer.");
+        throw new Error(`This ${label} is too old for goals. Update it on your computer.`);
       }
       return handle;
     };
     const live = [...this.sessions.values()]
-      .filter((s) => (s.providerId === GG_PROVIDER_ID || s.providerId === GG_GOALS_ID) && s.handle && s.agentSessionId)
+      .filter((s) => (s.providerId === engine || s.providerId === GG_GOALS_ID) && s.handle && s.agentSessionId)
       .sort((a, b) => b.lastUsedAt - a.lastUsedAt)[0]?.handle;
     if (live) return supports(live);
-    const spare = [...this.spares.values()].find((s) => s.providerId === GG_PROVIDER_ID || s.providerId === GG_GOALS_ID);
+    const spare = [...this.spares.values()].find((s) => s.providerId === engine || s.providerId === GG_GOALS_ID);
     if (spare) return supports(spare.handle);
     // A capability probe already booting GG Coder will park its process as a
     // spare. Wait for that rather than racing it with a second boot: two boots
     // land on the same spare key, and whichever is stashed second closes the
     // first — mid-`session/list` for the probe, which then failed with "ACP
     // connection closed" and left GG Coder's chats and goals list empty.
-    const warming = this.warming.get(GG_PROVIDER_ID);
+    const warming = this.warming.get(engine);
     if (warming) {
       await warming.catch(() => {});
-      const parked = [...this.spares.values()].find((s) => s.providerId === GG_PROVIDER_ID);
+      const parked = [...this.spares.values()].find((s) => s.providerId === engine);
       if (parked) return supports(parked.handle);
     }
     this.ggConnecting ??= (async () => {
@@ -196,12 +199,12 @@ export abstract class DaemonGg extends DaemonProjects {
       });
       // Never evict a parked process for this one: a probe may still be using
       // it. If one appeared while this booted, keep it and drop the newcomer.
-      const parked = [...this.spares.values()].find((s) => s.providerId === GG_PROVIDER_ID);
+      const parked = [...this.spares.values()].find((s) => s.providerId === engine);
       if (parked) {
         handle.close();
         return parked.handle;
       }
-      this.stashSpare(GG_PROVIDER_ID, handle, workspace);
+      this.stashSpare(engine, handle, workspace);
       return handle;
     })().finally(() => {
       this.ggConnecting = undefined;
@@ -230,7 +233,7 @@ export abstract class DaemonGg extends DaemonProjects {
   /** The live daemon session open on a goal folder, newest use first. */
   protected goalSessionEntry(path: string): [string, ActiveSession] | undefined {
     return [...this.sessions.entries()]
-      .filter(([, s]) => (s.providerId === GG_PROVIDER_ID || s.providerId === GG_GOALS_ID) && s.cwd === path)
+      .filter(([, s]) => (s.providerId === this.goalsEngine || s.providerId === GG_GOALS_ID) && s.cwd === path)
       .sort((a, b) => b[1].lastUsedAt - a[1].lastUsedAt)[0];
   }
 

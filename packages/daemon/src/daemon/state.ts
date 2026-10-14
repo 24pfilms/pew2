@@ -9,11 +9,15 @@ import type { LoadedProvider } from "../providers/registry.js";
 import type { AcpSessionHandle, AgentSession } from "../acp/connect.js";
 import { PushRegistry } from "../push.js";
 import type { wire } from "@pew2/protocol";
-import type { ActiveSession, ProviderCapabilities } from "./types.js";
+import { goalsEngineId, type ActiveSession, type ProviderCapabilities } from "./types.js";
 import type { VoiceObservation } from "../voice/host.js";
 
 export abstract class DaemonState {
   protected providers: LoadedProvider[] = [];
+  /** The provider whose engine runs goals (see `goalsEngineId`). */
+  protected get goalsEngine(): string {
+    return goalsEngineId(this.providers);
+  }
   protected readonly sessions = new Map<string, ActiveSession>();
   /** Mints queued-message ids (`q_<n>`), unique for this process. */
   protected queueCounter = 0;

@@ -40,9 +40,9 @@ export abstract class DaemonProbes extends DaemonSpares {
   ): Promise<ProviderCapabilities> {
     if (providerId === GG_GOALS_ID) {
       if (!this.isEnabled(GG_GOALS_ID)) return EMPTY_CAPABILITIES;
-      const base = await this.probeRaw(GG_PROVIDER_ID, { refresh });
+      const base = await this.probeRaw(this.goalsEngine, { refresh });
       if (base === EMPTY_CAPABILITIES) return base;
-      const ext = base.extensions ?? this.knownExtensions.get(GG_PROVIDER_ID);
+      const ext = base.extensions ?? this.knownExtensions.get(this.goalsEngine);
       return {
         ...base,
         sessions: base.sessions
@@ -72,7 +72,7 @@ export abstract class DaemonProbes extends DaemonSpares {
   /** A directory directly inside the goals root, or a path from the last goals list. */
   isGoalFolder(cwd: string): boolean {
     const abs = __resolve(cwd);
-    return this.goalNames.has(abs) || __dirname(abs) === __resolve(goalsRoot());
+    return this.goalNames.has(abs) || __dirname(abs) === __resolve(goalsRoot(process.env, this.goalsEngine));
   }
 
   protected async probeRaw(

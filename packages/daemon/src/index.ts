@@ -22,8 +22,9 @@ import { VoiceManager } from "./voice/manager.js";
 import { daemonHost, type SessionView } from "./voice/host.js";
 import {
   GG_GOALS_ID,
-  GG_PROVIDER_ID,
+  ORCA_GOALS_ENGINE_ID,
   REPLAY_BATCH_SIZE,
+  goalsEngineId,
   goalsProviderFrom,
   queuedForWire,
   rememberTurnText,
@@ -33,6 +34,7 @@ import {
 export {
   GG_GOALS_ID,
   GG_PROVIDER_ID,
+  ORCA_GOALS_ENGINE_ID,
   goalsRoot,
   withStoredPrefs,
   type PromptOutcome,
@@ -61,6 +63,8 @@ export class Daemon extends DaemonConnectSession {
     return this.providers
       .filter((p) => !p.manifest.pew.experimental || this.includeExperimental)
       .filter((p) => this.isEnabled(p.manifest.id) && !p.commandMissing)
+      // OrcaGoals' engine only runs goals; it is reached through GG Goals.
+      .filter((p) => p.manifest.id !== ORCA_GOALS_ENGINE_ID)
       .map((p) => ({ id: p.manifest.id, name: p.manifest.name, available: isAvailable(p) }));
   }
 
@@ -270,7 +274,7 @@ export class Daemon extends DaemonConnectSession {
    *  added manifest show up on the phone without a restart. */
   async refreshProviders(): Promise<{ errors: { source: string; message: string }[] }> {
     const { providers, errors } = await loadProviders();
-    const gg = providers.findIndex((p) => p.manifest.id === GG_PROVIDER_ID);
+    const gg = providers.findIndex((p) => p.manifest.id === goalsEngineId(providers));
     const ggProvider = providers[gg];
     if (ggProvider && !providers.some((p) => p.manifest.id === GG_GOALS_ID)) {
       providers.splice(gg + 1, 0, goalsProviderFrom(ggProvider));
@@ -329,8 +333,10 @@ export class Daemon extends DaemonConnectSession {
         // Turned off by the user. Filtered here rather than in the app, so the
         // phone is never even told about an agent it should not offer.
         .filter((p) => this.isEnabled(p.manifest.id))
-        // GG Goals rides ggcoder: never announced without it.
-        .filter((p) => p.manifest.id !== GG_GOALS_ID || this.isEnabled(GG_PROVIDER_ID))
+        // GG Goals rides the goals engine: never announced without it.
+        .filter((p) => p.manifest.id !== GG_GOALS_ID || this.isEnabled(this.goalsEngine))
+        // OrcaGoals' engine only runs goals; it is reached through GG Goals.
+        .filter((p) => p.manifest.id !== ORCA_GOALS_ENGINE_ID)
         // Not on this machine at all. Nothing about it can be acted on from a
         // phone \u2014 you cannot install a CLI from there \u2014 so a dimmed row for it
         // is a permanent piece of furniture that never becomes useful.
