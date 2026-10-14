@@ -11,7 +11,7 @@
 import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, realpath, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join, parse } from "node:path";
 import { browsableRoots, discoverRepos, listDirectory, resolveBrowsePath } from "./workspaces.js";
 
 /**
@@ -235,4 +235,12 @@ test.if(!WIN)("POSIX roots still split on ':'", () => {
 
   expect(roots).toContain("/mnt/a");
   expect(roots).toContain("/mnt/b");
+});
+
+test("browsing a drive root lists that root, not the daemon's working directory", async () => {
+  // The bug only exists where paths have drive letters; elsewhere `/` is its own root.
+  const root = parse(tmpdir()).root;
+  const listing = await listDirectory(root, { roots: [root] });
+  expect(listing?.path).toBe(root);
+  expect(listing?.entries.every((entry) => dirname(entry.path) === root)).toBe(true);
 });

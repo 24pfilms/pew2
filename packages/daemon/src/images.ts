@@ -17,6 +17,7 @@ import { constants } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, isAbsolute, resolve, sep, extname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { keepDriveRoot } from "./drive-root.js";
 
 /**
  * Formats React Native's `Image` can actually paint. SVG is deliberately absent:
@@ -268,7 +269,7 @@ export async function loadImage(
   // otherwise inside the root by spelling alone.
   let real: string;
   try {
-    real = resolve(await fs.realpath(path));
+    real = resolve(keepDriveRoot(await fs.realpath(path)));
   } catch {
     throw new Error(`'${uri}' was not found`);
   }
@@ -279,7 +280,7 @@ export async function loadImage(
   const roots = await Promise.all(
     allowedImageRoots(options.cwd, options.env).map(async (root) => {
       try {
-        return resolve(await fs.realpath(root));
+        return resolve(keepDriveRoot(await fs.realpath(root)));
       } catch {
         return root;
       }

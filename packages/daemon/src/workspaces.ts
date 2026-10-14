@@ -22,6 +22,7 @@
  * become "enumerate this person's entire filesystem".
  */
 import { readdir, realpath, stat } from "node:fs/promises";
+import { keepDriveRoot } from "./drive-root.js";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, resolve, sep } from "node:path";
 
@@ -120,7 +121,7 @@ async function realRoots(roots: string[]): Promise<string[]> {
   return Promise.all(
     roots.map(async (root) => {
       try {
-        return resolve(await realpath(root));
+        return resolve(keepDriveRoot(await realpath(root)));
       } catch {
         return resolve(root);
       }
@@ -146,7 +147,7 @@ export async function resolveBrowsePath(
 
   let real: string;
   try {
-    real = resolve(await realpath(expanded));
+    real = resolve(keepDriveRoot(await realpath(expanded)));
   } catch {
     return undefined;
   }
@@ -279,7 +280,7 @@ export async function discoverRepos(
       // should appear once.
       let real: string;
       try {
-        real = resolve(await realpath(path));
+        real = resolve(keepDriveRoot(await realpath(path)));
       } catch {
         continue;
       }
