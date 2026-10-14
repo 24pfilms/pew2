@@ -55,13 +55,18 @@ export function useTurnBanners(linkSettings: RefObject<LinkSettings>, voiceOffer
    * cannot be raised still leaves the ordinary notification.
    */
   const announceTurn = useCallback((turn: TurnFinished) => {
+    const ringing = shouldRing("finished", foreground.current, linkSettings.current);
     const notice = finishedNotice({
       ...turn,
       foreground: foreground.current,
-      pushExpected: pushExpected.current,
+      // A push would stand in for the local banner, but not for the ring: with
+      // the app off screen and a push registered, the turn was announced by a
+      // quiet banner only and the phone never rang. The push stays the backup
+      // for when the app is not running at all.
+      pushExpected: ringing ? false : pushExpected.current,
     });
     if (!notice) return;
-    if (shouldRing("finished", foreground.current, linkSettings.current)) {
+    if (ringing) {
       const rang = PewLink.ring(
         `turn:${notice.sessionId}:${Date.now()}`,
         notice.title,
