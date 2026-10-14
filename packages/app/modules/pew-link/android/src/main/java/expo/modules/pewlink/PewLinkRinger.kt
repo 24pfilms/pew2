@@ -25,8 +25,13 @@ import androidx.core.app.Person
 object PewLinkRinger {
   private const val TAG = "PewLink"
   /** Rings with the OrcaCoder tone (`res/raw/orca_ring.ogg`, the user's own ocean giggle). */
-  private const val CHANNEL_ID = "orca-ring"
-  private const val LEGACY_CHANNEL_ID = "pew2-ring"
+  private const val CHANNEL_ID = "orca-ring-waves"
+  /**
+   * Earlier ring channels: the phone ringtone, then the orca tone with a sharp
+   * buzz. A channel's sound and vibration are fixed once created, so each
+   * change is a new channel and the old ones are removed.
+   */
+  private val LEGACY_CHANNEL_IDS = listOf("pew2-ring", "orca-ring")
   private const val NOTIFICATION_ID = 7343
   /** Long enough to find the phone in a pocket, short enough not to ring on and on. */
   private const val RING_MS = 30_000L
@@ -165,7 +170,7 @@ object PewLinkRinger {
     // The channel that rang with the phone's own ringtone. A channel's sound is
     // fixed once created, so the orca tone needed a new one; the old one goes
     // rather than sitting unused in the phone's notification settings.
-    manager.deleteNotificationChannel(LEGACY_CHANNEL_ID)
+    LEGACY_CHANNEL_IDS.forEach { manager.deleteNotificationChannel(it) }
     if (manager.getNotificationChannel(CHANNEL_ID) != null) return
     manager.createNotificationChannel(
       NotificationChannel(CHANNEL_ID, "Calls from your agents", NotificationManager.IMPORTANCE_HIGH).apply {
@@ -178,7 +183,9 @@ object PewLinkRinger {
             .build(),
         )
         enableVibration(true)
-        vibrationPattern = longArrayOf(0, 800, 600, 800, 600)
+        // Waves, not a buzzer: long, slow pulses with a breath between them,
+        // under the ocean tone.
+        vibrationPattern = longArrayOf(0, 1400, 900, 1400, 900, 1400, 1600)
         lockscreenVisibility = Notification.VISIBILITY_PUBLIC
       },
     )
