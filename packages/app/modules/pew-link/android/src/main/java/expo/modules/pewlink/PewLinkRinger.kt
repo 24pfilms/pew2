@@ -33,8 +33,11 @@ object PewLinkRinger {
    */
   private val LEGACY_CHANNEL_IDS = listOf("pew2-ring", "orca-ring")
   private const val NOTIFICATION_ID = 7343
-  /** Long enough to find the phone in a pocket, short enough not to ring on and on. */
-  private const val RING_MS = 30_000L
+  /**
+   * Long enough to find the phone in a pocket, short enough not to ring on and
+   * on: about a phone call's ring, and two full plays of the 28 s ocean tone.
+   */
+  const val RING_MS = 60_000L
 
   const val ACTION_DECLINE = "io.github.kenkaiii.pew2.RING_DECLINE"
   const val EXTRA_RING_ID = "pew2.ring.id"

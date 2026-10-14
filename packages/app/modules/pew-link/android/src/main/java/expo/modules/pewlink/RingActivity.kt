@@ -108,7 +108,7 @@ class RingActivity : Activity() {
 
     // The ring stops on its own after a while; so does this screen.
     handler.removeCallbacksAndMessages(null)
-    handler.postDelayed({ finish() }, SCREEN_MS)
+    handler.postDelayed({ finish() }, PewLinkRinger.RING_MS)
   }
 
   /**
@@ -180,7 +180,5 @@ class RingActivity : Activity() {
     const val EXTRA_TITLE = "pew2.ring.title"
     const val EXTRA_TEXT = "pew2.ring.text"
     const val EXTRA_OFFER_VOICE = "pew2.ring.offerVoice"
-    /** Matches the ring's own timeout. */
-    private const val SCREEN_MS = 30_000L
   }
 }
