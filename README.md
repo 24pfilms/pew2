@@ -23,23 +23,25 @@ Your PC does the work. Your phone is how you talk to it. Nothing runs in the clo
 | --- | --- | --- |
 | 📶 | **A connection you can trust** | The phone notices a dead link within seconds and reconnects. It reconnects when you switch between Wi-Fi and mobile data, and when the PC restarts its side. It never shows "online" while nothing is getting through. |
 | 🔋 | **Stays connected in the background** | A quiet notification keeps the link open with the screen locked. The **Phone setup** checklist on the connection screen walks through the Android settings it needs (battery, auto launch, full-screen ringing), with a button for each. |
-| 📞 | **Rings like a phone call** | When an agent needs approval or finishes while OrcaCoder isn't on screen, the phone rings with a full-screen call over the lock screen: **Open** jumps to that chat, **Close** silences it. Each kind of ring has its own on/off switch. |
+| 📞 | **Rings like a phone call** | When an agent needs approval or finishes while OrcaCoder isn't on screen, the phone rings with a full-screen call over the lock screen, to an ocean ringtone with slow, wave-like vibration, for up to a minute. **Talk to Orca** answers with a voice call, **Open chat** jumps to that chat, **Close** silences it. Each kind of ring has its own on/off switch. |
+| 🎙️ | **Talk to Orca** | Tap the headset in any chat, or answer a ring, and just talk. Orca repeats your request back, hands it to the agent in that chat, reads you its reply and asks you out loud before approving anything. Built on OpenAI's realtime voice; the API key stays on the PC, and a monthly spending cap ($10 by default) stops calls once it is used up. |
+| 🖼️ | **Pictures from the PC** | Images an agent makes or opens on the PC show up in the phone chat, including in chats reopened later. |
+| 🔈 | **Calm sounds** | Soft ticks and gentle chimes in place of bright bells, and they only play while OrcaCoder is on screen, so nothing dings over a ring. |
 | 🐋 | **The OrcaCoder look** | The Scarlet orca appears on the home screen, the launcher icon, the startup screen and the ring screen. The GG Coder agent is listed as *OrcaCoder*. |
 | 🪟 | **Solid on Windows** | Daemon fixes for running under Task Scheduler, a crash guard for GG Coder's self-updater, a safe restart script, pull-to-refresh chat lists and pinch-zoom images. Details in [windows/README.md](windows/README.md). |
 
-## 🗺️ Coming next: talk to OrcaCoder
+## 🗺️ Coming next
 
-- **Voice call mode:** tap call and just talk. It repeats your request back in one line, hands it to the agent in
-  the right project, and tells you when it's done. Built on OpenAI Realtime; the API key stays on the PC.
-- **Call me when done:** answering a ring goes straight into a call that starts with a short summary, or with
-  the one question the agent needs answered.
+- **OrcaGoals on the phone:** pew2's Goals screen driving OrcaGoals.
 - **Hands-free start:** begin a request from your earphones without taking the phone out.
 
 ## 🛠️ Running it
 
 OrcaCoder runs the pew2 daemon from this repository on a Windows PC and a locally built Android app. Building the
 app, installing it over an existing copy (never uninstall: that loses the pairing), restarting the daemon safely
-and taking upstream updates are all in **[windows/README.md](windows/README.md)**. Everything in the pew2 guide
+and taking upstream updates are all in **[windows/README.md](windows/README.md)**. To turn on voice calls, run
+`pew2 voice key` on the PC and paste an OpenAI API key when asked (it is stored on the PC and never shown);
+`pew2 voice status` shows this month's spending against the cap. Everything in the pew2 guide
 below still applies.
 
 ## 🙏 Credits
@@ -47,7 +49,7 @@ below still applies.
 - [KenKaiii/pew2](https://github.com/KenKaiii/pew2), the foundation: daemon, relay, end-to-end encryption and
   the app. AGPL-3.0, like this build.
 - [riazmohamed/pew2](https://github.com/riazmohamed/pew2): its Android call service showed the way for the
-  background link and ringing.
+  background link and ringing, and its GPT-Live voice calls are the basis of Talk to Orca.
 
 ---
 
