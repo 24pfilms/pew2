@@ -14,6 +14,13 @@
  * freed, and a frame reuses one recorder and one bounds rectangle instead of
  * making new ones, which also keeps the table from churning by hundreds of
  * entries a second.
+ *
+ * That could not close the race on its own: every declarative `<Canvas>` makes
+ * recorders of its own, and Hermes frees those on its background GC thread
+ * (crash in `removeListener` on thread "hades"). Skia 2.3.8 put a mutex on the
+ * table, which is why the app is pinned at 2.3.14 rather than Expo SDK 54's
+ * suggested 2.2.12; do not go back below 2.3.8. The reuse above stays, for the
+ * churn.
  */
 import { Skia, type SkCanvas, type SkPicture } from "@shopify/react-native-skia";
 
