@@ -8,7 +8,7 @@
 import type { LoadedProvider } from "../providers/registry.js";
 import { connectProvider, type AcpSessionHandle } from "../acp/connect.js";
 import { DaemonState } from "./state.js";
-import { EMPTY_CAPABILITIES, GG_GOALS_ID, readExtensions } from "./types.js";
+import { EMPTY_CAPABILITIES, GG_GOALS_ID, ORCA_GOALS_ENGINE_ID, readExtensions } from "./types.js";
 
 export abstract class DaemonSpares extends DaemonState {
   /**
@@ -24,6 +24,14 @@ export abstract class DaemonSpares extends DaemonState {
     // pill with "Default" seconds after the app opened.
     const fresh = await this.capabilitiesFor(providerId, { refresh: true });
     if (fresh === EMPTY_CAPABILITIES) return;
+    // OrcaGoals' engine is never shown on its own: what it refreshed is the
+    // Goals list. Pushing its raw list filed every goal chat under an agent the
+    // app was never told about.
+    if (providerId === ORCA_GOALS_ENGINE_ID) {
+      const goals = await this.capabilitiesFor(GG_GOALS_ID);
+      if (goals !== EMPTY_CAPABILITIES) this.send({ t: "provider.capabilities", providerId: GG_GOALS_ID, ...goals });
+      return;
+    }
     // The app folds this into the drawer exactly like an answer to its own
     // request, so a stale list corrects itself moments after opening.
     this.send({ t: "provider.capabilities", providerId, ...fresh });

@@ -11,7 +11,7 @@
  * client, which is the point of the daemon owning the log: a phone and a
  * desktop watching one session both need the update.
  */
-import { GG_GOALS_ID, type Daemon } from "./index.js";
+import { GG_GOALS_ID, ORCA_GOALS_ENGINE_ID, type Daemon } from "./index.js";
 import { humanError } from "./errors.js";
 import { loadImage } from "./images.js";
 import { workspaceStatus } from "./git.js";
@@ -23,6 +23,8 @@ import { storeGoalFiles } from "./goalFiles";
 import { readKnownProjects } from "./known-projects.js";
 
 const NOT_A_GOAL = "Open or create a goal first.";
+/** OrcaGoals' engine is reached through Goals only, never opened as an agent of its own. */
+const GOALS_ENGINE_ONLY = "OrcaGoals runs goals: open it from Goals.";
 
 export interface HandlerContext {
   daemon: Daemon;
@@ -196,6 +198,10 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
         // conversation comes first — it is the authority on where its own
         // session lives, it needs no client to be up to date, and it is right
         // even for an older app that sends no `cwd` at all.
+        if (message.providerId === ORCA_GOALS_ENGINE_ID) {
+          reply({ t: "error", code: "unsupported", message: GOALS_ENGINE_ONLY });
+          break;
+        }
         if (message.providerId === GG_GOALS_ID && !(message.cwd && daemon.isGoalFolder(message.cwd))) {
           reply({ t: "error", code: "not_a_goal", message: NOT_A_GOAL });
           break;
@@ -218,6 +224,10 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
       }
 
       case "session.start": {
+        if (message.providerId === ORCA_GOALS_ENGINE_ID) {
+          reply({ t: "error", code: "unsupported", message: GOALS_ENGINE_ONLY });
+          break;
+        }
         if (message.providerId === GG_GOALS_ID && !(message.cwd && daemon.isGoalFolder(message.cwd))) {
           reply({ t: "error", code: "not_a_goal", message: NOT_A_GOAL });
           break;

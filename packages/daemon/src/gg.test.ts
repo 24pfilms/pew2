@@ -534,3 +534,21 @@ test("with OrcaGoals installed, its goal chats are the goals list and it is neve
   ]);
   expect(daemon.voiceAgents().map((a) => a.id)).not.toContain("orcagoals");
 });
+
+test("OrcaGoals' engine refreshing in the background updates Goals, never an agent of its own", async () => {
+  const { daemon, sent, send, root } = await ggDaemon();
+  setEnv("GG_AGENT_DIR", root);
+  setEnv("ORCA_GOALS_DATA_DIR", root);
+  (daemon as any).providers = [ggProvider, orcaGoalsProvider, goalsProviderFrom(orcaGoalsProvider)];
+
+  await (daemon as any).revalidate("orcagoals");
+  const pushed = sent.filter((m) => m.t === "provider.capabilities");
+  expect(pushed.map((m) => m.providerId)).toEqual(["gg-goals"]);
+  expect(pushed[0].sessions.map((s: any) => s.sessionId)).toEqual(["goal_1"]);
+
+  // Nor can a client open it directly, outside Goals' goal-folder check.
+  await send({ t: "session.start", requestId: "s", providerId: "orcagoals", cwd: root });
+  await send({ t: "session.resume", requestId: "r", providerId: "orcagoals", agentSessionId: "goal_1", cwd: root });
+  expect(sent.filter((m) => m.t === "error" && m.code === "unsupported")).toHaveLength(2);
+  expect(sent.some((m) => m.t === "session.started")).toBe(false);
+});
