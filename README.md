@@ -25,6 +25,7 @@ Your PC does the work. Your phone is how you talk to it. Nothing runs in the clo
 | 🔋 | **Stays connected in the background** | A quiet notification keeps the link open with the screen locked. The **Phone setup** checklist on the connection screen walks through the Android settings it needs (battery, auto launch, full-screen ringing), with a button for each. |
 | 📞 | **Rings like a phone call** | When an agent needs approval or finishes while OrcaCoder isn't on screen, the phone rings with a full-screen call over the lock screen, to an ocean ringtone with slow, wave-like vibration, for up to a minute. **Talk to Orca** answers with a voice call, **Open chat** jumps to that chat, **Close** silences it. Each kind of ring has its own on/off switch. |
 | 🎙️ | **Talk to Orca** | Tap the headset in any chat, or answer a ring, and just talk. Orca repeats your request back, hands it to the agent in that chat, reads you its reply and asks you out loud before approving anything. Built on OpenAI's realtime voice; the API key stays on the PC, and a monthly spending cap ($10 by default) stops calls once it is used up. |
+| 🎯 | **OrcaGoals on the phone** | The Goals screen runs on OrcaGoals: see your goals, open one, send it a job and get rung when it's done, while your normal chats stay on OrcaCoder. The same goals as the OrcaGoals desktop app. |
 | 🖼️ | **Pictures from the PC** | Images an agent makes or opens on the PC show up in the phone chat, including in chats reopened later. |
 | 🔈 | **Calm sounds** | Soft ticks and gentle chimes in place of bright bells, and they only play while OrcaCoder is on screen, so nothing dings over a ring. |
 | 🐋 | **The OrcaCoder look** | The Scarlet orca appears on the home screen, the launcher icon, the startup screen and the ring screen. The GG Coder agent is listed as *OrcaCoder*. |
@@ -32,7 +33,6 @@ Your PC does the work. Your phone is how you talk to it. Nothing runs in the clo
 
 ## 🗺️ Coming next
 
-- **OrcaGoals on the phone:** pew2's Goals screen driving OrcaGoals.
 - **Hands-free start:** begin a request from your earphones without taking the phone out.
 
 ## 🛠️ Running it
@@ -41,7 +41,7 @@ OrcaCoder runs the pew2 daemon from this repository on a Windows PC and a locall
 app, installing it over an existing copy (never uninstall: that loses the pairing), restarting the daemon safely
 and taking upstream updates are all in **[windows/README.md](windows/README.md)**. To turn on voice calls, run
 `pew2 voice key` on the PC and paste an OpenAI API key when asked (it is stored on the PC and never shown);
-`pew2 voice status` shows this month's spending against the cap. Everything in the pew2 guide
+`pew2 voice status` shows this month's spending against the cap. To run Goals on OrcaGoals, add a provider manifest with the id `orcagoals` that launches OrcaGoals' engine (`ggcoder acp` from the OrcaGoals build, with `ORCA_GOALS_DATA_DIR` pointing at its data folder); without it, Goals runs on GG Coder as in pew2. Everything in the pew2 guide
 below still applies.
 
 ## 🙏 Credits
