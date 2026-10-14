@@ -103,6 +103,10 @@ export function buildTaskXml(options: InstallOptions = {}): string {
   // nothing to start a session in.
   if (options.env?.PEW2_BROWSE_ROOTS)
     assignments.push(`set "PEW2_BROWSE_ROOTS=${options.env.PEW2_BROWSE_ROOTS}"`);
+  // The same for pictures: a folder allowed for images (renders, screenshots)
+  // outside the project would otherwise be forgotten by every re-install.
+  if (options.env?.PEW2_IMAGE_ROOTS)
+    assignments.push(`set "PEW2_IMAGE_ROOTS=${options.env.PEW2_IMAGE_ROOTS}"`);
 
   const start = program.map(quoteArgument).join(" ");
   const line =

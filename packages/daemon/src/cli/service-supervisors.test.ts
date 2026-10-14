@@ -322,6 +322,14 @@ test("the browse allowlist reaches the service, or an external disk is invisible
   expect(xml).toContain("set &quot;PEW2_BROWSE_ROOTS=L:\\&quot;");
 });
 
+test("extra picture folders reach the service, or renders saved there never show on the phone", () => {
+  // Same reason as the browse allowlist: the task inherits nothing, so a folder
+  // the user allowed for pictures was silently dropped by every re-install.
+  const xml = buildTaskXml({ env: { PEW2_IMAGE_ROOTS: "D:\\renders;L:\\" } });
+
+  expect(xml).toContain("set &quot;PEW2_IMAGE_ROOTS=D:\\renders;L:\\&quot;");
+});
+
 test("the keepalive is armed at install, not only at the next logon", () => {
   // The repetition used to hang off the logon trigger alone. A logon has
   // already happened by the time anyone runs `pew2 setup`, so that trigger
