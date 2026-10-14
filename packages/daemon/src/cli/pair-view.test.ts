@@ -80,10 +80,10 @@ test("the pairing URL is printed on one unbroken line", () => {
   const urlLine = rendered.map(stripAnsi).find((line) => line.includes("wss://"));
 
   expect(urlLine).toBeDefined();
-  // The line hangs off the rail now, so the pipe and its padding come off
+  // The line hangs two spaces in under its section, so that indent comes off
   // before comparing. What this guards is that nothing was inserted *into* the
   // URL, which is still exactly as true with a prefix as without one.
-  const url = urlLine!.replace(/^[│|]\s*/, "");
+  const url = urlLine!.replace(/^\s+/, "");
   expect(url).toBe(view().url);
   expect(new URL(url).searchParams.get("pairing")).toBe("a".repeat(48));
 });
@@ -142,8 +142,8 @@ test("centring never pushes a wide block off the left edge", () => {
   expect(centerIndent(50, 80)).toBe(15);
   // A QR wider than the window is left-aligned rather than negatively indented.
   expect(centerIndent(90, 80)).toBe(0);
-  // The floor is the rail gutter — pipe plus two spaces — not bare indentation.
-  expect(centerIndent(78, 80)).toBe(3);
+  // The floor is the gutter under a section (two spaces), not bare indentation.
+  expect(centerIndent(78, 80)).toBe(2);
 });
 
 test("the paired line names the device and how long it took", () => {
@@ -222,18 +222,18 @@ test("a screen that will not wait still closes its rail", () => {
   // `--no-wait` and any piped run used to end on a dangling pipe with no
   // closing mark, because the outro only existed on the interactive path.
   const lines = closingLines(true, plain).map(stripAnsi);
-  expect(lines.some((l) => l.startsWith("└"))).toBe(true);
+  expect(lines.some((l) => l.startsWith("■"))).toBe(true);
 });
 
 test("a stopped daemon closes with the command that starts it, on the rail", () => {
   // This line was built by hand inside cmdPair with a literal two-space indent,
   // which put the most important line on the screen outside the rail.
   const lines = closingLines(false, plain).map(stripAnsi);
-  const closing = lines.find((l) => l.startsWith("└"))!;
+  const closing = lines.find((l) => l.startsWith("■"))!;
 
   expect(closing).toContain("Start the daemon before scanning");
   expect(closing).toContain("pew2 service install");
   for (const line of lines.filter((l) => l !== "")) {
-    expect(/^[│└]/.test(line)).toBe(true);
+    expect(/^(■|░|▓|▒|\s{2})/.test(line)).toBe(true);
   }
 });

@@ -184,7 +184,6 @@ export function render(state: PickerState, options: RenderOptions = {}): string[
 /** The closing line, once a choice has been made. */
 export function summary(state: PickerState, options: RenderOptions = {}): string[] {
   const s = options.style ?? styler();
-  const g = options.glyph ?? glyphs();
   const r = rail(options);
 
   if (state.done === "cancelled") {
@@ -195,11 +194,7 @@ export function summary(state: PickerState, options: RenderOptions = {}): string
   if (count === 0) {
     // Allowed, but said plainly: a phone with no agents is not obviously an
     // intentional state, and the way back should be on screen.
-    return r.outro(
-      `${s.hex(PALETTE.warning, g.dot)} ${s.bold("No agents chosen.")} ${s.hex(PALETTE.faint, "Run pew2 setup again to pick some.")}`,
-    );
+    return r.outro(`${s.bold("No agents chosen.")} ${s.hex(PALETTE.faint, "Run pew2 setup again to pick some.")}`, "warn");
   }
-  return r.outro(
-    `${s.hex(PALETTE.success, g.tick)} ${s.bold(`${plural(count, "agent")} on your phone.`)}`,
-  );
+  return r.outro(s.bold(`${plural(count, "agent")} on your phone.`), "ok");
 }

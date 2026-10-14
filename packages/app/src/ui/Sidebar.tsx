@@ -1,47 +1,45 @@
 /**
- * The sidebar drawer.
+ * The sidebar drawer: the Switchboard.
  *
- * Connected apps across the top, their conversations below. Switching app
- * refilters the list in place, so moving between Claude, Codex and your own app
- * is one tap and never a new screen.
+ * A rail of Pews down the left, one per agent (the chosen one awake with a lit
+ * bar, the rest dozing), and the chosen agent's world on the right: its name,
+ * the connection on one LED line, project tabs, then its latest chats.
  *
- * This is a push drawer: the conversation slides right to reveal it rather than
- * being covered, so the two surfaces read as one moving layout instead of a
- * modal layer. The panel itself is therefore static — App owns the motion.
+ * This is a push drawer: the conversation slides right to reveal it, so the
+ * panel itself is static. App owns the motion.
  */
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Animated,
-  Dimensions,
-  Easing,
-  FlatList,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-  useWindowDimensions,
-} from "react-native";
+import { memo, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Alert, Dimensions, FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { theme } from "../theme";
-import { AgentChip } from "./AgentChip";
-import { touchSlop } from "./controls";
-import { Glass } from "./Glass";
+import { withAlpha } from "../motion";
+import { CircleButton, touchSlop } from "./controls";
 import { haptics } from "./haptics";
 import { HistorySkeleton } from "./Skeleton";
 import { orderProvidersByRecency } from "../providerRecency";
-import { formatHistoryMetadata, type DrawerRow } from "../historyMetadata";
+import type { DrawerRow } from "../historyMetadata";
 import { recentSessionsForProvider } from "../sessionHistory";
-import { useReducedMotion } from "./useReducedMotion";
 import { useAppActive } from "./useAppActive";
-import { ProjectSelect } from "./ProjectSelect";
-import { ProjectMenu } from "./ProjectMenu";
-import { sessionsInProject, type Project } from "../projects";
+import { projectTabItems, sessionsInProject, type Project } from "../projects";
 import type { Provider, Status } from "../useDaemon";
+import { lastActiveLabel, sortGoals, type GoalSummary } from "../ggState";
+import { goalDrawerRow } from "../goalsAgent";
+import { Pew } from "../pew/Pew";
+import { pewInk } from "../pew/palette";
+import { Led } from "./stage/Led";
+import { Pixel } from "./stage/Pixel";
+import { DashedRule, dashedOutline } from "./stage/DashedRule";
+import { useAgentColor } from "./stage/agentColor";
+import { Dissolve } from "./motion/Dissolve";
+import { DotGlyph } from "./stage/DotGlyph";
 
-export const DRAWER_WIDTH = Math.min(Dimensions.get("window").width * 0.88, 380);
+/**
+ * The whole screen: the drawer is a page of its own now, with room for long
+ * titles and the full chat list. The conversation slides fully out to its
+ * right, so the drawer carries its own close (a button and a left swipe).
+ */
+export const DRAWER_WIDTH = Dimensions.get("window").width;
 
 interface SidebarProps {
   open: boolean;
@@ -58,7 +56,15 @@ interface SidebarProps {
    * project, which is what replaced a header button that could not say where
    * its chat would go.
    */
-  onNewConversation: (cwd: string) => void;
+  /** A new chat: in the chosen project, or (on All) where this agent last worked. */
+  onNewConversation: (cwd?: string) => void;
+  /**
+   * Pull the chat list down to ask the agent again for what it holds, for work
+   * done at the desk since the list was drawn. Absent means the list does not pull.
+   */
+  onRefreshChats?: () => void;
+  /** A pull is waiting on the agent's answer. */
+  refreshingChats?: boolean;
   /** Projects the selected agent has worked in, newest first. */
   projects: Project[];
   /** The chosen one, or undefined for all of them. */
@@ -71,6 +77,8 @@ interface SidebarProps {
   machineRemote: boolean;
   connectionStatus: Status;
   onOpenConnection: () => void;
+  /** Close the drawer (it covers the whole screen, so it needs its own way out). */
+  onClose?: () => void;
   /**
    * A newer pew2 the paired computer has not got, when there is one.
    *
@@ -84,213 +92,266 @@ interface SidebarProps {
    * a false empty state on machines with plenty of history.
    */
   historyLoading?: boolean;
-  /**
-   * Pull the list down to ask the agent again for what it holds, for work done
-   * at the desk since the list was drawn. Absent means the list does not pull.
-   */
-  onRefresh?: () => void;
-  /** A pull is waiting on the agent's answer. */
-  refreshing?: boolean;
   /** Honor the phone's Reduce Motion accessibility preference. */
   reduceMotion?: boolean;
+  /**
+   * GG Goals selected: its goals replace the project picker and the chat
+   * history (goal sessions are never mixed into another agent's list). They
+   * are drawn by this file's own heading, list and `SessionRow`, so the two
+   * lists cannot drift apart.
+   */
+  goals?: SidebarGoals;
 }
 
+export interface SidebarGoals {
+  /** Absent until the first answer arrives (shows the same skeleton as chats). */
+  list?: readonly GoalSummary[];
+  loading: boolean;
+  error?: string;
+  onRefresh: () => void;
+  onNew: () => void;
+  onOpen: (goal: GoalSummary) => void;
+  onDelete: (goal: GoalSummary) => void;
+}
 
-const MAX_STAGGERED_ROWS = 14;
-const ROW_STAGGER_MS = 18;
-const ROW_REVEAL_MS = 180;
+/** Rows that stagger in on open; the rest just appear. */
+const STAGGERED_ROWS = 10;
+const ROW_STAGGER_MS = 40;
+const RAIL_WIDTH = 64;
+const RAIL_PEW = 48;
+const RAIL_BUTTON = 52;
+/** The right column's own left rail: every heading, tab and row starts here. */
+const COLUMN_PAD = theme.space(4);
+/** Fixed status column so every row's title starts at the same x. */
+const STATUS_COL = 16;
 
-/**
- * The dot beside a conversation title: working, or finished while you were
- * away.
- *
- * Two states rather than one because they ask for opposite things. A pulsing
- * dot says "still going, nothing to do"; a solid one says "this came back, go
- * read it". Both are on the row you would tap anyway, so noticing and acting
- * are the same gesture.
- */
-function SessionStatus({
-  busy,
-  unread,
-  reduceMotion,
-  paused,
-}: {
-  busy: boolean;
-  unread: boolean;
-  reduceMotion: boolean;
-  /**
-   * The drawer is shut, or the app is not on screen. Rows stay mounted through
-   * both, so without this they keep pulsing where nobody can see them.
-   */
-  paused: boolean;
-}) {
-  const pulse = useRef(new Animated.Value(1)).current;
+type Mark = "live" | "attention" | "unread" | undefined;
 
-  useEffect(() => {
-    pulse.stopAnimation();
-    if (!busy || reduceMotion || paused) {
-      pulse.setValue(1);
-      return;
-    }
-    // Never fully out: a dot that disappears reads as a rendering glitch in a
-    // list, where the neighbouring rows have no dot at all.
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, {
-          toValue: 0.3,
-          duration: 700,
-          easing: Easing.inOut(Easing.quad),
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulse, {
-          toValue: 1,
-          duration: 700,
-          easing: Easing.inOut(Easing.quad),
-          useNativeDriver: true,
-        }),
-      ]),
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [busy, pulse, reduceMotion, paused]);
+function rowMark(row: Pick<DrawerRow, "busy" | "unread"> & { permission?: unknown }): Mark {
+  if (row.permission) return "attention";
+  if (row.busy) return "live";
+  if (row.unread) return "unread";
+  return undefined;
+}
 
-  // Working outranks unread: a session that answered and was prompted again
-  // from the desktop is, right now, working.
-  if (!busy && !unread) return null;
-  return (
-    <Animated.View
-      // Spoken, because colour alone carries this for everyone else. The role
-      // is what makes a bare View announce its label at all, and it matches the
-      // connection dot above.
-      accessibilityRole="text"
-      accessibilityLabel={busy ? "Working" : "New reply"}
-      style={[
-        styles.statusDot,
-        busy ? styles.statusWorking : styles.statusUnread,
-        busy && { opacity: pulse },
-      ]}
-    />
-  );
+/** "4m", "2h", "3d": the right-hand time, short so the title keeps the room. */
+function shortWhen(ms?: number): string {
+  if (!ms) return "";
+  const label = lastActiveLabel(ms);
+  return label === "just now" ? "now" : label.replace(" ago", "");
 }
 
 interface SessionRowProps {
-  session: DrawerRow;
+  session: Pick<DrawerRow, "id" | "title" | "busy" | "unread"> & Partial<DrawerRow>;
+  /** Spoken detail when the row is not a chat (a goal's status · when). */
+  meta?: string;
+  onLongPress?: (id: string) => void;
   index: number;
   active: boolean;
   reduceMotion: boolean;
-  /** Nothing in this row should be animating: shut drawer, or app in the
-   *  background. */
+  /** Shut drawer, or app in the background. */
   paused: boolean;
   /** Takes the id, so one stable callback serves every row. */
   onOpen: (id: string) => void;
 }
 
-const SessionRow = memo(function SessionRow({
-  session,
-  index,
-  active,
-  reduceMotion,
-  paused,
-  onOpen,
-}: SessionRowProps) {
-  // Only the initial viewport cascades. Rows virtualized in later should appear
-  // immediately, rather than fading under the user's finger while they scroll.
-  //
-  // And only rows that mount while the drawer is actually open. The list is
-  // remounted by its `key` whenever the app or the project changes, and both of
-  // those resolve on their own schedule — the daemon naming a provider a moment
-  // after launch remounts it behind a shut drawer. The cascade then ran against
-  // nothing, and pulling the drawer out a beat later caught it mid-flight: rows
-  // arriving one after another under a panel that was itself still moving. That
-  // is the drawer's intermittent stagger, and why it came and went with how
-  // quickly the daemon answered.
-  //
-  // Captured at mount rather than read each render, because this must not
-  // become true *later*: recomputing it when the drawer opens would re-run the
-  // effect below and replay the cascade on open, every open — which is the
-  // thing being fixed, arrived at from the other side.
-  //
-  // A lazy initial state rather than a ref, because this is read *during*
-  // render. The `useRef(new Animated.Value(…))` idiom used elsewhere in this
-  // file is a stable box whose identity never changes, so reading it in render
-  // is harmless; this one derives from a prop, which is the case the rule is
-  // actually about. Lazy state is the sanctioned way to freeze one at mount,
-  // and it stays correct under the React Compiler's memoisation.
+/**
+ * Sleeping styles down the rail, by position: a fixed shuffle of all ten, so
+ * no two neighbours (and no two of the first ten) ever doze the same way.
+ */
+const RAIL_SLEEP = [0, 5, 8, 3, 7, 2, 9, 4, 6, 1] as const;
+
+const SessionRow = memo(function SessionRow({ session, index, active, reduceMotion, paused, onOpen, meta, onLongPress }: SessionRowProps) {
+  // Only rows that mount while the drawer is open cascade, captured at mount:
+  // the list remounts behind a shut drawer when the daemon answers late, and a
+  // cascade replayed on every open is the glitch this avoids.
   const [revealing] = useState(() => !paused);
-  const shouldAnimate = !reduceMotion && revealing && index < MAX_STAGGERED_ROWS;
-  const entrance = useRef(new Animated.Value(shouldAnimate ? 0 : 1)).current;
-
-  useEffect(() => {
-    entrance.stopAnimation();
-    if (!shouldAnimate) {
-      entrance.setValue(1);
-      return;
-    }
-    entrance.setValue(0);
-    const animation = Animated.timing(entrance, {
-      toValue: 1,
-      delay: index * ROW_STAGGER_MS,
-      duration: ROW_REVEAL_MS,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
-    });
-    animation.start();
-    return () => animation.stop();
-  }, [entrance, index, shouldAnimate]);
-
-  // Memoised against the row's own re-renders, not just the list's. `paused`
-  // flips the instant the drawer opens, so `memo` above cannot spare these rows
-  // that particular render — the one render that lands on the frame the slide
-  // starts. Only the dot at the end of the row actually reads `paused`; this is
-  // date arithmetic for a line that has not changed, and it ran once per
-  // mounted row before the drawer had moved a pixel.
-  const metadata = useMemo(() => formatHistoryMetadata(session), [session]);
+  const agent = useAgentColor();
+  const mark = rowMark(session);
+  const when = shortWhen(session.startedAt);
+  const status = mark === "live" ? "Working" : mark === "attention" ? "Waiting on you" : mark === "unread" ? "New reply" : undefined;
   return (
-    <Animated.View
-      style={{
-        opacity: entrance,
-        transform: [
-          {
-            translateY: entrance.interpolate({
-              inputRange: [0, 1],
-              outputRange: [7, 0],
-            }),
-          },
-        ],
-      }}
-    >
+    <Dissolve kind="row" delay={index * ROW_STAGGER_MS} enabled={!reduceMotion && revealing && index < STAGGERED_ROWS}>
+      {index > 0 && <DashedRule />}
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={session.title}
+        accessibilityLabel={[session.title, status, meta ?? (when ? `${when} ago` : undefined)].filter(Boolean).join(", ")}
         accessibilityState={{ selected: active }}
         onPress={() => onOpen(session.id)}
-        style={({ pressed }) => [
-          styles.session,
-          active && styles.sessionActive,
-          pressed && styles.pressed,
-        ]}
+        onLongPress={onLongPress ? () => onLongPress(session.id) : undefined}
+        style={({ pressed }) => [styles.row, active && { backgroundColor: withAlpha(agent, 0.1) }, pressed && styles.pressed]}
       >
-        <View style={styles.sessionLine}>
-          <Text style={styles.sessionTitle} numberOfLines={1}>
-            {session.title}
-          </Text>
-          {/* The agent keeps running when you leave a conversation, so the
-              drawer is where you find out what is still going and what came
-              back while you were elsewhere. */}
-          <SessionStatus
-            busy={session.busy === true}
-            unread={session.unread === true}
-            reduceMotion={reduceMotion}
-            paused={paused}
-          />
-        </View>
-        {metadata ? (
-          <Text style={styles.sessionMeta} numberOfLines={1}>
-            {metadata}
-          </Text>
-        ) : null}
+        {/* The title starts on the column's rail, under "Latest chats"; the
+            status marker sits at the right edge beside the time, so a marked
+            row never indents. */}
+        <Text style={[styles.rowTitle, active && { color: agent }]} numberOfLines={1}>
+          {session.title}
+        </Text>
+        {mark ? <View style={styles.statusCol}><Pixel kind={mark} paused={paused} /></View> : null}
+        {when ? <Text style={styles.rowWhen} numberOfLines={1}>{when}</Text> : null}
       </Pressable>
-    </Animated.View>
+    </Dissolve>
+  );
+});
+
+/** "+ New chat" / "+ New goal": an LED action on the list heading's line. */
+function LedAction({ label, a11y, onPress }: { label: string; a11y: string; onPress: () => void }) {
+  return (
+    <Dissolve kind="in">
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={a11y}
+        hitSlop={touchSlop(theme.space(2))}
+        onPress={() => {
+          haptics.tap();
+          onPress();
+        }}
+        style={({ pressed }) => [styles.ledAction, pressed && styles.pressed]}
+      >
+        <Led>{`+ ${label}`}</Led>
+      </Pressable>
+    </Dissolve>
+  );
+}
+
+function ListHead({ label, children }: { label: string; children?: ReactNode }) {
+  return (
+    <View style={styles.listHead}>
+      <Led tone="dim">{label}</Led>
+      {children}
+    </View>
+  );
+}
+
+/** GG Goals' half of the drawer: its goals in the same row style as chats. */
+function GoalsSection({ goals, activeSessionId, reduceMotion, paused }: { goals: SidebarGoals; activeSessionId?: string; reduceMotion: boolean; paused: boolean }) {
+  const sorted = useMemo(() => sortGoals([...(goals.list ?? [])]), [goals.list]);
+  const byId = useMemo(() => new Map(sorted.map((goal) => [goal.id, goal])), [sorted]);
+  // The system spinner only ever answers a pull the user made.
+  const [pulled, setPulled] = useState(false);
+  useEffect(() => {
+    if (!goals.loading) setPulled(false);
+  }, [goals.loading]);
+  const { onOpen, onDelete } = goals;
+  const open = useCallback(
+    (id: string) => {
+      const goal = byId.get(id);
+      if (!goal) return;
+      haptics.tap();
+      onOpen(goal);
+    },
+    [byId, onOpen],
+  );
+  const confirmDelete = useCallback(
+    (id: string) => {
+      const goal = byId.get(id);
+      if (!goal) return;
+      haptics.warned();
+      Alert.alert("Delete goal?", `“${goal.name}” will be removed from GG Goals on your computer.`, [
+        { text: "Cancel", style: "cancel" },
+        { text: "Delete", style: "destructive", onPress: () => onDelete(goal) },
+      ]);
+    },
+    [byId, onDelete],
+  );
+
+  return (
+    <>
+      <ListHead label="Latest goals">
+        <LedAction label="New goal" a11y="New goal" onPress={goals.onNew} />
+      </ListHead>
+      <FlatList
+        style={styles.list}
+        contentContainerStyle={styles.listContent}
+        showsVerticalScrollIndicator={false}
+        data={sorted}
+        extraData={`${activeSessionId ?? ""}:${reduceMotion}:${paused}`}
+        keyExtractor={(goal) => goal.id}
+        refreshControl={
+          <RefreshControl
+            refreshing={pulled && goals.loading}
+            onRefresh={() => {
+              setPulled(true);
+              goals.onRefresh();
+            }}
+            tintColor={theme.color.textDim}
+          />
+        }
+        ListEmptyComponent={
+          goals.list === undefined && !goals.error ? (
+            <HistorySkeleton label="Loading goals" />
+          ) : (
+            <Text style={styles.empty} numberOfLines={2}>{goals.error ?? "No goals yet. Start one with New goal."}</Text>
+          )
+        }
+        renderItem={({ item: goal, index }) => {
+          const { row, meta } = goalDrawerRow(goal, lastActiveLabel(goal.lastActiveMs));
+          return (
+            <SessionRow
+              session={row}
+              meta={meta}
+              index={index}
+              active={goal.sessionId !== undefined && goal.sessionId === activeSessionId}
+              reduceMotion={reduceMotion}
+              paused={paused}
+              onOpen={open}
+              onLongPress={confirmDelete}
+            />
+          );
+        }}
+      />
+    </>
+  );
+}
+
+/** One agent on the rail: its Pew, a tinted tile when chosen (no edge bar: the user wants no coloured left edges anywhere), a status pixel. */
+const RailAgent = memo(function RailAgent({
+  provider, selected, mark, index, paused, reduceMotion, onPress,
+}: { provider: Provider; selected: boolean; mark: Mark; index: number; paused: boolean; reduceMotion: boolean; onPress: (id: string) => void }) {
+  const enabled = provider.available;
+  const ink = pewInk(provider.color);
+  const [revealing] = useState(() => !paused);
+  const spoken = mark === "attention" ? "needs you" : mark === "live" ? "working" : mark === "unread" ? "new reply" : undefined;
+  return (
+    <Dissolve kind="in" delay={index * ROW_STAGGER_MS} enabled={!reduceMotion && revealing}>
+      <Pressable
+        disabled={!enabled}
+        accessibilityRole="button"
+        accessibilityLabel={enabled ? [provider.name, spoken].filter(Boolean).join(", ") : `${provider.name}, unavailable. ${provider.unavailableReason ?? ""}`}
+        accessibilityState={{ selected, disabled: !enabled }}
+        onPress={() => {
+          if (selected) return;
+          haptics.select();
+          onPress(provider.id);
+        }}
+        style={({ pressed }) => [styles.railButton, selected && { backgroundColor: withAlpha(ink, 0.13) }, !enabled && styles.unavailable, pressed && styles.pressed]}
+      >
+        <Pew size={RAIL_PEW} color={provider.color} mood={!enabled ? "sleepy" : selected ? "idle" : "sleepy"} sleepKey={provider.id} sleepStyle={RAIL_SLEEP[index % RAIL_SLEEP.length]} paused={paused || !enabled} />
+        {mark && <View style={styles.railBadge}><Pixel kind={mark} color={mark === "attention" ? undefined : ink} paused={paused} /></View>}
+      </Pressable>
+    </Dissolve>
+  );
+});
+
+/** One project tab: dashed at rest, solid in the agent colour when chosen. */
+const ALL_TAB = "\u0000all";
+
+const ProjectTab = memo(function ProjectTab({ path, label, a11y, selected, onSelect }: { path?: string; label: string; a11y: string; selected: boolean; onSelect: (path?: string) => void }) {
+  const agent = useAgentColor();
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={a11y}
+      accessibilityState={{ selected }}
+      onPress={() => {
+        if (selected) return;
+        haptics.select();
+        onSelect(path);
+      }}
+      style={({ pressed }) => [styles.tab, selected ? { borderStyle: "solid", borderColor: agent, backgroundColor: withAlpha(agent, 0.1) } : null, pressed && styles.pressed]}
+    >
+      <Text style={[styles.tabText, selected && { color: agent }]} numberOfLines={1}>{label}</Text>
+    </Pressable>
   );
 });
 
@@ -303,6 +364,8 @@ function SidebarView({
   onSelectProvider,
   onOpenSession,
   onNewConversation,
+  onRefreshChats,
+  refreshingChats = false,
   projects,
   selectedProjectPath,
   onSelectProject,
@@ -310,61 +373,36 @@ function SidebarView({
   machineRemote,
   connectionStatus,
   onOpenConnection,
+  onClose,
   update,
   historyLoading = false,
-  onRefresh,
-  refreshing = false,
   reduceMotion = false,
+  goals,
 }: SidebarProps) {
   const insets = useSafeAreaInsets();
-  const { fontScale } = useWindowDimensions();
-  const chipHeight = Math.max(theme.size.touch, (theme.font.small + 4) * fontScale + theme.space(2));
   const appActive = useAppActive();
-  // Nothing in a row should be animating when the drawer is shut behind the
-  // conversation, or when the app is not on screen at all. Resolved once here
-  // rather than per row, so the whole list shares one subscription.
+  // Nothing animates while the drawer is shut or the app is off screen.
   const rowsStill = !open || !appActive;
-  const [menuOpen, setMenuOpen] = useState(false);
-  // Measured rather than computed: the chip row above scrolls horizontally and
-  // the select row's own height comes from the type inside it, so the only
-  // honest place to hang the menu from is where the row actually ended up.
-  const [menuTop, setMenuTop] = useState(0);
 
-  // Closing the drawer, or switching app, ends the menu.
-  //
-  // The drawer is only translated off screen, never unmounted, so an open menu
-  // survives both and is waiting on top of the history the next time the drawer
-  // is pulled out. Switching app matters twice over: the projects underneath it
-  // belong to the agent, so the list would silently become another agent's
-  // while open.
-  useEffect(() => {
-    setMenuOpen(false);
-  }, [open, activeProviderId]);
+  // GG Coder and GG Goals pinned first, then most recently used.
+  const orderedProviders = useMemo(() => orderProvidersByRecency(providers, sessions), [providers, sessions]);
+  const activeProvider = orderedProviders.find((p) => p.id === activeProviderId);
 
-  // The four derived lists below are memoised on what they actually read, not
-  // because any one of them is slow on its own, but because of *when* they run.
-  //
-  // Opening the drawer flips `open`, and that render lands on the same frame
-  // the slide starts. The translation itself is on the UI thread and does not
-  // care, but a sort, two filters and a scan of every session held the JS
-  // thread through the first frames of it — exactly when the list below is also
-  // laying out its rows. That is the hitch the drawer had on the way out, and
-  // the reason it was intermittent: it cost nothing until enough conversations
-  // had accumulated to be worth sorting.
-  //
-  // Now `open` changing re-renders a component whose data is all cache hits.
+  // One status per agent for its rail Pew: needs you > working > unread.
+  const marks = useMemo(() => {
+    const out = new Map<string, Mark>();
+    const rank = { attention: 3, live: 2, unread: 1 } as const;
+    for (const row of sessions) {
+      const mark = rowMark(row);
+      if (!mark || !row.providerId) continue;
+      const was = out.get(row.providerId);
+      if (!was || rank[mark] > rank[was]) out.set(row.providerId, mark);
+    }
+    return out;
+  }, [sessions]);
 
-  // Most recently used app first, so the daily driver is never off-screen
-  // behind apps that were tried once.
-  const orderedProviders = useMemo(
-    () => orderProvidersByRecency(providers, sessions),
-    [providers, sessions],
-  );
-
-  const selectedProject = useMemo(
-    () => projects.find((project) => project.path === selectedProjectPath),
-    [projects, selectedProjectPath],
-  );
+  const selectedProject = useMemo(() => projects.find((project) => project.path === selectedProjectPath), [projects, selectedProjectPath]);
+  const tabItems = useMemo(() => projectTabItems(projects), [projects]);
   // Narrowed before the recent-work cap, or a project's older conversations
   // would be cut away by a window they were never in.
   const visible = useMemo(
@@ -372,11 +410,6 @@ function SidebarView({
     [sessions, selectedProject, activeProviderId],
   );
 
-  // Stable, so the memoised rows below actually bail out. Built per render it
-  // was a new function for every row on every render, which defeats the memo
-  // entirely: opening the drawer re-rendered the whole first batch — eighteen
-  // rows, per `initialNumToRender` below — and re-ran each one's date
-  // formatting, on the frame the slide begins.
   const openRow = useCallback(
     (id: string) => {
       haptics.tap();
@@ -384,380 +417,282 @@ function SidebarView({
     },
     [onOpenSession],
   );
-  // Spoken only. The dot beside the title carries this at a glance; a screen
-  // reader gets the sentence, including which computer it is about.
-  const connectionLabel =
+
+  const connection =
     connectionStatus === "online"
-      ? "Healthy connection"
+      ? { word: "Online", tone: "plus" as const, spoken: "Healthy connection" }
       : connectionStatus === "connecting"
-        ? "Connecting…"
-        : "Connection interrupted";
-  const connectionColor =
-    connectionStatus === "online"
-      ? theme.color.success
-      : connectionStatus === "connecting"
-        ? theme.color.textDim
-        : theme.color.danger;
+        ? { word: "Connecting", tone: "attention" as const, spoken: "Connecting" }
+        : { word: "Offline", tone: "danger" as const, spoken: "Connection interrupted" };
 
   return (
     <View
       style={[styles.panel, { width: DRAWER_WIDTH }]}
       pointerEvents={open ? "auto" : "none"}
-      // Hidden from assistive tech while closed: it is still mounted, but it is
-      // not on screen and must not be reachable by swipe navigation.
+      // Mounted while closed, but not on screen: unreachable by swipe navigation.
       accessibilityElementsHidden={!open}
       importantForAccessibility={open ? "auto" : "no-hide-descendants"}
     >
-      <View style={[styles.panelInner, { paddingTop: insets.top + theme.headerInset }]}>
-          <View style={styles.header}>
-            {/* The dot rides with the title rather than sitting in the footer:
-                connection state is the first thing to check when the drawer is
-                opened, and it belongs to the list of apps it describes. */}
-            <View style={styles.headerTitleRow}>
-              <Text style={styles.headerTitle}>Agents</Text>
-              <View
-                style={[styles.connectionDot, { backgroundColor: connectionColor }]}
-                accessibilityRole="text"
-                accessibilityLabel={`${connectionLabel} to ${machineLabel}. ${
-                  machineRemote ? "Reachable from anywhere." : "Same network only."
-                }`}
-              />
-            </View>
-            {/* No button here. A "new chat" in the drawer header sits above the
-                app chips and the project selector both, so it could only mean
-                "somewhere" — it started one wherever the agent last was, which
-                is misleading precisely when it matters. The action now lives
-                beside the project it applies to. */}
-          </View>
-
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            // Without an explicit height a horizontal ScrollView stretches to
-            // fill the remaining column space and pushes the history far down.
-            style={[styles.agentScroller, { height: chipHeight }]}
-            contentContainerStyle={styles.agentRow}
-          >
-            {orderedProviders.map((provider) => (
-              <AgentChip
+      <View style={[styles.board, { paddingTop: insets.top + theme.headerInset }]}>
+        <View style={[styles.rail, { paddingBottom: insets.bottom + theme.space(4) }]} accessibilityRole="tablist" accessibilityLabel="Agents">
+          <DashedRule vertical style={styles.railEdge} />
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.railList}>
+            {orderedProviders.map((provider, index) => (
+              <RailAgent
                 key={provider.id}
                 provider={provider}
                 selected={provider.id === activeProviderId}
+                mark={marks.get(provider.id)}
+                index={index}
+                paused={rowsStill}
+                reduceMotion={reduceMotion}
                 onPress={onSelectProvider}
               />
             ))}
           </ScrollView>
-
-          {/* Under the apps, above the history: it belongs to the app chosen
-              above and it governs the list below. */}
-          <ProjectSelect
-            selected={selectedProject}
-            count={projects.length}
-            open={menuOpen}
-            onToggle={() => setMenuOpen((was) => !was)}
-            onLayout={(event) => {
-              const { y, height } = event.nativeEvent.layout;
-              setMenuTop(y + height);
-            }}
-          />
-
-          {/* "Latest chats", not "Chat history": the list is capped at the
-              newest conversations, and calling that history promises an archive
-              it does not have — the project selector above is what reaches the
-              rest. */}
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionLabel}>Latest chats</Text>
-
-            {/* Only with a project chosen, and that is the whole point: a "new
-                chat" button with no project named cannot say where the chat
-                would go, which is exactly the ambiguity this replaces. Here it
-                is unambiguous — the project is on screen directly above it. */}
-            {selectedProject && (
-              <NewChatChip
-                project={selectedProject}
-                onPress={() => onNewConversation(selectedProject.path)}
-              />
-            )}
-          </View>
-
-          {/* A provider can hold hundreds of conversations. Rendering them
-              all in a ScrollView was the stall when switching to a well-used
-              app; a windowed list mounts only what is on screen. */}
-          <FlatList
-            // Remount on app selection: this resets a previously scrolled list
-            // to its newest session and gives each new row one clean entrance.
-            key={`${activeProviderId ?? "all-providers"}:${selectedProjectPath ?? "all"}`}
-            style={styles.sessions}
-            contentContainerStyle={styles.sessionsContent}
-            showsVerticalScrollIndicator={false}
-            data={visible}
-            extraData={`${activeSessionId ?? ""}:${reduceMotion}`}
-            keyExtractor={(session) => session.id}
-            initialNumToRender={18}
-            maxToRenderPerBatch={18}
-            windowSize={9}
-            removeClippedSubviews
-            refreshControl={
-              onRefresh ? (
-                <RefreshControl
-                  refreshing={refreshing}
-                  onRefresh={() => {
-                    haptics.tap();
-                    onRefresh();
-                  }}
-                  tintColor={theme.color.accent}
-                  colors={[theme.color.accent]}
-                  progressBackgroundColor={theme.color.surfaceRaised}
-                />
-              ) : undefined
-            }
-            ListEmptyComponent={
-              historyLoading ? (
-                <HistorySkeleton />
-              ) : (
-                <Text style={styles.empty}>
-                  {selectedProject
-                    ? `No conversations in ${selectedProject.name} yet. Send a message to start one there.`
-                    : "No conversations yet. Send a message to start one."}
-                </Text>
-              )
-            }
-            renderItem={({ item: session, index }) => (
-              <SessionRow
-                session={session}
-                index={index}
-                active={session.id === activeSessionId}
-                reduceMotion={reduceMotion}
-                paused={rowsStill}
-                onOpen={openRow}
-              />
-            )}
-          />
-
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`Connection details for ${machineLabel}${update ? update.automatic ? ", updating pew2" : ", update available" : ""}`}
-            onPress={() => { haptics.tap(); onOpenConnection(); }}
-            style={({ pressed }) => [styles.machine, { marginBottom: insets.bottom }, pressed && styles.pressed]}
-          >
-            <Ionicons name="options-outline" size={18} color={theme.color.textDim} />
-            <Text style={styles.machineAction}>{update ? update.automatic ? "Connection · Updating…" : "Connection · Update available" : "Connection"}</Text>
-          </Pressable>
-
-          {/* Last child, so it paints over the history it drops across. Inside
-              the panel rather than over the whole screen: it is the drawer's
-              own menu, and the panel's clip keeps it off the conversation. */}
-          <ProjectMenu
-            visible={menuOpen}
-            projects={projects}
-            selectedPath={selectedProjectPath}
-            top={menuTop}
-            onSelect={(path) => {
-              onSelectProject(path);
-              setMenuOpen(false);
+            accessibilityLabel={`Connection details for ${machineLabel}${update ? (update.automatic ? ", updating pew2" : ", update available") : ""}`}
+            hitSlop={touchSlop(theme.space(1))}
+            onPress={() => {
+              haptics.tap();
+              onOpenConnection();
             }}
-            onClose={() => setMenuOpen(false)}
-          />
+            style={({ pressed }) => [styles.railButton, pressed && styles.pressed]}
+          >
+            <Ionicons name="settings-outline" size={22} color={theme.color.textDim} />
+            {update && <View style={styles.railBadge}><Pixel kind="attention" paused={rowsStill} /></View>}
+          </Pressable>
+        </View>
+
+        <View style={styles.main}>
+          <View style={styles.head}>
+            <View style={styles.headTop}>
+              <Text style={[styles.agentName, { color: pewInk(activeProvider?.color) }]} numberOfLines={1}>
+                {activeProvider?.name ?? "Agents"}
+              </Text>
+              {/* Full width now, so nothing of the conversation is left to tap:
+                  the drawer closes itself. */}
+              {onClose && (
+                <CircleButton label="Close menu" size={40} onPress={onClose}>
+                  <DotGlyph name="close" size={14} />
+                </CircleButton>
+              )}
+            </View>
+            <View
+              accessibilityRole="text"
+              accessibilityLabel={`${connection.spoken} to ${machineLabel}. ${machineRemote ? "Reachable from anywhere." : "Same network only."}`}
+            >
+              {/* Status only: the relay or host name is internal plumbing, and
+                  the connection sheet has the details when they're wanted. */}
+              <Led tone={connection.tone}>{connection.word}</Led>
+            </View>
+          </View>
+
+          {goals ? (
+            <GoalsSection goals={goals} activeSessionId={activeSessionId} reduceMotion={reduceMotion} paused={rowsStill} />
+          ) : (
+            <>
+              {/* Horizontal tabs instead of a dropdown: the row scrolls, so many
+                  projects still fit, and the choice is visible without a tap. */}
+              {projects.length > 0 && (
+<FlatList
+                  // Windowed: GG Coder can hold hundreds of projects, and
+                  // mounting every dashed pill at once made switching to it
+                  // visibly slower than to any other agent.
+                  key={activeProviderId ?? "all-providers"}
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  style={styles.tabScroller}
+                  contentContainerStyle={styles.tabs}
+                  data={tabItems}
+                  extraData={selectedProject?.path}
+                  keyExtractor={(item) => item.path ?? ALL_TAB}
+                  initialNumToRender={8}
+                  maxToRenderPerBatch={8}
+                  windowSize={5}
+                  renderItem={({ item }) => (
+                    <ProjectTab
+                      path={item.path}
+                      label={item.label}
+                      a11y={item.a11y}
+                      selected={item.path === selectedProject?.path}
+                      onSelect={onSelectProject}
+                    />
+                  )}
+                />
+              )}
+
+              <ListHead label="Latest chats">
+                {/* Always here, like New goal for GG Goals. With a project tab
+                    chosen it opens there; on All it opens where this agent
+                    last worked (the composer names the project, and it can be
+                    changed from there before sending). */}
+                <LedAction
+                  key={selectedProject?.path ?? "all"}
+                  label="New chat"
+                  a11y={selectedProject ? `New chat in ${selectedProject.name}` : "New chat"}
+                  onPress={() => onNewConversation(selectedProject?.path)}
+                />
+              </ListHead>
+
+              {/* Windowed: a provider can hold hundreds of conversations. */}
+              <FlatList
+                // Remount on agent or project: scroll resets and rows enter once.
+                key={`${activeProviderId ?? "all-providers"}:${selectedProjectPath ?? "all"}`}
+                style={styles.list}
+                contentContainerStyle={styles.listContent}
+                showsVerticalScrollIndicator={false}
+                data={visible}
+                extraData={`${activeSessionId ?? ""}:${reduceMotion}:${rowsStill}`}
+                keyExtractor={(session) => session.id}
+                initialNumToRender={18}
+                maxToRenderPerBatch={18}
+                windowSize={9}
+                removeClippedSubviews
+                refreshControl={
+                  onRefreshChats ? (
+                    <RefreshControl
+                      refreshing={refreshingChats}
+                      onRefresh={() => {
+                        haptics.tap();
+                        onRefreshChats();
+                      }}
+                      tintColor={theme.color.accent}
+                      colors={[theme.color.accent]}
+                      progressBackgroundColor={theme.color.surfaceRaised}
+                    />
+                  ) : undefined
+                }
+                ListEmptyComponent={
+                  historyLoading ? (
+                    <HistorySkeleton />
+                  ) : (
+                    <Text style={styles.empty} numberOfLines={2}>
+                      {selectedProject ? `No chats in ${selectedProject.name} yet.` : "No chats yet. Send a message to start one."}
+                    </Text>
+                  )
+                }
+                renderItem={({ item: session, index }) => (
+                  <SessionRow
+                    session={session}
+                    index={index}
+                    active={session.id === activeSessionId}
+                    reduceMotion={reduceMotion}
+                    paused={rowsStill}
+                    onOpen={openRow}
+                  />
+                )}
+              />
+            </>
+          )}
+        </View>
       </View>
+      {/* The drawer's edge, dashed like every other Stage rule. iOS draws a
+          dashed border only on a box with all four sides, so this is a dashed
+          box whose left, top and bottom run just outside the panel and are
+          clipped away, leaving the right edge and its curved corners. */}
+      <View style={styles.edge} pointerEvents="none" />
     </View>
   );
 }
 
-/**
- * "+ New chat", beside the heading, once a project is chosen.
- *
- * It appears and disappears with the project selection, so it arrives rather
- * than pops: scale and fade from the right, anchored where it sits. An element
- * that materialises next to a heading the user was already reading is the kind
- * of change that gets noticed as a glitch and not as an offer.
- *
- * Entrance only. It unmounts with the selection, and animating that out would
- * mean holding a button that no longer applies to what the list is showing.
- */
-function NewChatChip({ project, onPress }: { project: Project; onPress: () => void }) {
-  const reduceMotion = useReducedMotion();
-  const enter = useRef(new Animated.Value(reduceMotion ? 1 : 0)).current;
-
-  useEffect(() => {
-    if (reduceMotion) {
-      enter.setValue(1);
-      return;
-    }
-    const animation = Animated.spring(enter, {
-      toValue: 1,
-      damping: 24,
-      stiffness: 300,
-      mass: 0.8,
-      useNativeDriver: true,
-    });
-    animation.start();
-    return () => animation.stop();
-  }, [reduceMotion, enter]);
-
-  return (
-    <Animated.View
-      style={{
-        opacity: enter,
-        transform: [
-          { scale: enter.interpolate({ inputRange: [0, 1], outputRange: [0.88, 1] }) },
-          // Slides in from the right edge it is pinned to, so the growth reads
-          // as coming from outside the panel rather than out of the heading.
-          { translateX: enter.interpolate({ inputRange: [0, 1], outputRange: [12, 0] }) },
-        ],
-      }}
-    >
-      <Glass radius={theme.radius.pill} interactive>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`New chat in ${project.name}`}
-          hitSlop={touchSlop(theme.space(1))}
-          onPress={() => {
-            haptics.tap();
-            onPress();
-          }}
-          style={({ pressed }) => [styles.newChip, pressed && styles.pressed]}
-        >
-          <Ionicons name="add" size={16} color={theme.color.text} />
-          <Text style={styles.newChipText}>New chat</Text>
-        </Pressable>
-      </Glass>
-    </Animated.View>
-  );
-}
-
 const styles = StyleSheet.create({
-  machine: {
-    flexDirection: "row", alignItems: "center", gap: theme.space(2),
-    minHeight: theme.size.touch, marginHorizontal: theme.gutter,
-    marginTop: theme.sectionGap, paddingVertical: theme.space(3),
-    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.color.border,
-  },
-  machineAction: { color: theme.color.textDim, fontSize: theme.font.small, lineHeight: 17, flexShrink: 1 },
-
-  // The drawer is the lower layer: it stays put while the conversation slides
-  // right to reveal it, so it needs no transform of its own.
+  // Static lower layer: the conversation slides right to reveal it.
   panel: {
     position: "absolute",
     top: 0,
     left: 0,
     bottom: 0,
     backgroundColor: theme.color.drawer,
-    // Curved on the inner edge — the side the conversation slides off — so the
-    // two read as cards in one stack rather than a panel behind a card.
     borderTopRightRadius: theme.radius.pane,
     borderBottomRightRadius: theme.radius.pane,
     overflow: "hidden",
-    // The canvas behind this panel is nearly its own colour, so once the drawer
-    // is fully out the corners have nothing to read against. This rim draws
-    // them, at the same weight as every other glass edge in the app. Only on the
-    // curved side: the other three meet the screen edge, where a line would be
-    // an outline around the whole app rather than the shape of this card.
-    borderRightWidth: 1,
-    borderRightColor: "rgba(255,255,255,0.28)",
   },
-  panelInner: { flex: 1, paddingBottom: theme.space(4) },
-
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    // Same gutter and the same row height as the conversation's top bar, so
-    // the title and the hamburger beside it share one baseline.
-    paddingHorizontal: theme.gutter,
-    height: theme.size.control,
-    // One step, shared by every gap down this column.
-    marginBottom: theme.sectionGap,
+  edge: {
+    position: "absolute",
+    top: -2,
+    bottom: -2,
+    left: -2,
+    right: 0,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    // Brighter than an in-panel rule: it draws the drawer's curved edge
+    // against a canvas of nearly the same colour.
+    borderColor: "rgba(255,255,255,0.28)",
+    borderTopRightRadius: theme.radius.pane,
+    borderBottomRightRadius: theme.radius.pane,
   },
-  headerTitleRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.space(2),
-  },
-  // Colour is the whole message, so it needs no glyph and no label beside it.
-  connectionDot: { width: 8, height: 8, borderRadius: 4 },
-  headerTitle: {
-    color: theme.color.text,
-    fontFamily: theme.display.bold,
-    fontSize: theme.font.title,
-    letterSpacing: 0.4,
-  },
-
-  agentScroller: { flexGrow: 0 },
-  agentRow: {
-    paddingHorizontal: theme.gutter,
-    gap: theme.space(2),
-    alignItems: "center",
-  },
+  board: { flex: 1, flexDirection: "row" },
   pressed: { opacity: 0.6 },
+  unavailable: { opacity: 0.4 },
 
-  // A heading, not a caption: the drawer has two sections and they are peers,
-  // so this matches "Connected Apps" exactly rather than sitting below it in
-  // the hierarchy. Its own padding moved to the row that now holds it.
-  sectionLabel: {
-    color: theme.color.text,
-    fontFamily: theme.display.bold,
-    fontSize: theme.font.title,
-    letterSpacing: 0.4,
+  rail: {
+    width: RAIL_WIDTH,
+    alignItems: "center",
   },
-  // The heading and its action share a baseline: the button is what you do to
-  // the section it names, so it belongs on that line rather than above the list.
-  sectionHeader: {
+  // A one-sided dashed border is not drawable on iOS: the rail's edge is a
+  // vertical dashed rule laid over it instead.
+  railEdge: { position: "absolute", top: 0, bottom: 0, right: 0 },
+  railList: { alignItems: "center", gap: theme.space(1), paddingBottom: theme.space(2) },
+  railButton: {
+    width: RAIL_BUTTON,
+    height: RAIL_BUTTON,
+    borderRadius: theme.space(4),
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  railBadge: { position: "absolute", top: theme.space(1), right: theme.space(1) },
+
+  main: { flex: 1, minWidth: 0, paddingBottom: theme.space(4) },
+  head: { paddingHorizontal: COLUMN_PAD, gap: theme.space(1), minHeight: theme.size.control, justifyContent: "center" },
+  headTop: { flexDirection: "row", alignItems: "center", gap: theme.space(2) },
+  agentName: { flex: 1, minWidth: 0, fontFamily: theme.display.regular, fontSize: theme.font.title, letterSpacing: 0.5 },
+
+  tabScroller: { flexGrow: 0, marginTop: theme.space(4) },
+  tabs: { paddingHorizontal: COLUMN_PAD, gap: theme.space(2), alignItems: "center" },
+  tab: {
+    ...dashedOutline,
+    borderRadius: theme.radius.pill,
+    minHeight: theme.size.chip,
+    paddingHorizontal: theme.space(3),
+    justifyContent: "center",
+  },
+  tabText: { color: theme.color.textDim, fontSize: theme.font.small },
+
+  listHead: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     gap: theme.space(2),
-    paddingHorizontal: theme.gutter,
-    paddingTop: theme.sectionGap,
-    paddingBottom: theme.space(2),
-    // Always the chip's height, whether or not the chip is there. Otherwise
-    // choosing a project grows this row and shoves the whole list down a
-    // centimetre — the button's own spring lands on top of a jump.
-    minHeight: theme.size.chip + theme.sectionGap + theme.space(2),
+    paddingHorizontal: COLUMN_PAD,
+    marginTop: theme.space(5),
+    // Constant height with or without the action, so choosing a project never shoves the list.
+    minHeight: theme.size.touch,
   },
-  newChip: {
+  ledAction: { minHeight: theme.size.touch, justifyContent: "center" },
+
+  list: { flex: 1 },
+  listContent: { paddingHorizontal: COLUMN_PAD },
+  // The selected row's fill reaches a little past the rail on both sides
+  // (negative margin, matching padding), so the text itself stays on it.
+  row: {
     flexDirection: "row",
     alignItems: "center",
-    gap: theme.space(1),
-    height: theme.size.control,
-    paddingHorizontal: theme.space(3),
-  },
-  newChipText: {
-    color: theme.color.text,
-    fontSize: theme.font.small,
-  },
-
-  sessions: { flex: 1 },
-  // The row's own inset is subtracted from the list inset so session text lands
-  // on exactly the same left rail as the "Latest chats" label, while the
-  // selected-row highlight still extends past the text on both sides.
-  sessionsContent: {
-    paddingHorizontal: theme.gutter - theme.space(2),
-    gap: theme.space(1),
-  },
-  session: {
+    gap: theme.space(2),
+    minHeight: theme.size.touch,
+    paddingVertical: theme.space(2),
+    marginHorizontal: -theme.space(2),
     paddingHorizontal: theme.space(2),
-    paddingVertical: theme.space(3),
-    borderRadius: theme.radius.md,
-    gap: 2,
+    borderRadius: theme.radius.sm,
   },
-  sessionActive: { backgroundColor: theme.glass.control.fill },
-  sessionLine: { flexDirection: "row", alignItems: "center", gap: theme.space(2) },
-  statusDot: { width: 7, height: 7, borderRadius: 4 },
-  // The agent's own accent: this is the agent doing something.
-  statusWorking: { backgroundColor: theme.color.accent },
-  statusUnread: { backgroundColor: theme.color.success },
-  sessionTitle: {
-    color: theme.color.text,
-    fontSize: theme.font.body,
-    lineHeight: theme.line.body,
-    // Yields to the status dot rather than pushing it off the row.
-    flexShrink: 1,
-  },
-  sessionMeta: { color: theme.color.textDim, fontSize: theme.font.tiny },
+  statusCol: { width: STATUS_COL, alignItems: "center", justifyContent: "center" },
+  rowTitle: { flex: 1, color: theme.color.text, fontSize: theme.font.body, lineHeight: theme.line.body },
+  rowWhen: { color: theme.color.textDim, fontSize: theme.font.tiny },
   empty: {
     color: theme.color.textDim,
     fontSize: theme.font.small,
     lineHeight: 20,
-    paddingHorizontal: theme.space(2),
     paddingTop: theme.space(2),
   },
 });

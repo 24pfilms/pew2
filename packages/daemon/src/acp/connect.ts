@@ -7,502 +7,64 @@
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
-import { Readable, Writable } from "node:stream";
-import { client, ndJsonStream, type ClientConnection } from "@agentclientprotocol/sdk";
-import { envValue, findOnPath, type LoadedProvider } from "../providers/registry.js";
+import { client, ndJsonStream } from "@agentclientprotocol/sdk";
 import { humanError } from "../errors.js";
 import type { StoredAttachment } from "../attachments.js";
 import { promptBlocks, type PromptCapabilities } from "./promptBlocks.js";
 import { SESSION_HISTORY_LIMIT } from "../session-history.js";
 import { hydrateMessageCounts } from "./messageCounts.js";
-import { foldProjects, type AgentProject } from "../projects.js";
+import { foldProjects } from "../projects.js";
 import { DETACH_CHILDREN, registerChild, terminateChild, unregisterChild } from "../children.js";
 
-/**
- * A session-level selector advertised by the agent: model, thinking level, mode.
- * pew2 never hardcodes model names — each agent reports its own, so connecting a
- * new app automatically brings its models and reasoning levels with it.
- * https://agentclientprotocol.com/protocol/v1/session-config-options
- */
-export interface ConfigOption {
-  id: string;
-  name: string;
-  description?: string;
-  /** 'model' | 'thought_level' | 'mode' | 'model_config', or a custom '_' name. */
-  category?: string;
-  type: string;
-  currentValue: string | boolean;
-  options?: { value: string; name: string; description?: string }[];
-}
+import {
+  MODE_CONFIG_ID,
+  MODEL_CONFIG_ID,
+  modelsAsConfigOption,
+  normaliseConfigOptions,
+  readAvailableCommands,
+  type AcpSessionHandle,
+  type AdoptOptions,
+  type AgentSession,
+  type AgentSessionList,
+  type AskAnswer,
+  type AvailableCommand,
+  type ConfigOption,
+  type ConnectOptions,
+  type GgCallbacks,
+  type GgCapabilities,
+  type GgGoalMeta,
+  type SessionModelState,
+} from "./connect-types.js";
 
-/**
- * Agents differ on the identifier field: ACP v1 uses `id`, the v2 draft uses
- * `configId`. Accept either so a mixed-version fleet works, and emit `id`.
- */
-function normaliseConfigOptions(raw: unknown): ConfigOption[] {
-  if (!Array.isArray(raw)) return [];
-  return raw.flatMap((entry) => {
-    const option = entry as Record<string, unknown>;
-    const id = (option.id ?? option.configId) as string | undefined;
-    if (!id || typeof option.name !== "string") return [];
-    return [
-      {
-        id,
-        name: option.name,
-        description: option.description as string | undefined,
-        category: (option.category ?? undefined) as string | undefined,
-        type: typeof option.type === "string" ? option.type : "select",
-        currentValue: option.currentValue as string | boolean,
-        options: Array.isArray(option.options)
-          ? (option.options as ConfigOption["options"])
-          : undefined,
-      },
-    ];
-  });
-}
+export {
+  MODE_CONFIG_ID,
+  MODEL_CONFIG_ID,
+  type AcpSessionHandle,
+  type AdoptOptions,
+  type AgentSession,
+  type AgentSessionList,
+  type AskAnswer,
+  type AvailableCommand,
+  type ConfigOption,
+  type ConnectOptions,
+  type GgCallbacks,
+  type GgCapabilities,
+  type GgGoalMeta,
+  type PromptOptions,
+} from "./connect-types.js";
 
-/**
- * The `models` block `session/new` may return, alongside or instead of
- * `configOptions`. Claude Code's adapter reports its live model list this way —
- * the set is whatever that install currently offers, so it tracks agent updates
- * on its own and pew2 must never carry a model list of its own.
- */
-interface SessionModelState {
-  availableModels?: { modelId: string; name: string; description?: string }[];
-  currentModelId?: string;
-}
+import {
+  HANDSHAKE_TIMEOUT_MARKER,
+  HANDSHAKE_TIMEOUT_MS,
+  applyConfigUpdate,
+  restoreMethodFor,
+  toWebStreams,
+  withTimeout,
+} from "./connect-helpers.js";
+import { launchSpec } from "./launch.js";
 
-/** Present the agent's `models` block as the same selector shape as the rest. */
-function modelsAsConfigOption(models: SessionModelState | undefined): ConfigOption[] {
-  const available = models?.availableModels;
-  if (!Array.isArray(available) || available.length === 0) return [];
-  return [
-    {
-      id: MODEL_CONFIG_ID,
-      name: "Model",
-      category: "model",
-      type: "select",
-      currentValue: models?.currentModelId ?? available[0]!.modelId,
-      options: available.map((model) => ({
-        value: model.modelId,
-        name: model.name,
-        description: model.description,
-      })),
-    },
-  ];
-}
-
-/**
- * Synthetic id for the selector built from `models`.
- *
- * That block has no config id of its own, so setting it routes to
- * `session/set_model` rather than `session/set_config_option`.
- */
-export const MODEL_CONFIG_ID = "__acp_model";
-
-/**
- * Synthetic id for the selector built from `modes`.
- *
- * Same story as the model: the legacy `modes` block carries no config id, so
- * setting it routes to `session/set_mode`. Sending `session/set_config_option`
- * for an id the agent never advertised is silently accepted and does nothing —
- * which is exactly what "I picked a mode and nothing happened" looks like.
- */
-export const MODE_CONFIG_ID = "__acp_mode";
-
-/**
- * A conversation the agent already has on disk.
- *
- * Coding agents keep their own history, so a phone should see the work started
- * at the desk, not just what it started itself.
- * https://agentclientprotocol.com/protocol/v1/session-listing
- */
-export interface AgentSession {
-  sessionId: string;
-  cwd: string;
-  title?: string;
-  /** ISO 8601 timestamp of last activity, when the agent tracks one. */
-  updatedAt?: string;
-  /** Number of message rows the app will render before this session is opened. */
-  messageCount?: number;
-}
-
-/**
- * What one `session/list` call yields.
- *
- * Three views of the same answer because they serve different screens: the
- * capped `sessions` are the drawer's recent history (the only ones whose
- * message counts are worth reading from disk up front), `projects` is the
- * complete set of places this agent has worked, and `all` is kept so choosing
- * one of those projects can be answered without asking the agent again.
- */
-export interface AgentSessionList {
-  sessions: AgentSession[];
-  projects: AgentProject[];
-  all: AgentSession[];
-}
-
-/** A slash command the agent offers, as advertised over ACP. */
-export interface AvailableCommand {
-  name: string;
-  description: string;
-  /** Placeholder for the argument it expects, when it takes one. */
-  hint?: string;
-}
-
-/**
- * Normalise an `available_commands_update` payload.
- *
- * Nothing is filtered here: which commands make sense on a phone is a client
- * decision, and the daemon also serves clients that are not this app.
- */
-function readAvailableCommands(raw: unknown): AvailableCommand[] {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .filter((command: any) => typeof command?.name === "string" && command.name.trim())
-    .map((command: any) => ({
-      name: command.name.trim(),
-      description: typeof command.description === "string" ? command.description : "",
-      ...(typeof command.input?.hint === "string" ? { hint: command.input.hint } : {}),
-    }));
-}
-
-export interface AcpSessionHandle {
-  connection: ClientConnection;
-  child: ChildProcessWithoutNullStreams;
-  /** The session prompts currently target. Changes when `adopt` opens another. */
-  readonly sessionId: string;
-  /** Selectors for the current session. Empty when it offers none. */
-  readonly configOptions: ConfigOption[];
-  /**
-   * Slash commands the agent advertised for the current session.
-   *
-   * Sent as a notification shortly after `session/new`, not as part of its
-   * result, so this fills in a moment after the session opens. The set depends
-   * on the project's own `commands/` directories, so it is per session rather
-   * than a property of the agent.
-   */
-  readonly availableCommands: AvailableCommand[];
-  /** True when the agent can replay a past session via `session/load`. */
-  canLoadSession: boolean;
-  /**
-   * The agent's own stored conversations, newest first.
-   *
-   * Empty when the agent does not advertise `session/list` — not every agent
-   * persists history, and asking one that doesn't is an error, not an empty list.
-   */
-  listSessions(): Promise<AgentSessionList>;
-  /**
-   * Open another session on this same agent process.
-   *
-   * Booting the process is the expensive part of a connection — GG Coder
-   * takes ~5s while `session/load` itself answers in ~30ms — so the daemon
-   * keeps a warm handle per provider and adopts it for the next conversation
-   * instead of spawning again.
-   */
-  adopt(options: AdoptOptions): Promise<void>;
-  /**
-   * What this agent accepts in a prompt besides text.
-   *
-   * Undefined when it advertised nothing, which means text only: sending an
-   * image block to an agent that never claimed `image` is a protocol error,
-   * not a graceful degradation.
-   */
-  readonly promptCapabilities?: PromptCapabilities;
-  prompt(text: string, attachments?: readonly StoredAttachment[]): Promise<unknown>;
-  cancel(): Promise<void>;
-  setConfigOption(configId: string, value: string | boolean): Promise<ConfigOption[]>;
-  answerPermission(requestId: string, optionId: string): boolean;
-  close(): void;
-}
-
-export interface AdoptOptions {
-  /** Resume this stored session; a fresh one is created when omitted. */
-  loadSessionId?: string;
-  /**
-   * The project this conversation opens in.
-   *
-   * Required, and not optional with a fallback: a warm process was spawned for
-   * whatever workspace the capability probe happened to use, which under
-   * launchd is the home directory. Reusing that for a session the user opened
-   * against a chosen project is what made the agent report the wrong `cwd` —
-   * so every adopt has to say where it is going.
-   */
-  cwd: string;
-  /** As on {@link ConnectOptions}: skip the replay, keep the agent context. */
-  haveHistory?: boolean;
-  onUpdate: (payload: unknown) => void;
-  onPermissionRequest: (request: { requestId: string; params: unknown }) => void;
-  onConfigOptions?: (options: ConfigOption[]) => void;
-  onExit?: (code: number | null, signal: NodeJS.Signals | null) => void;
-}
-
-export interface ConnectOptions {
-  provider: LoadedProvider;
-  cwd: string;
-  /** Called for every ACP `session/update` notification, in arrival order. */
-  onUpdate: (payload: unknown) => void;
-  /**
-   * Called when the agent asks the user to approve something. Resolve the
-   * returned promise by calling `answerPermission` with one of the option ids.
-   */
-  onPermissionRequest: (request: { requestId: string; params: unknown }) => void;
-  /**
-   * The agent changed the session's selectors on its own.
-   *
-   * Not every change comes from `setConfigOption`: the option set is
-   * model-dependent, so switching model adds or removes the thinking-level
-   * selector, and `/model` typed as a prompt changes it with no request at all.
-   * Without this the pills keep describing the model that was current when the
-   * session opened.
-   */
-  onConfigOptions?: (options: ConfigOption[]) => void;
-  onStderr?: (line: string) => void;
-  onExit?: (code: number | null, signal: NodeJS.Signals | null) => void;
-  /**
-   * Resume one of the agent's own sessions instead of starting a fresh one.
-   *
-   * `session/load` replays the whole conversation through `onUpdate` before it
-   * resolves, which is how a phone picks up a thread started at the desk.
-   */
-  loadSessionId?: string;
-  /**
-   * The caller already has this conversation's history and does not want it
-   * replayed — only the agent-side context back.
-   *
-   * Set when the daemon painted the thread from its own cache, which it does
-   * for every provider. Without it the agent replays a transcript the user is
-   * already looking at, and the daemon drops every message of it: 8,354
-   * notifications and 938ms, measured against GG Coder, to arrive at the screen
-   * that was already drawn.
-   *
-   * Only a hint. An agent that does not advertise `session/resume` still gets a
-   * `session/load`, and the duplicate replay is still discarded as before.
-   */
-  haveHistory?: boolean;
-  /**
-   * How long to wait for the agent to answer `initialize`.
-   *
-   * Overridable mainly so tests do not have to wait out the real budget.
-   */
-  handshakeTimeoutMs?: number;
-}
-
-/**
- * How long an agent may take to answer `initialize` before we give up.
- *
- * Deliberately generous. An `npx` provider downloads its package on first run,
- * which is genuinely minutes on a slow link for a large agent, and killing a
- * working install because it was cold would be the worse failure. This exists to
- * catch the case that never ends — a corrupt npx cache, an agent prompting for
- * login on stdin nobody is reading — not to make slow things fast.
- */
-const HANDSHAKE_TIMEOUT_MS = 180_000;
-
-/**
- * Marks a timeout, so it is not re-wrapped as a startup failure below.
- *
- * A shared constant rather than a literal in two places: the two failures give
- * deliberately different advice — "it is stuck" versus "it died, here is what it
- * said" — and rewording one copy would silently start reporting hung agents as
- * crashed ones, pointing the user at a problem they never had.
- */
-export const HANDSHAKE_TIMEOUT_MARKER = "did not respond to the ACP handshake";
-
-/**
- * Which ACP method reopens a stored conversation.
- *
- * `session/load` replays the whole transcript through the update handler before
- * it resolves. `session/resume` restores the same agent-side context and sends
- * nothing. They are otherwise equivalent: same session id, same capabilities.
- *
- * Measured against GG Coder on one real conversation:
- *
- *   session/load     941ms   8,457 update notifications
- *   session/resume   418ms       0 update notifications
- *
- * The daemon paints every thread from its own cache before the agent is even
- * attached, so those 8,457 messages were being decoded and then dropped. Asking
- * for them was more than half the cost of reopening a conversation — which is
- * the cost the whole idle-session reaper trades against.
- *
- * @param haveHistory The caller already has the transcript on screen.
- * @param canResumeSession The agent advertised `session/resume`.
- */
-export function restoreMethodFor(
-  haveHistory: boolean,
-  canResumeSession: boolean,
-): "session/load" | "session/resume" {
-  // Both conditions, and neither is optional. Without the transcript the replay
-  // is the only way to draw the thread; without the capability, asking is a
-  // protocol error rather than a graceful no-op.
-  return haveHistory && canResumeSession ? "session/resume" : "session/load";
-}
-
-/**
- * Reject with `onTimeout()` if `promise` has not settled in `ms`.
- *
- * The message is built lazily so it can describe what was on stderr by the time
- * we gave up, rather than what was there when the wait started — which is
- * usually nothing at all.
- *
- * The timer is cleared on both paths: an un-cleared timer holds the event loop
- * open, which for a daemon means it never exits cleanly.
- */
-export function withTimeout<T>(
-  promise: Promise<T>,
-  ms: number,
-  onTimeout: () => Error,
-): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(onTimeout()), ms);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        clearTimeout(timer);
-        // Re-rejecting with the original reason, not a wrapped Error: ACP
-        // failures are JSON-RPC objects whose `data` field carries the only
-        // useful explanation, and `humanError` downstream reads it. Wrapping
-        // would throw that away to satisfy the rule.
-        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
-        reject(error);
-      },
-    );
-  });
-}
-
-/**
- * Node child streams -> Web streams, which is what `ndJsonStream` expects.
- *
- * The double cast is needed because Node's `ReadableStream` generic and the DOM
- * lib's differ structurally, even though the runtime objects are identical.
- */
-function toWebStreams(child: ChildProcessWithoutNullStreams) {
-  return {
-    input: Readable.toWeb(child.stdout) as unknown as ReadableStream<Uint8Array>,
-    output: Writable.toWeb(child.stdin) as unknown as WritableStream<Uint8Array>,
-  };
-}
-
-/**
- * The selector list after an update the agent sent unprompted, or undefined
- * when this notification does not carry one.
- *
- * Two shapes, because two protocol generations are live. `config_option_update`
- * resends the whole list and so replaces it — an option can legitimately
- * disappear, which is exactly what happens to the thinking level on a model
- * that does not support one. The legacy `current_mode_update` carries only an
- * id, so the selector synthesised from the `modes` block is edited in place.
- */
-function applyConfigUpdate(
-  currentOptions: ConfigOption[],
-  update: { sessionUpdate?: string; configOptions?: unknown; currentModeId?: unknown } | undefined,
-): ConfigOption[] | undefined {
-  if (update?.sessionUpdate === "config_option_update") {
-    const announced = normaliseConfigOptions(update.configOptions);
-    // An empty list is a malformed notification, not "this session has no
-    // selectors": treating it as truth would blank every pill.
-    return announced.length > 0 ? announced : undefined;
-  }
-  if (update?.sessionUpdate === "current_mode_update" && typeof update.currentModeId === "string") {
-    const modeId = update.currentModeId;
-    // Agents that advertise a real `configOptions` mode entry announce it via
-    // `config_option_update` above; this only touches the synthetic one, so
-    // nothing changes when the session has none.
-    if (!currentOptions.some((option) => option.id === MODE_CONFIG_ID)) return undefined;
-    return currentOptions.map((option) =>
-      option.id === MODE_CONFIG_ID ? { ...option, currentValue: modeId } : option,
-    );
-  }
-  return undefined;
-}
-
-/**
- * Characters cmd.exe treats as syntax rather than text — including the space,
- * which is why a path can be escaped instead of quoted.
- *
- * Taken from cross-spawn, which is the de-facto implementation of this problem
- * and has had a decade of Windows bug reports filed against it.
- */
-const CMD_META = /([()\][%!^"`<>&|;, *?])/g;
-
-/**
- * One argument, as the target program's C runtime will parse it back.
- *
- * Two layers, and they are not the same layer. First MSVCRT quoting, which is
- * what the receiving program applies: a backslash is literal *except* directly
- * before a quote, so those runs are doubled and the quote escaped. Then cmd's
- * own layer on top, since with `windowsVerbatimArguments` this text reaches
- * cmd.exe unaltered — including the quotes we just added, which have to be
- * `^`-escaped or cmd eats them as delimiters.
- */
-function escapeArgument(arg: string): string {
-  const quoted = `"${arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, "$1$1")}"`;
-  return quoted.replace(CMD_META, "^$1");
-}
-
-/**
- * How to actually launch what `findOnPath` found.
- *
- * On POSIX, unchanged: the command is spawned as given.
- *
- * On Windows, two things are true that are not true anywhere else. The command
- * has to be resolved to a real file first — libuv only ever appends `.com` and
- * `.exe`, so a bare `npx` never finds the `npx.cmd` that npm actually installed.
- * And since CVE-2024-27980 (Node 18.20.2 / 20.12.2 / 21.7.3) spawning a `.cmd`
- * or `.bat` without a shell is refused outright with EINVAL, because argument
- * quoting for those is a command-injection surface.
- *
- * So a batch shim goes through `cmd.exe` explicitly — never `shell: true`, which
- * hands an unescaped line to a parser and is the vulnerability itself.
- *
- * The escaping is not optional decoration. Passing the parts as ordinary argv
- * entries looks right and is wrong: Node quotes them MSVCRT-style, then `/s`
- * strips the *first and last* quote of everything after `/c` — which unquotes
- * the program path. `C:\Program Files\nodejs\npx.cmd`, the default location of
- * the launcher five bundled providers run through, would split at the space and
- * fail with a syntax error nobody could act on. So the line is built here,
- * escaped for both parsers, and handed over verbatim — the same shape npm,
- * nodemon and cross-spawn all settled on.
- */
-export function launchSpec(
-  command: string,
-  args: string[],
-  env: NodeJS.ProcessEnv = process.env,
-): { command: string; args: string[]; windowsVerbatimArguments?: boolean } {
-  // Same override the resolver honours, so the Windows path is reachable from a
-  // Linux CI run — the only reason this behaviour is testable at all.
-  const windows = env.PEW2_FAKE_PLATFORM
-    ? env.PEW2_FAKE_PLATFORM === "win32"
-    : process.platform === "win32";
-  if (!windows) return { command, args };
-
-  // Falls back to the bare name so the spawn still happens and still produces a
-  // real ENOENT: refusing here would report "not installed" for a command the
-  // user may have added to PATH since the registry last looked.
-  const resolved = findOnPath(command, env) ?? command;
-  const lower = resolved.toLowerCase();
-  if (!lower.endsWith(".cmd") && !lower.endsWith(".bat")) {
-    return { command: resolved, args };
-  }
-
-  // The program is `^`-escaped rather than quoted, so a space in the path is
-  // literal without opening a quote that `/s` would later strip.
-  const line = [resolved.replace(CMD_META, "^$1"), ...args.map(escapeArgument)].join(" ");
-
-  // `/d` skips AutoRun commands from the registry — without it, whatever a user
-  // or their IT department set there runs before every agent. `/s` makes the
-  // outer quotes mean exactly "strip these two", which is what the line is
-  // built to expect.
-  return {
-    command: envValue(env, "COMSPEC", true) ?? "cmd.exe",
-    args: ["/d", "/s", "/c", `"${line}"`],
-    windowsVerbatimArguments: true,
-  };
-}
+export { HANDSHAKE_TIMEOUT_MARKER, restoreMethodFor, withTimeout } from "./connect-helpers.js";
+export { launchSpec } from "./launch.js";
 
 /**
  * The sentence for an agent that could not be started.
@@ -633,6 +195,9 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
   // daemon process.
   const pending = new Map<string, (optionId: string | null) => void>();
   let permissionCounter = 0;
+  // Same rule for GG's `_gg/ask_user` questions: `null` answers as cancel.
+  const asksPending = new Map<string, (result: AskAnswer | null) => void>();
+  let askCounter = 0;
 
   const { input, output } = toWebStreams(child);
   const stream = ndJsonStream(output, input);
@@ -643,9 +208,18 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
   // inside `session/new`, whose id only exists once it resolves.
   const updateHandlers = new Map<string, (payload: unknown) => void>();
   const permissionHandlers = new Map<string, ConnectOptions["onPermissionRequest"]>();
+  const ggHandlers = new Map<string, GgCallbacks>();
   let pendingRoute:
-    | { onUpdate: (payload: unknown) => void; onPermissionRequest: ConnectOptions["onPermissionRequest"] }
+    | {
+        onUpdate: (payload: unknown) => void;
+        onPermissionRequest: ConnectOptions["onPermissionRequest"];
+        gg?: GgCallbacks;
+      }
     | undefined;
+  const ggRoute = (params: unknown): GgCallbacks | undefined => {
+    const sid = (params as { sessionId?: unknown } | null)?.sessionId;
+    return (typeof sid === "string" ? ggHandlers.get(sid) : undefined) ?? pendingRoute?.gg;
+  };
 
   // Commands arrive as a notification after `session/new` resolves, so they
   // cannot be part of its result. Captured here rather than only forwarded,
@@ -657,7 +231,7 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
   // the temporal dead zone: `session/load` replays through the notification
   // handler *before* that assignment lands, and the config branch there reads
   // this — a bare `let` would throw mid-replay.
-  let current: { sessionId: string; configOptions: ConfigOption[] } = {
+  let current: { sessionId: string; configOptions: ConfigOption[]; goal?: GgGoalMeta } = {
     sessionId: "",
     configOptions: [],
   };
@@ -712,7 +286,90 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
       // sitting on a request whose client no longer exists.
       if (optionId === null) return { outcome: { outcome: "cancelled" } };
       return { outcome: { outcome: "selected", optionId } };
-    });
+    })
+    // GG Coder's ask_user. Exactly the permission rule: the resolver is
+    // registered before anyone is told, and a connection that closes with the
+    // question open answers it as cancelled rather than leaving it hanging.
+    .onRequest(
+      "_gg/ask_user",
+      (params: unknown) => params,
+      async (ctx: { params: unknown; signal?: AbortSignal }) => {
+        const requestId = `ask_${++askCounter}`;
+        const answered = new Promise<AskAnswer | null>((resolve) => {
+          asksPending.set(requestId, resolve);
+        });
+        const handler = ggRoute(ctx.params)?.onAskUser;
+        if (!handler) {
+          asksPending.delete(requestId);
+          return { action: "cancel" };
+        }
+        const route = ggRoute(ctx.params);
+        // Never timed out here: an ask stays open past its turn by design.
+        // Only the agent withdrawing it (or close) ends it unanswered.
+        ctx.signal?.addEventListener(
+          "abort",
+          () => {
+            const resolve = asksPending.get(requestId);
+            if (!resolve) return;
+            asksPending.delete(requestId);
+            route?.onAskClosed?.(requestId);
+            resolve(null);
+          },
+          { once: true },
+        );
+        handler({ requestId, params: ctx.params });
+        return (await answered) ?? { action: "cancel" };
+      },
+    )
+    .onNotification(
+      "_gg/queue_update",
+      (params: unknown) => params,
+      async (ctx: { params: unknown }) => {
+        ggRoute(ctx.params)?.onQueueUpdate?.(ctx.params);
+      },
+    )
+    .onNotification(
+      "_gg/goal_state",
+      (params: unknown) => params,
+      async (ctx: { params: unknown }) => {
+        ggRoute(ctx.params)?.onGoalState?.(ctx.params);
+      },
+    )
+    .onNotification(
+      "_gg/plan_state",
+      (params: unknown) => params,
+      async (ctx: { params: unknown }) => {
+        ggRoute(ctx.params)?.onPlanState?.(ctx.params);
+      },
+    )
+    .onNotification(
+      "_gg/session_reset",
+      (params: unknown) => params,
+      async (ctx: { params: unknown }) => {
+        ggRoute(ctx.params)?.onSessionReset?.(ctx.params);
+      },
+    )
+    .onNotification(
+      "_gg/autopilot_state",
+      (params: unknown) => params,
+      async (ctx: { params: unknown }) => {
+        ggRoute(ctx.params)?.onAutopilotState?.(ctx.params);
+      },
+    )
+    .onNotification(
+      "_gg/autopilot_event",
+      (params: unknown) => params,
+      async (ctx: { params: unknown }) => {
+        ggRoute(ctx.params)?.onAutopilotEvent?.(ctx.params);
+      },
+    )
+    .onNotification(
+      "_gg/checklist_changed",
+      (params: unknown) => params,
+      async (ctx: { params: unknown }) => {
+        ggRoute(ctx.params)?.onChecklistChanged?.(ctx.params);
+      },
+    );
 
   const connection = app.connect(stream);
 
@@ -736,6 +393,9 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
         terminal: false,
         // Opt in to boolean selectors; agents must not send them otherwise.
         session: { configOptions: { boolean: {} } },
+        // GG Coder registers its ask_user tool only for clients that can answer
+        // it. Inert for every other agent: `_meta` is ACP's extension slot.
+        _meta: { gg: { askUser: true, planReview: true } },
       },
       clientInfo: { name: "pew2", title: "pew2", version: "0.1.0" },
     }),
@@ -764,6 +424,7 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
       loadSession?: boolean;
       promptCapabilities?: PromptCapabilities;
       sessionCapabilities?: { list?: unknown; resume?: unknown };
+      _meta?: { gg?: GgCapabilities };
     };
   };
 
@@ -786,6 +447,9 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
   // Asking an agent that never advertised `session/list` is a protocol error,
   // not an empty list, so the capability is checked rather than the call tried.
   const canListSessions = caps?.sessionCapabilities?.list !== undefined;
+  const rawGg = caps?._meta?.gg;
+  const ggCapabilities: GgCapabilities | undefined =
+    rawGg && typeof rawGg === "object" ? rawGg : undefined;
 
   type NewSessionResult = {
     sessionId: string;
@@ -795,7 +459,19 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
       currentModeId: string;
       availableModes: { id: string; name: string; description?: string }[];
     };
+    _meta?: { gg?: { goal?: unknown } };
   };
+
+  function readGoalMeta(created: NewSessionResult): GgGoalMeta | undefined {
+    const goal = created._meta?.gg?.goal as Partial<GgGoalMeta> | undefined;
+    if (!goal || typeof goal.id !== "string") return undefined;
+    return {
+      id: goal.id,
+      ...(typeof goal.phase === "string" ? { phase: goal.phase } : {}),
+      ...(typeof goal.paused === "boolean" ? { paused: goal.paused } : {}),
+      needsKickoff: goal.needsKickoff === true,
+    };
+  }
 
   // Three shapes, all live in the wild, and an agent may send more than one.
   // Claude Code returns `models` + `modes` and no `configOptions` at all, so
@@ -845,13 +521,15 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
       onUpdate: (payload: unknown) => void;
       onPermissionRequest: ConnectOptions["onPermissionRequest"];
       onConfigOptions?: (options: ConfigOption[]) => void;
+      gg?: GgCallbacks;
     },
     /** The caller already has the transcript; see {@link ConnectOptions.haveHistory}. */
     haveHistory = false,
-  ): Promise<{ sessionId: string; configOptions: ConfigOption[] }> {
+  ): Promise<{ sessionId: string; configOptions: ConfigOption[]; goal?: GgGoalMeta }> {
     if (loadSessionId) {
       updateHandlers.set(loadSessionId, route.onUpdate);
       permissionHandlers.set(loadSessionId, route.onPermissionRequest);
+      if (route.gg) ggHandlers.set(loadSessionId, route.gg);
       if (route.onConfigOptions) configHandlers.set(loadSessionId, route.onConfigOptions);
     }
     // Belongs to the session being replaced, and the next one may be a
@@ -875,8 +553,14 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
           })) as NewSessionResult);
       updateHandlers.set(created.sessionId, route.onUpdate);
       permissionHandlers.set(created.sessionId, route.onPermissionRequest);
+      if (route.gg) ggHandlers.set(created.sessionId, route.gg);
       if (route.onConfigOptions) configHandlers.set(created.sessionId, route.onConfigOptions);
-      return { sessionId: created.sessionId, configOptions: buildConfigOptions(created) };
+      const goal = readGoalMeta(created);
+      return {
+        sessionId: created.sessionId,
+        configOptions: buildConfigOptions(created),
+        ...(goal ? { goal } : {}),
+      };
     } finally {
       pendingRoute = undefined;
     }
@@ -903,6 +587,7 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
           onUpdate: options.onUpdate,
           onPermissionRequest: options.onPermissionRequest,
           onConfigOptions: options.onConfigOptions,
+          gg: options.gg,
         },
         options.haveHistory,
       ),
@@ -931,6 +616,10 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
     get availableCommands() {
       return availableCommands;
     },
+    get goal() {
+      return current.goal;
+    },
+    ggCapabilities,
     canLoadSession,
 
     async adopt(adoptOptions: AdoptOptions) {
@@ -941,6 +630,7 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
           onUpdate: adoptOptions.onUpdate,
           onPermissionRequest: adoptOptions.onPermissionRequest,
           onConfigOptions: adoptOptions.onConfigOptions,
+          gg: adoptOptions.gg,
         },
         adoptOptions.haveHistory,
       );
@@ -1059,11 +749,31 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
       }
     },
     promptCapabilities,
-    prompt: (text: string, attachments: readonly StoredAttachment[] = []) =>
-      connection.agent.request("session/prompt", {
-        sessionId: current.sessionId,
-        prompt: promptBlocks(text, attachments, promptCapabilities),
-      }),
+    prompt: (text: string, attachments: readonly StoredAttachment[] = [], promptOptions = {}) =>
+      promptOptions.goalTurn || promptOptions.planDecision
+        ? // A GG Goals turn or a plan decision: empty prompt, the turn kind rides in `_meta`.
+          connection.agent.request<unknown>("session/prompt", {
+            sessionId: current.sessionId,
+            prompt: [],
+            _meta: {
+              gg: promptOptions.goalTurn
+                ? { goalTurn: promptOptions.goalTurn }
+                : { planDecision: promptOptions.planDecision },
+            },
+          })
+        : connection.agent.request("session/prompt", {
+            sessionId: current.sessionId,
+            prompt: promptBlocks(text, attachments, promptCapabilities),
+          }),
+    extRequest: <T,>(method: string, params: Record<string, unknown>) =>
+      connection.agent.request<T>(method, params),
+    answerAsk(requestId, result) {
+      const resolve = asksPending.get(requestId);
+      if (!resolve) return false;
+      asksPending.delete(requestId);
+      resolve(result);
+      return true;
+    },
     cancel: () =>
       connection.agent.notify("session/cancel", { sessionId: current.sessionId }),
     answerPermission(requestId, optionId) {
@@ -1079,6 +789,8 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
       // keeps this connection's entire closure reachable.
       for (const resolve of pending.values()) resolve(null);
       pending.clear();
+      for (const resolve of asksPending.values()) resolve(null);
+      asksPending.clear();
       connection.close();
       stop();
     },

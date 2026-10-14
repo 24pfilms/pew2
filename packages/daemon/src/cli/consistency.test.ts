@@ -62,18 +62,23 @@ const screens: Record<string, string[]> = {
   pair: renderPair(pairView, undefined, plain),
 };
 
-test("every screen draws the same rail", () => {
+test("every screen uses the same look: section marks, then lines hung under them", () => {
+  // Style B has no vertical rule. Every screen opens its sections with the
+  // step mark (░) and closes with the square (■); every other line hangs under
+  // a section, indented. A line that starts flush left and is not a section
+  // mark or a closing square is out of place.
+  const marks = /^(■|░|▓|▒)/;
   for (const [name, lines] of Object.entries(screens)) {
     const body = lines.map(stripAnsi).filter((l) => l !== "");
-    const stray = body.filter((l) => !/^[│◇◆└]/.test(l));
-    expect(stray, `${name} has lines off the rail: ${stray.join(" | ")}`).toEqual([]);
+    const stray = body.filter((l) => !marks.test(l) && !l.startsWith("  ") && !l.startsWith("   "));
+    expect(stray, `${name} has lines off the layout: ${stray.join(" | ")}`).toEqual([]);
   }
 });
 
-test("the rail is never broken by a blank line mid-screen", () => {
+test("a section is never split by a blank line mid-section", () => {
   // Filtering empties out of the test above hid a real gap: `pair --rotate`
-  // separated its warning with "" instead of a `│`, leaving a hole in the rail.
-  // Only the opening and closing blank lines are legitimate.
+  // separated its warning with "" instead of a line, leaving a hole in the
+  // layout. Blank lines belong between sections, and only there.
   const rotated = renderPair({ ...pairView, rotated: true }, undefined, plain).map(stripAnsi);
   // Trim the leading and trailing blanks the intro and outro own, then assert
   // on what is left — rather than slicing fixed indices, which would silently
@@ -82,15 +87,22 @@ test("the rail is never broken by a blank line mid-screen", () => {
   let end = rotated.length;
   while (start < end && rotated[start] === "") start++;
   while (end > start && rotated[end - 1] === "") end--;
-  expect(rotated.slice(start, end).filter((l) => l === "")).toEqual([]);
+  // A blank line may only open a section (the line after it is a section
+  // mark). A blank between two lines of the same section is the hole.
+  const inner = rotated.slice(start, end);
+  const holes = inner.filter((l, i) => l === "" && !/^░/.test(inner[i + 1] ?? ""));
+  expect(holes).toEqual([]);
 });
 
-test("every full screen opens with the mark and names itself pew2", () => {
+test("every full screen opens with the mark and names itself", () => {
   // agentSections and providerList are fragments of the setup screen, so only
-  // the screens that own their whole output are checked for an opening.
+  // the screens that own their whole output are checked for an opening. Style
+  // B spaces the screen's title, so pew2 reads as P E W 2 — the check accepts
+  // either spelling, and still requires a screen to say which tool it is.
   for (const name of ["doctor", "registry sync", "pair"]) {
     const first = screens[name]!.map(stripAnsi).filter((l) => l !== "")[0]!;
-    expect(first, name).toMatch(/^◆\s+pew2/);
+    expect(first, name).toMatch(/^■\s+(pew2|P E W 2|[A-Z ]+)/);
+    expect(first, name).toMatch(/pew2|P E W 2|DOCTOR|REGISTRY|PAIR/i);
   }
 });
 

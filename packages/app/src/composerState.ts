@@ -14,3 +14,13 @@
 export function showsStop(state: { busy: boolean; loadingSession: boolean }): boolean {
   return state.busy && !state.loadingSession;
 }
+
+/**
+ * Whether the composer's button stops the turn rather than sends.
+ *
+ * Only with nothing to send: a running turn is no reason to refuse a message
+ * — the daemon queues it for the agent's next step (`session.queue`).
+ */
+export function pressStops(state: { busy: boolean; canSend: boolean }): boolean {
+  return state.busy && !state.canSend;
+}

@@ -3,6 +3,10 @@ import { doctorView, checks, summary } from "./doctor-view.js";
 import { stripAnsi, styler, glyphs } from "./ui.js";
 import type { DoctorReport, Problem } from "./doctor.js";
 
+/** A line is on the layout if it is a section mark, a closing square, or hangs under one. */
+const onLayout = (line: string): boolean => /^(■|░|▓|▒|\s{2})/.test(line);
+
+
 const plain = { style: styler(0), glyph: glyphs(true), columns: 80 };
 
 function report(over: Partial<DoctorReport> = {}): DoctorReport {
@@ -113,5 +117,5 @@ test("every line stays on the rail", () => {
     .map(stripAnsi)
     .filter((l) => l !== "");
 
-  expect(lines.every((l) => /^[│◇◆└]/.test(l))).toBe(true);
+  expect(lines.every(onLayout)).toBe(true);
 });

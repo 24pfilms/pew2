@@ -53,6 +53,22 @@ export async function deviceId(): Promise<string> {
  * appear as an unexplained blank screen.
  */
 export async function loadPairing(): Promise<Pairing | null> {
+  // Development only: `EXPO_PUBLIC_DEV_PAIRING=<link> npx expo start` pairs a
+  // simulator with a local daemon without anyone pasting into it. Stripped
+  // from release bundles by the `__DEV__` gate, and saved like a real pairing
+  // so it survives reloads.
+  const devLink = __DEV__ ? process.env.EXPO_PUBLIC_DEV_PAIRING : undefined;
+  if (devLink) {
+    try {
+      const parsed = parsePairing(devLink, await deviceId());
+      if (parsed.ok) {
+        await savePairing(parsed.pairing).catch(() => {});
+        return parsed.pairing;
+      }
+    } catch {
+      // Fall through to the stored pairing.
+    }
+  }
   try {
     // Both reads at once. They are independent keys, and this sits directly on
     // the launch path: run in sequence, the app waited out two round trips to

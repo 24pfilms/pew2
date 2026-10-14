@@ -1,5 +1,6 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
+  projectTabItems,
   projectLabel,
   projectsForProvider,
   projectSourceKey,
@@ -147,4 +148,25 @@ test("the memo key separates fields so neighbouring values cannot merge", () => 
   const b = [session({ id: "1", cwd: "/a1", startedAt: 1 })];
 
   expect(projectSourceKey(a, "claude-code")).not.toBe(projectSourceKey(b, "claude-code"));
+});
+
+describe("projectTabItems", () => {
+  test("All first, then one chip per project in order", () => {
+    const items = projectTabItems([
+      { path: "/a/one", name: "one" },
+      { path: "/b/two", name: "two" },
+    ]);
+    expect(items).toEqual([
+      { label: "All", a11y: "All projects" },
+      { path: "/a/one", label: "one", a11y: "Project one" },
+      { path: "/b/two", label: "two", a11y: "Project two" },
+    ]);
+  });
+
+  test("scales linearly to a GG Coder-sized list", () => {
+    const projects = Array.from({ length: 1000 }, (_, i) => ({ path: `/p/${i}`, name: `p${i}` }));
+    const items = projectTabItems(projects);
+    expect(items).toHaveLength(1001);
+    expect(items[1000]?.path).toBe("/p/999");
+  });
 });

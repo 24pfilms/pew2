@@ -14,7 +14,18 @@ import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@expo/vector-icons/Ionicons";
+import Animated, {
+  Easing,
+  cancelAnimation,
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withRepeat,
+  withTiming,
+} from "react-native-reanimated";
 import { theme } from "../theme";
+import { Pew } from "../pew/Pew";
+import { Led } from "./stage/Led";
 import { haptics } from "./haptics";
 import { CircleButton } from "./controls";
 import { Glass } from "./Glass";
@@ -49,12 +60,15 @@ export function QrScanner({ visible, onClose, onScan, error, busy }: Props) {
   const submitted = useRef<string | undefined>(undefined);
   const rejected = useRef<string | undefined>(undefined);
   const [torch, setTorch] = useState(false);
+  // Drives the corners green; a refused code puts them back to coral.
+  const [read, setRead] = useState(false);
 
   const handleScan = useCallback(
     ({ data }: { data: string }) => {
       if (handled.current || data === rejected.current) return;
       handled.current = true;
       submitted.current = data;
+      setRead(true);
       // The camera is held at arm's length and the sheet dismisses itself, so a
       // pulse is the clearest confirmation that the code actually registered.
       haptics.finished();
@@ -71,6 +85,7 @@ export function QrScanner({ visible, onClose, onScan, error, busy }: Props) {
     if (!error) return;
     rejected.current = submitted.current;
     handled.current = false;
+    setRead(false);
   }, [error]);
 
   // A retry must be able to scan the same code again, so the latch is released
@@ -79,6 +94,7 @@ export function QrScanner({ visible, onClose, onScan, error, busy }: Props) {
     handled.current = false;
     rejected.current = undefined;
     setTorch(false);
+    setRead(false);
     onClose();
   }, [onClose]);
 
@@ -135,12 +151,7 @@ export function QrScanner({ visible, onClose, onScan, error, busy }: Props) {
             <View style={styles.centre} pointerEvents="none">
               {/* A frame, not a mask: it tells the user where to aim without
                   hiding the rest of the viewfinder. */}
-              <View style={styles.reticle} />
-              {/* Progress outranks the error beneath it: a check in flight has
-                  already superseded the last failure. */}
-              <Text style={styles.hint}>
-                {busy ? "Checking the code…" : (error ?? "Point at the code")}
-              </Text>
+              <Viewfinder read={read || !!busy} />
             </View>
           ) : (
             <View style={styles.centre}>
@@ -183,6 +194,20 @@ export function QrScanner({ visible, onClose, onScan, error, busy }: Props) {
               </Glass>
             </View>
           )}
+          {granted ? (
+            <View style={[styles.footer, { paddingBottom: insets.bottom + theme.space(4) }]} pointerEvents="none">
+              <Pew size={56} mood={read || busy ? "happy" : "thinking"} style={styles.footerPew} accessibilityLabel="Pew" />
+              {/* Progress outranks the error: a check in flight has already
+                  superseded the last failure. */}
+              {busy ? (
+                <Led tone="plus" style={styles.footerText}>Checking the code…</Led>
+              ) : error ? (
+                <Text style={[styles.footerText, styles.error]} numberOfLines={2}>{error}</Text>
+              ) : (
+                <Led style={styles.footerText}>Point me at the QR code</Led>
+              )}
+            </View>
+          ) : null}
         </View>
       </View>
     </Modal>
@@ -190,6 +215,56 @@ export function QrScanner({ visible, onClose, onScan, error, busy }: Props) {
 }
 
 const RETICLE = 240;
+const CORNER = 44;
+/** Stage's coral for the viewfinder: no theme token, local to the scanner. */
+const CORAL = "#ff7a66";
+
+function Corner({ at, color }: { at: "tl" | "tr" | "bl" | "br"; color: string; }) {
+  const top = at[0] === "t";
+  const left = at[1] === "l";
+  return (
+    <View
+      style={[
+        styles.corner,
+        {
+          borderColor: color,
+          shadowColor: color,
+          borderStyle: color === CORAL ? "dotted" : "solid",
+          [top ? "top" : "bottom"]: 0,
+          [left ? "left" : "right"]: 0,
+          [top ? "borderTopWidth" : "borderBottomWidth"]: 3,
+          [left ? "borderLeftWidth" : "borderRightWidth"]: 3,
+        },
+      ]}
+    />
+  );
+}
+
+/** Four dotted coral brackets and a sweeping line; solid green once read. */
+function Viewfinder({ read }: { read: boolean }) {
+  const reduce = useReducedMotion();
+  const t = useSharedValue(0);
+  const sweeping = !reduce && !read;
+  useEffect(() => {
+    if (!sweeping) {
+      cancelAnimation(t);
+      return;
+    }
+    t.value = withRepeat(withTiming(1, { duration: 1800, easing: Easing.inOut(Easing.quad) }), -1, true);
+    return () => cancelAnimation(t);
+  }, [sweeping, t]);
+  const line = useAnimatedStyle(() => ({ transform: [{ translateY: t.value * (RETICLE - 2) }] }));
+  const color = read ? theme.color.success : CORAL;
+  return (
+    <View style={styles.reticle}>
+      <Corner at="tl" color={color} />
+      <Corner at="tr" color={color} />
+      <Corner at="bl" color={color} />
+      <Corner at="br" color={color} />
+      {sweeping ? <Animated.View style={[styles.scanLine, line]} /> : null}
+    </View>
+  );
+}
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#000" },
@@ -204,23 +279,32 @@ const styles = StyleSheet.create({
   bar: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   pressed: { opacity: 0.6 },
   centre: { flex: 1, alignItems: "center", justifyContent: "center", gap: theme.space(4) },
-  reticle: {
-    width: RETICLE,
-    height: RETICLE,
-    borderRadius: 24,
-    borderWidth: 2,
-    borderColor: "rgba(255,255,255,0.9)",
+  reticle: { width: RETICLE, height: RETICLE },
+  corner: {
+    position: "absolute",
+    width: CORNER,
+    height: CORNER,
+    shadowOpacity: 0.9,
+    shadowRadius: theme.stage.glow,
+    shadowOffset: { width: 0, height: 0 },
   },
-  hint: {
-    color: "#fff",
-    fontSize: 15,
-    textAlign: "center",
-    paddingHorizontal: theme.space(6),
-    paddingVertical: theme.space(2),
-    backgroundColor: "rgba(0,0,0,0.55)",
-    borderRadius: 10,
-    overflow: "hidden",
+  scanLine: {
+    position: "absolute",
+    left: theme.space(3),
+    right: theme.space(3),
+    top: 0,
+    height: 2,
+    backgroundColor: CORAL,
+    shadowColor: CORAL,
+    shadowOpacity: 1,
+    shadowRadius: theme.stage.glow,
+    shadowOffset: { width: 0, height: 0 },
   },
+  footer: { flexDirection: "row", alignItems: "center", gap: theme.space(2) },
+  // The globe fills ~60% of its box.
+  footerPew: { margin: -theme.space(2) },
+  footerText: { flex: 1 },
+  error: { color: theme.color.danger, fontSize: theme.font.body },
   permissionTitle: {
     color: theme.color.text,
     fontFamily: theme.display.semibold,

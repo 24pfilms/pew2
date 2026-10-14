@@ -3,6 +3,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import readline from "node:readline";
+import { asRecord, asString } from "@pew2/protocol";
 import { promisify } from "node:util";
 import { createGunzip, gunzip } from "node:zlib";
 import type { AgentSession } from "./connect.js";
@@ -48,24 +49,23 @@ async function countFile(filePath: string, expectedSessionId: string): Promise<n
 
   try {
     for await (const line of lines) {
-      let entry: any;
+      let parsed: unknown;
       try {
-        entry = JSON.parse(line);
+        parsed = JSON.parse(line);
       } catch {
         continue;
       }
+      const entry = asRecord(parsed);
       if (entry?.type === "session") {
-        sessionId = entry.id;
-        leafId = entry.leafId;
+        sessionId = asString(entry.id);
+        leafId = asString(entry.leafId);
       } else if (entry?.type === "message" && typeof entry.id === "string") {
+        const message = asRecord(entry.message);
         lastMessageId = entry.id;
         messages.set(entry.id, {
           parentId: typeof entry.parentId === "string" ? entry.parentId : null,
-          role:
-            entry.message?.role === "user" || entry.message?.role === "assistant"
-              ? entry.message.role
-              : undefined,
-          hasText: hasVisibleText(entry.message?.content),
+          role: message?.role === "user" || message?.role === "assistant" ? message.role : undefined,
+          hasText: hasVisibleText(message?.content),
         });
       }
     }
@@ -147,13 +147,53 @@ export async function hydrateGgCoderMessageCounts(
   await Promise.all(Array.from({ length: Math.min(12, pending.length) }, worker));
 }
 
-export type GgCoderDisplayUpdate = Record<string, unknown>;
+/** A `session/update` payload, or one of Ken's persisted verdicts (`kind: "autopilot"`). */
+export type GgCoderDisplayUpdate = Record<string, unknown> | KenMarker;
 
 interface DisplayStoredMessage {
   parentId: string | null;
   role?: "user" | "assistant" | "tool" | "system";
   content: unknown;
   provenance?: { kind?: string; visibility?: "transcript" | "hidden" | "summary" };
+  /** Ken's (Autopilot) verdicts that sit just before this message on screen. */
+  markersBefore?: KenMarker[];
+}
+
+/**
+ * One of Ken's Autopilot verdicts, as GG Coder persists it: a `custom` entry
+ * of kind `autopilot_marker`, off the message DAG, anchored by
+ * `afterMessageCount` (non-system messages already on disk when it was
+ * written). Replayed as the same `{ kind: "autopilot" }` event the live cycle
+ * logs, so a reopened conversation shows the same Ken bubbles.
+ */
+export interface KenMarker {
+  kind: "autopilot";
+  phase: "prompted" | "done" | "human" | "capped" | "plan_accepted";
+  reason?: string;
+  body?: string;
+}
+
+const MARKER_PHASES: Record<string, KenMarker["phase"]> = {
+  prompted: "prompted",
+  done: "done",
+  human: "human",
+  capped: "capped",
+  // The desktop's name for the moment Ken approved a plan.
+  plan_approved: "plan_accepted",
+};
+
+function readMarker(data: unknown): (KenMarker & { afterMessageCount: number }) | undefined {
+  const p = data as { version?: unknown; phase?: unknown; reason?: unknown; body?: unknown; afterMessageCount?: unknown } | null;
+  if (p?.version !== 1 || typeof p.phase !== "string") return undefined;
+  const phase = MARKER_PHASES[p.phase];
+  if (!phase) return undefined;
+  return {
+    kind: "autopilot",
+    phase,
+    ...(typeof p.reason === "string" ? { reason: p.reason } : {}),
+    ...(typeof p.body === "string" ? { body: p.body } : {}),
+    afterMessageCount: typeof p.afterMessageCount === "number" ? p.afterMessageCount : 0,
+  };
 }
 
 interface DisplayCheckpoint {
@@ -164,6 +204,8 @@ interface DisplayCheckpoint {
     leafId?: string;
   };
   messages: DisplayStoredMessage[];
+  /** Markers anchored after the last message. */
+  trailing: KenMarker[];
   path: string;
 }
 
@@ -175,15 +217,19 @@ async function readCheckpoint(filePath: string): Promise<DisplayCheckpoint | und
   let header: DisplayCheckpoint["header"] | undefined;
   const messages = new Map<string, DisplayStoredMessage>();
   let lastMessageId: string | undefined;
+  // File order of messages and Ken markers: a marker's anchor can only be
+  // trusted up to where it was actually written (GG Coder's resolveAnchor).
+  const order: ({ message: string; system: boolean } | { marker: KenMarker & { afterMessageCount: number } })[] = [];
 
   for (const line of text.split("\n")) {
     if (!line) continue;
-    let entry: any;
+    let parsed: unknown;
     try {
-      entry = JSON.parse(line);
+      parsed = JSON.parse(line);
     } catch {
       continue;
     }
+    const entry = asRecord(parsed);
     if (entry?.type === "session" && typeof entry.id === "string") {
       header = {
         id: entry.id,
@@ -193,13 +239,20 @@ async function readCheckpoint(filePath: string): Promise<DisplayCheckpoint | und
         leafId: typeof entry.leafId === "string" ? entry.leafId : undefined,
       };
     } else if (entry?.type === "message" && typeof entry.id === "string") {
+      const message = asRecord(entry.message);
       lastMessageId = entry.id;
+      order.push({ message: entry.id, system: message?.role === "system" });
       messages.set(entry.id, {
         parentId: typeof entry.parentId === "string" ? entry.parentId : null,
-        role: entry.message?.role,
-        content: entry.message?.content,
-        provenance: entry.message?.provenance,
+        // Kept as written, like `content`: the readers below compare these to
+        // the values they expect, so an unfamiliar one simply matches nothing.
+        role: asString(message?.role) as DisplayStoredMessage["role"],
+        content: message?.content,
+        provenance: asRecord(message?.provenance) as DisplayStoredMessage["provenance"],
       });
+    } else if (entry?.type === "custom" && entry.kind === "autopilot_marker") {
+      const marker = readMarker(entry.data);
+      if (marker) order.push({ marker });
     }
   }
   if (!header) return undefined;
@@ -214,7 +267,32 @@ async function readCheckpoint(filePath: string): Promise<DisplayCheckpoint | und
     lineage.push(message);
     cursor = message.parentId ?? undefined;
   }
-  return { header, messages: lineage.reverse(), path: filePath };
+  lineage.reverse();
+
+  // Place each marker before the message that follows its anchor. Anchors
+  // count on-branch, non-system messages; a stale anchor (above where the
+  // marker was written) is clamped down, one past the end is dropped, and
+  // exact duplicates from old re-persist paths are kept once.
+  const nonSystem = lineage.filter((message) => message.role !== "system");
+  const trailing: KenMarker[] = [];
+  const seen = new Set<string>();
+  let onBranchSoFar = 0;
+  for (const item of order) {
+    if ("message" in item) {
+      if (!item.system && visited.has(item.message)) onBranchSoFar += 1;
+      continue;
+    }
+    const { afterMessageCount, ...marker } = item.marker;
+    const anchor = Math.min(afterMessageCount, onBranchSoFar);
+    if (anchor > nonSystem.length) continue;
+    const key = JSON.stringify([marker.phase, anchor, marker.reason ?? null, marker.body ?? null]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const target = nonSystem[anchor];
+    if (target) (target.markersBefore ??= []).push(marker);
+    else trailing.push(marker);
+  }
+  return { header, messages: lineage, trailing, path: filePath };
 }
 
 async function findCheckpoint(
@@ -317,18 +395,34 @@ function canonicalValue(value: unknown): unknown {
   return value;
 }
 
-function reconstructCheckpoints(checkpoints: DisplayCheckpoint[]): DisplayStoredMessage[] {
+function reconstructCheckpoints(checkpoints: DisplayCheckpoint[]): {
+  transcript: DisplayStoredMessage[];
+  trailing: KenMarker[];
+} {
   const transcript: DisplayStoredMessage[] = [];
+  let trailing: KenMarker[] = [];
   const transcriptKeys: string[] = [];
   for (let index = 0; index < checkpoints.length; index += 1) {
     const checkpoint = checkpoints[index]!;
     const parent = checkpoints[index - 1];
     const parentAvailable =
       parent !== undefined && checkpoint.header.parentSessionId === parent.header.id;
-    const messages = checkpoint.messages.filter((message) => {
+    // A message that is not shown hands its Ken markers to the next one that
+    // is (or to the end), so a verdict next to a hidden automation turn stays.
+    const messages: DisplayStoredMessage[] = [];
+    let carried: KenMarker[] = [];
+    for (const message of checkpoint.messages) {
       const state = visibility(message);
-      return state !== "hidden" && !(state === "summary" && parentAvailable);
-    });
+      const shown = state !== "hidden" && !(state === "summary" && parentAvailable);
+      const markers = [...carried, ...(message.markersBefore ?? [])];
+      if (!shown) {
+        carried = markers;
+        continue;
+      }
+      carried = [];
+      messages.push(markers.length > 0 ? { ...message, markersBefore: markers } : { ...message, markersBefore: undefined });
+    }
+    const checkpointTrailing = [...carried, ...checkpoint.trailing];
     const keys = messages.map((message) =>
       JSON.stringify(
         canonicalValue({
@@ -347,10 +441,20 @@ function reconstructCheckpoints(checkpoints: DisplayCheckpoint[]): DisplayStored
       }
       overlap -= 1;
     }
-    transcript.push(...messages.slice(overlap));
+    // The overlap is the parent's copy of the same turns, markers included
+    // (compaction re-persists them), so the parent's copies are the ones kept.
+    // A parent's trailing markers belong before this checkpoint's first new
+    // message.
+    const fresh = messages.slice(overlap);
+    if (trailing.length > 0 && fresh[0]) {
+      fresh[0] = { ...fresh[0], markersBefore: [...trailing, ...(fresh[0].markersBefore ?? [])] };
+      trailing = [];
+    }
+    transcript.push(...fresh);
     transcriptKeys.push(...keys.slice(overlap));
+    if (fresh.length > 0 || index === 0) trailing = [...trailing, ...checkpointTrailing];
   }
-  return transcript;
+  return { transcript, trailing };
 }
 
 /**
@@ -383,10 +487,18 @@ export async function loadGgCoderDisplayHistory(
   }
 
   const updates: GgCoderDisplayUpdate[] = [];
-  for (const message of reconstructCheckpoints(checkpoints)) {
+  const { transcript, trailing } = reconstructCheckpoints(checkpoints);
+  let carried: KenMarker[] = [];
+  for (const message of transcript) {
+    // Ken's verdicts are not session/update frames: they go out as the same
+    // `{ kind: "autopilot" }` event the live cycle logs (see Daemon.connectSession).
+    const markers = [...carried, ...(message.markersBefore ?? [])];
     if (message.provenance?.kind === "automation" || message.provenance?.kind === "notification") {
+      carried = markers;
       continue;
     }
+    carried = [];
+    updates.push(...markers);
     if (message.role === "tool") {
       const images = [...historyImages(message.content), ...historyToolImages(message.content)];
       if (images.length > 0) {
@@ -421,5 +533,6 @@ export async function loadGgCoderDisplayHistory(
       }
     }
   }
+  updates.push(...carried, ...trailing);
   return updates;
 }

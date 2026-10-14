@@ -59,3 +59,33 @@ export function splitMarkdownBlocks(source: string): string[] {
   // message would vanish rather than merely be laid out oddly.
   return blocks.length > 0 ? blocks : [source];
 }
+
+/** The block holds a fenced code block (opened, or opened and closed). */
+export function hasFence(block: string): boolean {
+  return /^\s*(`{3,}|~{3,})/m.test(block);
+}
+
+/**
+ * Hold back a half-written inline code span while text is being revealed.
+ *
+ * Mid-stream, `see \`curs` is a lone backtick: markdown renders it as literal
+ * prose, then restyles the whole run as code the moment the closer lands — a
+ * visible flash. Cutting the revealed text back to just before an unmatched
+ * backtick in the last block keeps the reveal on prose until the span is
+ * whole; the code then arrives in one piece. Fenced blocks are not touched
+ * (the live path never paces them).
+ */
+export function holdOpenInlineCode(text: string): string {
+  const lastBlockStart = text.lastIndexOf("\n\n") + 1;
+  const tail = text.slice(lastBlockStart);
+  if (hasFence(tail)) return text;
+  // A span opens with a run of N backticks and closes only at the next run of
+  // exactly N; shorter or longer runs inside it are its content.
+  let open: { length: number; at: number } | undefined;
+  for (const run of tail.matchAll(/`+/g)) {
+    const length = run[0].length;
+    if (!open) open = { length, at: run.index! };
+    else if (length === open.length) open = undefined;
+  }
+  return open ? text.slice(0, lastBlockStart + open.at) : text;
+}

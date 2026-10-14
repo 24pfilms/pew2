@@ -67,8 +67,8 @@ export interface RenderOptions {
   now?: number;
 }
 
-/** Visible width of the rail prefix: the pipe plus its two-space hang. */
-const GUTTER_WIDTH = 3;
+/** Visible width of the gutter: the two-space hang under a section (style B has no pipe). */
+const GUTTER_WIDTH = 2;
 
 /**
  * The rail prefix every line hangs off.
@@ -78,10 +78,9 @@ const GUTTER_WIDTH = 3;
  * The pipe carries colour, so unlike a bare string it has to be built per call
  * from the caller's style.
  */
-function gut(options: RenderOptions = {}): string {
-  const s = options.style ?? styler();
-  const g = options.glyph ?? glyphs();
-  return `${s.hex(PALETTE.faint, g.unicode ? "\u2502" : "|")}  `;
+function gut(_options: RenderOptions = {}): string {
+  // Style B has no vertical rule: lines simply hang two spaces in under their section.
+  return "  ";
 }
 
 /** Label column for the status rows. Wide enough for the longest label. */
@@ -250,11 +249,11 @@ export function urlBlock(view: PairView, options: RenderOptions = {}): string[] 
  */
 export function closingLines(daemonRunning: boolean, options: RenderOptions = {}): string[] {
   const s = options.style ?? styler();
-  const g = options.glyph ?? glyphs();
   return rail(options).outro(
     daemonRunning
       ? s.dim("Scan the code above when you are ready.")
-      : `${s.hex(PALETTE.danger, g.cross)} ${s.dim("Start the daemon before scanning:")} ${s.bold("pew2 service install")}`,
+      : `${s.dim("Start the daemon before scanning:")} ${s.bold("pew2 service install")}`,
+    daemonRunning ? undefined : "stop",
   );
 }
 
@@ -282,10 +281,7 @@ export function pairedLine(
 /** Shown when nobody scanned. Not an error: the link stays valid. */
 export function timeoutLines(options: RenderOptions = {}): string[] {
   const s = options.style ?? styler();
-  const g = options.glyph ?? glyphs();
-  return rail(options).outro(
-    `${s.hex(PALETTE.faint, g.dot)} ${s.dim("Stopped waiting. The code above stays valid.")}`,
-  );
+  return rail(options).outro(s.dim("Stopped waiting. The code above stays valid."), "quiet");
 }
 
 /** The keyboard hint, omitted when there is no keyboard to press. */
@@ -338,8 +334,9 @@ export function renderPair(
   if (view.rotated) {
     const s = options.style ?? styler();
     const g = options.glyph ?? glyphs();
+    // Hangs under the link above it, with no gap: it is part of that section,
+    // not a new one. (Style B: a blank line only ever opens a section.)
     lines.push(
-      rail(options).bar(),
       // Named when one exists. A pairing this call took from a specific phone
       // deserves to say which, rather than a general warning that leaves the
       // user working out whether it means them.

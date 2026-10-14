@@ -10,17 +10,23 @@
  * pushes the rows above it, and `startRenderingFromBottom` means the very first
  * painted frame is already at the newest message — no reveal, no catch-up scroll.
  */
+import { createEntranceLifetime, type DissolveKind, type EntranceLifetime } from "../motion";
+import { Dissolve } from "./motion/Dissolve";
 import {
+  createContext,
   forwardRef,
   memo,
   useCallback,
+  useContext,
   useEffect,
   useImperativeHandle,
   useMemo,
   useRef,
+  useState,
 } from "react";
 import {
   Keyboard,
+  Pressable,
   StyleSheet,
   View,
   type NativeScrollEvent,
@@ -29,17 +35,74 @@ import {
 import { FlashList, type FlashListRef, type ListRenderItemInfo } from "@shopify/flash-list";
 import { theme } from "../theme";
 import { Turn } from "./Turn";
-import { ActivityLine } from "./ActivityLine";
-import { TurnReceipt } from "./TurnReceipt";
+import { LedReceipt } from "./Ticker";
 import { ConversationRestore, type ConversationRestoreProps } from "./ConversationRestore";
 import { useStatusRowHeight } from "./useStatusRowHeight";
-import { type Activity, type TurnReceipt as Receipt } from "../activity";
+import { type TurnReceipt as Receipt } from "../activity";
 import { retryTarget } from "../retryPrompt";
 import type { Turn as TurnData } from "../useDaemon";
 import { isEmptyTurn } from "../chunks";
 import { streamIdentityKey, type LiveStreamIdentity } from "../smoothText";
+import { loadEarlier, nextWindow, windowTurns, TRANSCRIPT_PAGE, type TranscriptWindow } from "../transcriptWindow";
+import { Led } from "./stage/Led";
+import { DashedRule } from "./stage/DashedRule";
+import { haptics } from "./haptics";
 
-export type ChatThreadRef = FlashListRef<TurnData>;
+/**
+ * The thread's last row: the activity line / receipt plus the bottom reading
+ * inset. A data row rather than `ListFooterComponent` — see `withFooter`.
+ */
+type FooterRow = { readonly id: typeof FOOTER_KEY; readonly footer: true };
+/** The "load earlier" row at the top of a windowed transcript. */
+type EarlierRow = { readonly id: typeof EARLIER_KEY; readonly earlier: true };
+type ThreadRow = TurnData | FooterRow | EarlierRow;
+const EARLIER_KEY = "__thread_earlier__";
+const EARLIER_ROW: EarlierRow = { id: EARLIER_KEY, earlier: true };
+const isEarlier = (row: ThreadRow): row is EarlierRow => (row as EarlierRow).earlier === true;
+
+/** How many are hidden, and whether a page is landing, for the earlier row. */
+const EarlierContext = createContext<{ count: number; lit: boolean; onPress: () => void }>({
+  count: 0,
+  lit: false,
+  onPress: () => {},
+});
+
+/** Lit this long after a page lands, so the load reads as an event. */
+const EARLIER_LIT_MS = 600;
+
+function EarlierCell() {
+  const { count, lit, onPress } = useContext(EarlierContext);
+  const more = Math.min(count, TRANSCRIPT_PAGE);
+  return (
+    <Pressable
+      onPress={onPress}
+      hitSlop={theme.space(2)}
+      accessibilityRole="button"
+      accessibilityLabel={`Load ${more} earlier messages, ${count} hidden`}
+      style={styles.earlier}
+    >
+      <DashedRule style={styles.earlierRule} />
+      <Led tone={lit ? "agent" : "dim"} unlit={!lit}>{`▲ EARLIER · ${count} MORE`}</Led>
+      <DashedRule style={styles.earlierRule} />
+    </Pressable>
+  );
+}
+const FOOTER_KEY = "__thread_footer__";
+const FOOTER_ROW: FooterRow = { id: FOOTER_KEY, footer: true };
+const isFooter = (row: ThreadRow): row is FooterRow => (row as FooterRow).footer === true;
+
+/** What the footer row shows, handed down by context so `renderItem` stays stable. */
+const FooterContext = createContext<{ content: React.ReactNode; bottom: number }>({
+  content: null,
+  bottom: 0,
+});
+
+function FooterCell() {
+  const { content, bottom } = useContext(FooterContext);
+  return <View style={{ paddingBottom: bottom }}>{content}</View>;
+}
+
+export type ChatThreadRef = FlashListRef<ThreadRow>;
 
 type Props = {
   turns: TurnData[];
@@ -51,11 +114,9 @@ type Props = {
   threadBottom: number;
   /** The agent is mid-turn: show the streaming indicator below the transcript. */
   working: boolean;
-  /**
-   * Tool calls in the current turn. Names the work while `working`, and is
-   * what the receipt below is measured from.
-   */
-  activity: Activity;
+  /** Ignored: the top bar's `Ticker` shows activity now. Kept so harnesses compile. */
+  activity?: unknown;
+  agentColor?: string;
   /** The turn that just ended, shown until the next prompt starts one. */
   receipt?: Receipt;
   /** Insets so the scroll indicator stays inside the unobscured reading area. */
@@ -68,6 +129,12 @@ type Props = {
   onRetry: (text: string) => void;
 };
 
+/** The entrance clock, read only from cells as they first render. */
+const entranceClock = () => Date.now();
+
+/** Long enough to cover DUR.restore; past it a key renders settled. */
+const ENTRANCE_WINDOW_MS = 480;
+
 function ChatThreadView(
   {
     turns,
@@ -76,7 +143,6 @@ function ChatThreadView(
     threadTop,
     threadBottom,
     working,
-    activity,
     receipt,
     indicatorTop,
     indicatorBottom,
@@ -97,17 +163,65 @@ function ChatThreadView(
   const retryKey = retry?.key;
   const retryPrompt = retry?.prompt;
 
+  // Entrance gating: FlashList recycles cells, so a mount is not a new turn.
+  // Each key's entrance is decided once: the first batch the thread sees (a
+  // restore replacing the skeleton) dissolves together; later turns animate
+  // only if newer than the high-water mark; everything else renders settled.
+  const entrance = useRef<{ session: string | undefined; lifetime: EntranceLifetime; seen: Map<string, { kind: DissolveKind | null; at: number }> } | undefined>(undefined);
+  const firstKey = turns[0] ? keyExtractor(turns[0]) : undefined;
+  const session = firstKey?.slice(0, firstKey.lastIndexOf(":"));
+  if (!entrance.current || entrance.current.session !== session) {
+    const restoreBatch = turns.length;
+    const lifetime = createEntranceLifetime(0);
+    const seen = new Map<string, { kind: DissolveKind | null; at: number }>();
+    turns.forEach((turn, i) => {
+      lifetime.settle(i);
+      // `at: -1`: the entrance window starts when the cell first asks (below),
+      // which keeps the clock out of render.
+      seen.set(keyExtractor(turn), { kind: restoreBatch > 0 ? "restore" : null, at: -1 });
+    });
+    entrance.current = { session, lifetime, seen };
+  }
+  const entranceFor = (key: string, index: number): DissolveKind | null => {
+    const state = entrance.current;
+    if (!state) return null;
+    const known = state.seen.get(key);
+    // Within the entrance window only: a recycled cell showing this key later,
+    // or a re-render after it settled, must not replay it.
+    if (known !== undefined) {
+      if (known.at < 0) known.at = entranceClock();
+      return entranceClock() - known.at < ENTRANCE_WINDOW_MS ? known.kind : null;
+    }
+    const kind: DissolveKind | null = state.lifetime.consume(index) ? "row" : null;
+    state.seen.set(key, { kind, at: entranceClock() });
+    return kind;
+  };
+
+  const [win, setWin] = useState<TranscriptWindow | undefined>(undefined);
+  const settledWin = nextWindow(win, session, turns.length);
+  // Persisted after commit so appends see the start this render used.
+  useEffect(() => {
+    if (settledWin !== win) setWin(settledWin);
+  }, [settledWin, win]);
+  const earlierOffset = Math.min(settledWin.start, turns.length);
+  const earlierShown = earlierOffset > 0;
+
   const renderItem = useCallback(
-    ({ item, index }: ListRenderItemInfo<TurnData>) => {
+    ({ item, index }: ListRenderItemInfo<ThreadRow>) => {
+      if (isFooter(item)) return <FooterCell />;
+      if (isEarlier(item)) return <EarlierCell />;
       // An agent turn is committed empty and filled by later chunks. Rendering
       // its cell would reserve the gap below the reply before there is anything
       // in it, which the reader sees as the thread twitching.
       if (isEmptyTurn(item)) return null;
+      const key = keyExtractor(item);
+      // Entrance is decided against the whole conversation, not the window.
+      const kind = entranceFor(key, index - (earlierShown ? 1 : 0) + earlierOffset);
       // Spacing and the side rails live on the cell: cells are positioned
       // individually, so a container `gap` would never apply, and horizontal
       // padding on the scroll content is not part of the list's layout math.
       return (
-        <View style={index === 0 ? styles.firstRow : styles.row}>
+        <Dissolve kind={kind ?? "row"} enabled={kind !== null} dissolveKey={key} style={index === 0 ? styles.firstRow : styles.row}>
           <Turn
             turn={item}
             liveIdentity={activeStream?.turnKey === keyExtractor(item) && item.role === "agent" ? streamIdentityKey(activeStream) : undefined}
@@ -115,10 +229,10 @@ function ChatThreadView(
             retryPrompt={keyExtractor(item) === retryKey ? retryPrompt : undefined}
             onRetry={onRetry}
           />
-        </View>
+        </Dissolve>
       );
     },
-    [onOpenThought, onRetry, retryKey, retryPrompt, activeStream],
+    [onOpenThought, onRetry, retryKey, retryPrompt, activeStream, earlierShown, earlierOffset],
   );
 
   // Mirrored into a ref so the inset effect below can read "is the reader at the
@@ -139,6 +253,7 @@ function ChatThreadView(
   // from the input rather than a second way of hiding the keyboard. It is a
   // no-op when nothing is focused, so an ordinary scroll costs nothing.
   const handleScrollBeginDrag = useCallback(() => {
+    dragged.current = true;
     Keyboard.dismiss();
   }, []);
 
@@ -159,45 +274,77 @@ function ChatThreadView(
     [onAtBottomChange],
   );
 
-  // The reading-area insets are real children, not `contentContainerStyle`.
+  // The reading-area insets are real rows, not `contentContainerStyle`.
   // FlashList v2 measures the scroll content itself, so padding on the content
   // container is not in that measurement: the transcript could be scrolled
-  // under the composer and the last message sat behind it. A header and footer
-  // are laid out like any other row, so the list knows they are there.
-  // The header does two jobs: clearing the floating nav, and — while the
-  // transcript is short — reserving the footer's reading inset as well.
+  // under the composer and the last message sat behind it.
   //
-  // `startRenderingFromBottom` sits a short list against the bottom edge by
-  // giving the *item container* a top margin of `windowSize - contentSize`. The
-  // footer is rendered outside that container, so its height is not in that sum:
-  // with one message the list bottom-aligns the message itself, the footer's
-  // inset hangs off the end of the viewport, and the message ends up under the
-  // composer. That is the state every first prompt is in — it stayed hidden
-  // until the reply arrived and gave the list enough content to scroll.
+  // The top inset is the header. The bottom inset (and the activity line above
+  // it) is the LAST DATA ROW, not `ListFooterComponent`, because of how
+  // `startRenderingFromBottom` bottom-aligns a short thread: it gives the item
+  // container a top margin of `window - container - header`, and a list footer
+  // sits outside that container, so its height is in nobody's sum. The content
+  // was then always `window + footer` tall — a thread that fit the screen could
+  // still be dragged by the footer's height, opening a band of blank canvas
+  // above the first message with the last ones parked behind the composer.
+  // Inside the container the margin accounts for it, a short thread is exactly
+  // one screen tall, and `alwaysBounceVertical={false}` keeps it still.
+  const headerStyle = useMemo(() => ({ height: threadTop }), [threadTop]);
+  // No footer row for an empty thread: an empty list is what shows the restore
+  // skeleton (`ListEmptyComponent`).
   //
-  // Keyed off the turn count rather than a measurement because FlashList
-  // swallows `onLayout` and has no `onContentSizeChange`, so the list's own
-  // height is not observable from here. A first exchange cannot fill a phone
-  // screen, and by the time it might, the extra top pad is scrolled off the top
-  // and costs nothing.
-  const shortTranscript = turns.length <= SHORT_TRANSCRIPT_TURNS;
-  const headerStyle = useMemo(
-    () => ({ height: shortTranscript ? threadTop + threadBottom : threadTop }),
-    [threadTop, threadBottom, shortTranscript],
+  // Only the tail is mounted (`transcriptWindow.ts`); the rest waits behind the
+  // earlier row. Prepending a page is absorbed by `maintainVisibleContentPosition`,
+  // so the reader's place holds while it lands above them.
+  const { visible, earlier } = useMemo(() => windowTurns(turns, settledWin), [turns, settledWin]);
+  const rows = useMemo<ThreadRow[]>(
+    () => (visible.length > 0 ? [...(earlier > 0 ? [EARLIER_ROW] : []), ...visible, FOOTER_ROW] : []),
+    [visible, earlier],
   );
-  const footerStyle = useMemo(() => ({ paddingBottom: threadBottom }), [threadBottom]);
 
-  // Three states of one row, in priority order: the tool the agent is running,
-  // the fallback dots when it is working but has named no tool, and the receipt
-  // for the turn that just ended. An element rather than a component type, so a
-  // changing tool re-renders the same footer instead of remounting it — which
-  // would restart the sheen mid-sweep and lose the crossfade between tools.
-  const footer = useMemo(() => {
-    if (working) return <ActivityLine activity={activity} />;
-    // Never absent: the footer's own style carries the bottom reading inset, and
-    // FlashList only lays that out around a footer that exists.
-    return receipt ? <TurnReceipt receipt={receipt} /> : <SpacerOnly />;
-  }, [activity, receipt, working]);
+  // Whether the reader has dragged this thread themselves. Reaching the top
+  // only pulls in older turns after that: while a long conversation lays out
+  // it passes through the top on its own (before it settles at the bottom),
+  // and treating that as "reached the top" loaded page after page and left
+  // the thread parked mid-way instead of at the latest message.
+  const dragged = useRef(false);
+  useEffect(() => {
+    dragged.current = false;
+  }, [session]);
+  const reachedTop = useCallback(() => {
+    if (dragged.current) revealEarlierRef.current();
+  }, []);
+  const revealEarlierRef = useRef<() => void>(() => undefined);
+
+  const [earlierLit, setEarlierLit] = useState(false);
+  const revealEarlier = useCallback(() => {
+    setWin(loadEarlier(settledWin));
+    if (earlier > 0) {
+      haptics.select();
+      setEarlierLit(true);
+    }
+  }, [earlier, settledWin, setWin]);
+  useEffect(() => {
+    revealEarlierRef.current = revealEarlier;
+  }, [revealEarlier]);
+  useEffect(() => {
+    if (!earlierLit) return;
+    const timer = setTimeout(() => setEarlierLit(false), EARLIER_LIT_MS);
+    return () => clearTimeout(timer);
+  }, [earlierLit]);
+  const earlierValue = useMemo(
+    () => ({ count: earlier, lit: earlierLit, onPress: revealEarlier }),
+    [earlier, earlierLit, revealEarlier],
+  );
+
+  // What the agent is doing lives in the top bar's ticker, never in the thread:
+  // the footer is only the finished turn's LED receipt, or a spacer as tall as
+  // it so the thread does not jump when a turn starts or ends.
+  const footer = useMemo(
+    () => (!working && receipt ? <LedReceipt receipt={receipt} /> : <SpacerOnly />),
+    [receipt, working],
+  );
+  const footerValue = useMemo(() => ({ content: footer, bottom: threadBottom }), [footer, threadBottom]);
 
   // The composer grows when it takes focus, and the dock it lives in is an
   // overlay pinned to the bottom edge — so it expands *upwards*, over the
@@ -233,9 +380,11 @@ function ChatThreadView(
   }, [threadBottom]);
 
   return (
+    <EarlierContext.Provider value={earlierValue}>
+    <FooterContext.Provider value={footerValue}>
     <FlashList
       ref={list}
-      data={turns}
+      data={rows}
       renderItem={renderItem}
       keyExtractor={keyExtractor}
       // A user turn, an agent's markdown, a thought and a system line are four
@@ -252,11 +401,6 @@ function ChatThreadView(
       ListHeaderComponent={restore?.state === "failed" && turns.length > 0 ? <ConversationRestore {...restore} /> : SpacerOnly}
       ListEmptyComponent={restore ? <ConversationRestore {...restore} /> : null}
       ListHeaderComponentStyle={headerStyle}
-      // A footer is always mounted, so the bottom inset survives the agent going
-      // idle and the indicator never changes the transcript's resting position —
-      // every state of it is one body line tall, in the same place.
-      ListFooterComponent={footer}
-      ListFooterComponentStyle={footerStyle}
       // Kept beside the explicit dismiss above as the native backstop: it needs
       // no JS, so a drag during a heavy streaming frame still puts the keyboard
       // away. Whichever fires first wins and the other is a no-op. Never iOS's
@@ -299,7 +443,12 @@ function ChatThreadView(
       scrollIndicatorInsets={{ top: indicatorTop, bottom: indicatorBottom }}
       scrollEventThrottle={16}
       onScroll={handleScroll}
+      // Reaching the top pulls the next page in, same as tapping the row.
+      onStartReached={earlier > 0 ? reachedTop : undefined}
+      onStartReachedThreshold={0.2}
     />
+    </FooterContext.Provider>
+    </EarlierContext.Provider>
   );
 }
 
@@ -309,15 +458,6 @@ function ChatThreadView(
  * two can never disagree about whether you are at the bottom.
  */
 const FOLLOW_THRESHOLD = 0.2;
-
-/**
- * How few turns still counts as a short transcript.
- *
- * Two covers the case that matters: a prompt on its own, and a prompt with its
- * reply. Neither fills a phone screen, and both are bottom-aligned by the list
- * rather than scrolled.
- */
-const SHORT_TRANSCRIPT_TURNS = 2;
 
 const MAINTAIN_POSITION = {
   startRenderingFromBottom: true,
@@ -338,10 +478,10 @@ const MAINTAIN_POSITION = {
 // `key` where the turn has one: an optimistic prompt's `id` is replaced by the
 // server's when the echo lands, and keying on that would recycle the cell out
 // from under a message that never changed.
-const keyExtractor = (turn: TurnData) => turn.key ?? turn.id;
+const keyExtractor = (row: ThreadRow) => (isFooter(row) ? FOOTER_KEY : isEarlier(row) ? EARLIER_KEY : (row.key ?? row.id));
 
 /** One recycling pool per shape of turn. Reasoning at the call site. */
-const getItemType = (turn: TurnData) => turn.role;
+const getItemType = (row: ThreadRow) => (isFooter(row) ? "footer" : isEarlier(row) ? "earlier" : row.role);
 
 /** Carries only a `ListHeaderComponentStyle`/`ListFooterComponentStyle` inset. */
 /**
@@ -367,6 +507,14 @@ const styles = StyleSheet.create({
   row: { paddingTop: theme.space(5), paddingHorizontal: theme.gutter },
   firstRow: { paddingTop: 0, paddingHorizontal: theme.gutter },
   // Same reserved height and top gap as ActivityLine and TurnReceipt.
+  earlier: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.space(3),
+    paddingHorizontal: theme.gutter,
+    paddingBottom: theme.space(1),
+  },
+  earlierRule: { flex: 1 },
   footerSpacer: {
     marginTop: theme.space(5),
   },

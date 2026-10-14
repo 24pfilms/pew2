@@ -21,11 +21,28 @@ interface SessionLike {
 }
 
 /**
- * Available and used first, most recent activity leading; available but never
- * used next, in their original order; unavailable last regardless of history —
- * a chip you cannot open is never worth prime positions.
+ * GG's own agents lead the row, always and in this order, whatever was used
+ * last and even while unavailable — the user's call: they are the home team,
+ * the rest are guests.
+ */
+export const PINNED_PROVIDERS = ["ggcoder", "gg-goals"] as const;
+
+/**
+ * The pinned agents first (see `PINNED_PROVIDERS`), then: available and used,
+ * most recent activity leading; available but never used, in their original
+ * order; unavailable last regardless of history — a chip you cannot open is
+ * never worth prime positions.
  */
 export function orderProvidersByRecency<P extends ProviderLike>(
+  providers: readonly P[],
+  sessions: readonly SessionLike[],
+): P[] {
+  const pinned = PINNED_PROVIDERS.flatMap((id) => providers.filter((p) => p.id === id));
+  const rest = providers.filter((p) => !(PINNED_PROVIDERS as readonly string[]).includes(p.id));
+  return [...pinned, ...orderRest(rest, sessions)];
+}
+
+function orderRest<P extends ProviderLike>(
   providers: readonly P[],
   sessions: readonly SessionLike[],
 ): P[] {

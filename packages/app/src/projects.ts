@@ -147,3 +147,22 @@ export function sessionsInProject<T extends Pick<Session, "cwd" | "folder">>(ses
 export function projectLabel(project: Project | undefined): string {
   return project?.name ?? "All projects";
 }
+
+/** One chip in the drawer's project strip. `path` undefined is "All". */
+export interface ProjectTabItem {
+  path?: string;
+  label: string;
+  a11y: string;
+}
+
+/**
+ * The project strip's data, "All" first. Built once per project list so the
+ * windowed strip gets stable items, and only the chips on screen mount: an
+ * agent with hundreds of projects (GG Coder) mounted every one on switch.
+ */
+export function projectTabItems(projects: readonly Project[]): ProjectTabItem[] {
+  return [
+    { label: "All", a11y: "All projects" },
+    ...projects.map((project) => ({ path: project.path, label: project.name, a11y: `Project ${project.name}` })),
+  ];
+}

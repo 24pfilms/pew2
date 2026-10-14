@@ -20,8 +20,8 @@
  * more than the list of what is on: a rule disabled without a reason is how a
  * config stops being trustworthy.
  *
- * Formatting is deliberately not linted. If that ever matters, it is a
- * formatter's job, not this file's.
+ * Formatting is deliberately not linted: that is Prettier's job
+ * (`npm run format`, `.prettierrc.json`), not this file's.
  */
 import js from "@eslint/js";
 import tseslint from "typescript-eslint";

@@ -22,14 +22,25 @@ import {
   imagesFromToolCall,
   type ChatImage,
 } from "./images";
+import { readGgEvent } from "./ggReview";
+import { asRecord, asString } from "@pew2/protocol";
 
-export type ChunkRole = "user" | "agent" | "thought" | "system";
+/** "note": a neutral marker (plan decisions) — never an error, never a retry target. */
+export type ChunkRole = "user" | "agent" | "thought" | "system" | "ken" | "note";
+
+/** What an Autopilot (Ken) row says about itself, for its tint and round label. */
+export interface KenMeta {
+  phase: string;
+  round?: number;
+}
 
 export interface Chunk {
   role: ChunkRole;
   text: string;
   /** Present only when the chunk actually carried pictures. */
   images?: ChatImage[];
+  /** Only on role "ken". */
+  ken?: KenMeta;
 }
 
 /** True when a chunk has nothing to render — no text and no picture. */
@@ -43,15 +54,20 @@ export function isEmptyTurn(turn: Chunk): boolean {
 }
 
 /** Concatenated text of a content field, which may be a block or an array. */
-function readText(content: any): string {
+function readText(content: unknown): string {
   if (Array.isArray(content)) {
-    return content.map((block) => (block?.type === "text" ? (block.text ?? "") : "")).join("");
+    return content
+      .map((block: unknown) => {
+        const item = asRecord(block);
+        return item?.type === "text" ? (asString(item.text) ?? "") : "";
+      })
+      .join("");
   }
-  return content?.text ?? "";
+  return asString(asRecord(content)?.text) ?? "";
 }
 
 /** A chunk carrying text plus whatever images travelled with it. */
-function withImages(role: ChunkRole, content: any): Chunk {
+function withImages(role: ChunkRole, content: unknown): Chunk {
   const images = dedupeImages(imagesFromContent(content));
   return images.length > 0
     ? { role, text: readText(content), images }
@@ -73,8 +89,9 @@ function isReplayMetadata(text: string): boolean {
   return REPLAY_METADATA_PREFIX.test(normalized) || normalized === COMPACTION_ACK;
 }
 
-export function readChunk(payload: any): Chunk | undefined {
-  const update = payload?.update;
+export function readChunk(raw: unknown): Chunk | undefined {
+  const payload = asRecord(raw);
+  const update = asRecord(payload?.update);
   if (update?.sessionUpdate === "agent_message_chunk") {
     const chunk = withImages("agent", update.content);
     return isReplayMetadata(chunk.text) ? undefined : chunk;
@@ -102,9 +119,13 @@ export function readChunk(payload: any): Chunk | undefined {
     // and on this one after a reconnect — the optimistic turn's own copy is
     // local to the device and does not survive replay.
     const images = dedupeImages(imagesFromAttachments(payload.attachments));
-    return images.length > 0
-      ? { role: "user", text: payload.text ?? "", images }
-      : { role: "user", text: payload.text ?? "" };
+    const text = asString(payload.text) ?? "";
+    return images.length > 0 ? { role: "user", text, images } : { role: "user", text };
+  }
+  const gg = readGgEvent(payload);
+  if (gg) {
+    if (gg.role === "ken" && gg.ken) return { role: "ken", text: gg.text, ken: gg.ken };
+    return { role: gg.role === "note" ? "note" : "system", text: gg.text };
   }
   if (payload?.kind === "exit") {
     // Closing a session kills the child, so a clean or signalled exit is the

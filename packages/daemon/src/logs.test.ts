@@ -150,7 +150,14 @@ test("a reporting callback that throws does not take the daemon with it", async 
     },
   });
   try {
-    await Bun.sleep(40);
+    // Waits for the first rotation rather than a fixed 40ms: a loaded Windows
+    // runner did not fire a 5ms timer inside 40ms, and the test failed on
+    // timing alone. The deadline only bounds a real hang.
+    const deadline = Date.now() + 5_000;
+    while (calls === 0 && Date.now() < deadline) await Bun.sleep(5);
+    // A few more ticks after the throw, so a crash in the rotation loop would
+    // have had the chance to surface.
+    await Bun.sleep(30);
   } finally {
     stop();
   }

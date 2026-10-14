@@ -15,6 +15,7 @@
  * count is what the agent reported, and tokens are shown *only* when the agent
  * sent a usage figure of its own.
  */
+import { asRecord } from "@pew2/protocol";
 import { readChunk } from "./chunks";
 
 /** ACP tool kinds. `other` is the documented default. */
@@ -115,10 +116,10 @@ export function isTimingTurn(state: Activity): boolean {
  * Returns the same object when nothing changed, so the transcript's memoised
  * footer does not re-render on every streamed word of prose.
  */
-export function foldActivity(state: Activity, payload: any, now: number): Activity {
-  const update = payload?.update;
+export function foldActivity(state: Activity, payload: unknown, now: number): Activity {
+  const update = asRecord(asRecord(payload)?.update);
   const kind = update?.sessionUpdate;
-  if (kind !== "tool_call" && kind !== "tool_call_update") {
+  if (!update || (kind !== "tool_call" && kind !== "tool_call_update")) {
     // Read through `readChunk` rather than sniffing the payload, so "the agent
     // is talking" means exactly what the transcript decided to render — a
     // replayed summary marker is filtered there and must not count here either.
@@ -195,11 +196,13 @@ export function foldActivity(state: Activity, payload: any, now: number): Activi
  * escape hatch several agents use. Absent means the receipt simply does not
  * mention tokens — a made-up number would be worse than a missing one.
  */
-function readTokens(payload: any): number | undefined {
-  const meta = payload?.update?._meta ?? payload?._meta ?? payload;
-  const usage = meta?.usage ?? meta?.tokenUsage ?? meta?.tokens;
-  if (typeof usage === "number") return Number.isFinite(usage) ? usage : undefined;
-  if (!usage || typeof usage !== "object") return undefined;
+function readTokens(raw: unknown): number | undefined {
+  const payload = asRecord(raw);
+  const meta = asRecord(asRecord(payload?.update)?._meta ?? payload?._meta ?? payload);
+  const found = meta?.usage ?? meta?.tokenUsage ?? meta?.tokens;
+  if (typeof found === "number") return Number.isFinite(found) ? found : undefined;
+  const usage = asRecord(found);
+  if (!usage) return undefined;
 
   const total = usage.total ?? usage.totalTokens ?? usage.total_tokens;
   if (typeof total === "number") return total;

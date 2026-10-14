@@ -1,0 +1,13 @@
+# Same exclusions as eslint.config.js: nothing generated, vendored or built.
+node_modules
+dist
+build
+packages/app/.expo
+packages/app/ios
+packages/app/android
+bun.lock
+*.d.ts
+# Prose and data are formatted by hand; schemas are synced by hand.
+*.md
+schemas
+providers

@@ -53,6 +53,13 @@ export const haptics = {
   /** Something destructive or refused: unpairing, rejecting a permission. */
   warned: () => fire(() => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning)),
 
+  /** Pew was poked, or something small and alive answered a touch. Softer
+   *  than a tap, so touching a mascot never feels like pressing a button. */
+  poke: () => fire(() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Soft)),
+
+  /** A dial or carousel clicked onto its next detent. */
+  detent: () => fire(() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid)),
+
   /** Something went wrong. */
   failed: () => fire(() => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error)),
 };

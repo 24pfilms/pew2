@@ -11,14 +11,18 @@
  * client, which is the point of the daemon owning the log: a phone and a
  * desktop watching one session both need the update.
  */
-import type { Daemon } from "./index.js";
+import { GG_GOALS_ID, type Daemon } from "./index.js";
 import { humanError } from "./errors.js";
 import { loadImage } from "./images.js";
 import { workspaceStatus } from "./git.js";
 import { resolveWorkspace } from "./workspace.js";
-import { discoverRepos, listDirectory } from "./workspaces.js";
+import { suggestionRoots, discoverRepos, listDirectory } from "./workspaces.js";
 import { wire } from "@pew2/protocol";
 import { pushFinishedTurn } from "./push.js";
+import { storeGoalFiles } from "./goalFiles";
+import { readKnownProjects } from "./known-projects.js";
+
+const NOT_A_GOAL = "Open or create a goal first.";
 
 export interface HandlerContext {
   daemon: Daemon;
@@ -192,6 +196,10 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
         // conversation comes first — it is the authority on where its own
         // session lives, it needs no client to be up to date, and it is right
         // even for an older app that sends no `cwd` at all.
+        if (message.providerId === GG_GOALS_ID && !(message.cwd && daemon.isGoalFolder(message.cwd))) {
+          reply({ t: "error", code: "not_a_goal", message: NOT_A_GOAL });
+          break;
+        }
         const recorded = await daemon.agentSessionCwd(
           message.providerId,
           message.agentSessionId,
@@ -205,81 +213,22 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
             ? await daemon.knownProject(message.providerId, message.cwd)
             : undefined);
         const workspace = named ?? (await daemon.lastWorkspace(message.providerId)) ?? cwd;
-        const pending = daemon.beginResumeSession(
-          message.providerId,
-          message.agentSessionId,
-          workspace,
-        );
-        broadcast({
-          t: "session.started",
-          sessionId: pending.sessionId,
-          providerId: message.providerId,
-          configOptions: [],
-          resumed: true,
-          // Where this conversation lives, resolved here because only this
-          // machine can resolve it. Clients file sessions by project and hide
-          // the ones they cannot place, so a session announced without it is
-          // one the drawer will not show under a selected project.
-          cwd: workspace,
-          // Clients list the agent's copy as a stub; this is what lets them
-          // replace it with the live session instead of showing it twice.
-          agentSessionId: message.agentSessionId,
-        });
-        // History can now stream without racing ahead of session.started.
-        daemon.markStreaming(pending.sessionId);
-        void pending.ready
-          .then(() => {
-            broadcast({
-              t: "session.config",
-              sessionId: pending.sessionId,
-              providerId: message.providerId,
-              configOptions: daemon.configOptions(pending.sessionId),
-            });
-            daemon.finishStreaming(pending.sessionId);
-          })
-          .catch((error) => {
-            broadcast({
-              ...errorMessage("resume_failed", error),
-              sessionId: pending.sessionId,
-            });
-            daemon.finishStreaming(pending.sessionId);
-          });
+        openResumed(ctx, message.providerId, message.agentSessionId, workspace);
         break;
       }
 
       case "session.start": {
+        if (message.providerId === GG_GOALS_ID && !(message.cwd && daemon.isGoalFolder(message.cwd))) {
+          reply({ t: "error", code: "not_a_goal", message: NOT_A_GOAL });
+          break;
+        }
         // The agent's own most recent project when the app named none: a phone
         // has no file picker, and defaulting to the home directory gives the
         // agent no project to work in and no project commands to offer.
         const workspace = message.cwd
           ? await namedProject(daemon, message.providerId, message.cwd)
           : ((await daemon.lastWorkspace(message.providerId)) ?? cwd);
-        const sessionId = await daemon.startSession(message.providerId, workspace);
-        broadcast({
-          t: "session.started",
-          sessionId,
-          providerId: message.providerId,
-          // The project the session was actually started in, which is not
-          // always the one asked for: a request naming no project opens in the
-          // agent's last workspace above. Sending the resolved value means a
-          // client files the row where the work is really happening, and a
-          // second device — which never saw the request — can file it at all.
-          cwd: workspace,
-          // Echoed so a client can tell its own session from one another device
-          // started. Without it, every client adopts every new session.
-          requestId: message.requestId,
-          // Models and thinking levels come from the agent itself, so a newly
-          // connected app brings its own without any mapping here.
-          configOptions: daemon.configOptions(sessionId),
-          // The agent's own id for this conversation. Clients merge the agent's
-          // stored history into the same list, and without this the next probe
-          // lists this very session again as a stub — reopening that copy is
-          // what threw away the model just picked.
-          agentSessionId: daemon.agentSessionId(sessionId),
-        });
-        // Agents can emit updates during `session/new` itself; those were held
-        // back so no event ever precedes the session it belongs to.
-        daemon.markLive(sessionId);
+        await openStarted(ctx, message.providerId, workspace, message.requestId);
         break;
       }
 
@@ -291,43 +240,7 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
         // Deliberately not awaited: a turn can run for minutes, and the client
         // is driven by streamed events rather than this reply.
         const sessionId = message.sessionId;
-        daemon
-          .prompt(sessionId, message.text, attachments)
-          .catch((error) => reply(errorMessage("prompt_failed", error)))
-          // Tell every client the turn is over, so they can stop showing a
-          // working indicator. Broadcast, not reply: other devices watching this
-          // session need it too.
-          //
-          // Carries the project and agent so a client can announce a session it
-          // is not showing — the phone is usually elsewhere by the time a long
-          // turn ends, and only this machine knows the path.
-          .finally(() => {
-            broadcast({
-              t: "session.idle",
-              sessionId,
-              ...daemon.sessionOrigin(sessionId),
-            });
-            // And again, out of band, to phones whose sockets are asleep.
-            //
-            // Sent unconditionally rather than only when no app is attached.
-            // Knowing that would mean trusting the relay's account of who is
-            // connected, and the relay is the one party in this system that is
-            // assumed hostile. It is also unreliable: a backgrounded iOS app
-            // holds a socket that looks alive for a while after its JavaScript
-            // has stopped, so "attached" does not mean "will show a banner".
-            //
-            // Duplicates are handled where the information actually exists —
-            // on the device, which knows whether it is foreground and which
-            // conversation is on screen. That is the same rule the local
-            // banner already applies, so there is one decision, not two.
-            //
-            // Not awaited: a turn is over, and the push service must never be
-            // able to hold a session open or fail it.
-            void pushFinishedTurn(daemon.pushTargets, {
-              sessionId,
-              ...daemon.sessionNotice(sessionId),
-            });
-          });
+        runTurn(ctx, sessionId, daemon.prompt(sessionId, message.text, attachments));
         break;
       }
 
@@ -451,7 +364,11 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
         if (!message.path) {
           // Opening view: the good guesses. Walking down from home on a
           // touchscreen is the thing this exists to avoid.
-          const suggestions = await discoverRepos();
+          // Only the folders the user has added (GG Coder's list and pew2's own),
+          // so opening this never reaches into folders macOS guards.
+          const suggestions = await discoverRepos({
+            roots: await suggestionRoots(await readKnownProjects()),
+          });
           // Recorded so that choosing one is recognised. A browsed directory has
           // no sessions yet, so it is not a "known project", and without this the
           // composer would name the agent's previous project while working in
@@ -466,13 +383,14 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
           break;
         }
 
-        const listing = await listDirectory(message.path);
+        const listing = await listDirectory(message.path, { files: message.files === true });
         if (listing) {
           // The listed directory itself is offerable too: it is where "start
-          // here" acts once the user has navigated into it.
+          // here" acts once the user has navigated into it. Files never are:
+          // they are goal context, not somewhere to work.
           daemon.rememberOfferedWorkspaces([
             listing.path,
-            ...listing.entries.map((entry) => entry.path),
+            ...listing.entries.filter((entry) => entry.kind !== "file").map((entry) => entry.path),
           ]);
         }
         reply({
@@ -491,6 +409,107 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
         break;
       }
 
+      case "session.queue.cancel": {
+        // The resulting `session.queue` broadcast is the answer.
+        await daemon.cancelQueued(message.sessionId, message.id);
+        break;
+      }
+
+      case "session.ask": {
+        daemon.answerAsk(message.sessionId, message.requestId, message.result);
+        break;
+      }
+
+      case "plan.decide": {
+        if (daemon.sessionProvider(message.sessionId) === GG_GOALS_ID) {
+          reply({ t: "error", code: "unsupported", message: "Plans are for GG Coder conversations." });
+          break;
+        }
+        // A turn on the normal prompt path, so busy/idle/queue rules hold.
+        const { sessionId, action, feedback, generation } = message;
+        runTurn(
+          ctx,
+          sessionId,
+          daemon.prompt(sessionId, "", [], {
+            planDecision: { action, generation, ...(feedback !== undefined ? { feedback } : {}) },
+          }),
+        );
+        break;
+      }
+
+      case "autopilot.set": {
+        // The agent's `_gg/autopilot_state` broadcast is the answer.
+        await daemon.setAutopilot(message.sessionId, message.enabled);
+        break;
+      }
+
+      case "checklist": {
+        try {
+          const result = await daemon.checklist(message.sessionId);
+          reply({ t: "checklist", requestId: message.requestId, sessionId: message.sessionId, ...result });
+        } catch (error) {
+          reply({
+            t: "checklist",
+            requestId: message.requestId,
+            sessionId: message.sessionId,
+            error: humanError(error),
+          });
+        }
+        break;
+      }
+
+      case "goals": {
+        // A missing or too-old GG Coder is an answer, not a failure.
+        try {
+          reply({ t: "goals", requestId: message.requestId, goals: await daemon.listGoals() });
+        } catch (error) {
+          reply({ t: "goals", requestId: message.requestId, goals: [], error: humanError(error) });
+        }
+        break;
+      }
+
+      case "goal.create": {
+        try {
+          // Files picked on the phone become files on this computer first,
+          // and join the context by path like anything chosen here.
+          const filePaths = await storeGoalFiles(message.files ?? []);
+          const goal = await daemon.createGoal({
+            name: message.name,
+            goal: message.goal,
+            context: [...message.context, ...filePaths],
+            instructions: message.instructions,
+          });
+          reply({ t: "goal.result", requestId: message.requestId, ok: true, goal, files: filePaths.length });
+          await broadcastGoals(ctx);
+        } catch (error) {
+          reply({ t: "goal.result", requestId: message.requestId, ok: false, error: humanError(error) });
+        }
+        break;
+      }
+
+      case "goal.action": {
+        try {
+          const goal =
+            message.action === "resume"
+              ? await resumeGoal(ctx, message.goalId)
+              : await daemon.goalAction(message.goalId, message.action, {
+                  context: message.context,
+                  instructions: message.instructions,
+                  model: message.model,
+                });
+          reply({
+            t: "goal.result",
+            requestId: message.requestId,
+            ok: true,
+            ...(goal ? { goal } : {}),
+          });
+          await broadcastGoals(ctx);
+        } catch (error) {
+          reply({ t: "goal.result", requestId: message.requestId, ok: false, error: humanError(error) });
+        }
+        break;
+      }
+
       default:
         // Reached only by a sealed envelope, which is a transport concern and has
         // already been opened long before anything arrives here. A type this
@@ -503,4 +522,175 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
   } catch (error) {
     reply(errorMessage("command_failed", error));
   }
+}
+
+/**
+ * Run a turn (and whatever is queued behind it) and announce when the session
+ * is idle again. A message that was only queued announces nothing: the turn it
+ * is waiting on will.
+ */
+function runTurn(ctx: HandlerContext, sessionId: string, turn: Promise<unknown>) {
+  const { daemon, reply, broadcast } = ctx;
+  const idle = () => {
+    // Tell every client the turn is over, so they can stop showing a working
+    // indicator. Broadcast, not reply: other devices watching this session
+    // need it too. Carries the project and agent so a client can announce a
+    // session it is not showing.
+    broadcast({ t: "session.idle", sessionId, ...daemon.sessionOrigin(sessionId) });
+    // And again, out of band, to phones whose sockets are asleep. Sent
+    // unconditionally: whether an app is really watching is only knowable on
+    // the device, which applies the same rule to its local banner. Not
+    // awaited, so the push service can never hold a session open or fail it.
+    void pushFinishedTurn(daemon.pushTargets, {
+      sessionId,
+      ...daemon.sessionNotice(sessionId),
+    });
+  };
+  // Deliberately not awaited by the caller: a turn can run for minutes, and the
+  // client is driven by streamed events rather than this reply.
+  turn.then(
+    (outcome) => {
+      if (outcome !== "queued") idle();
+    },
+    (error) => {
+      reply(errorMessage("prompt_failed", error));
+      idle();
+    },
+  );
+}
+
+/**
+ * Start GG Goals' kickoff turn on a session that just opened on a goal still
+ * needing one. No user message is logged for it: nobody typed anything.
+ */
+function kickoffIfNeeded(ctx: HandlerContext, sessionId: string): boolean {
+  if (!ctx.daemon.claimKickoff(sessionId)) return false;
+  runTurn(ctx, sessionId, ctx.daemon.prompt(sessionId, "", [], { goalTurn: "kickoff" }));
+  return true;
+}
+
+/** Open a new session and introduce it to every client. */
+async function openStarted(
+  ctx: HandlerContext,
+  providerId: string,
+  workspace: string,
+  requestId?: string,
+): Promise<{ sessionId: string; kickedOff: boolean }> {
+  const { daemon, broadcast } = ctx;
+  const sessionId = await daemon.startSession(providerId, workspace);
+  broadcast({
+    t: "session.started",
+    sessionId,
+    providerId,
+    // The project the session was actually started in, which is not
+    // always the one asked for: a request naming no project opens in the
+    // agent's last workspace above. Sending the resolved value means a
+    // client files the row where the work is really happening, and a
+    // second device — which never saw the request — can file it at all.
+    cwd: workspace,
+    // Echoed so a client can tell its own session from one another device
+    // started. Without it, every client adopts every new session.
+    requestId,
+    // Models and thinking levels come from the agent itself, so a newly
+    // connected app brings its own without any mapping here.
+    configOptions: daemon.configOptions(sessionId),
+    // The agent's own id for this conversation. Clients merge the agent's
+    // stored history into the same list, and without this the next probe
+    // lists this very session again as a stub — reopening that copy is
+    // what threw away the model just picked.
+    agentSessionId: daemon.agentSessionId(sessionId),
+  });
+  // Agents can emit updates during `session/new` itself; those were held
+  // back so no event ever precedes the session it belongs to.
+  daemon.markLive(sessionId);
+  return { sessionId, kickedOff: kickoffIfNeeded(ctx, sessionId) };
+}
+
+/**
+ * Reopen one of the agent's stored conversations: announce at once, stream
+ * the history, and settle once the agent is attached.
+ */
+function openResumed(
+  ctx: HandlerContext,
+  providerId: string,
+  agentSessionId: string,
+  workspace: string,
+): { sessionId: string; ready: Promise<boolean> } {
+  const { daemon, broadcast } = ctx;
+  const message = { providerId, agentSessionId };
+  const pending = daemon.beginResumeSession(providerId, agentSessionId, workspace);
+  broadcast({
+    t: "session.started",
+    sessionId: pending.sessionId,
+    providerId: message.providerId,
+    configOptions: [],
+    resumed: true,
+    // Where this conversation lives, resolved here because only this
+    // machine can resolve it. Clients file sessions by project and hide
+    // the ones they cannot place, so a session announced without it is
+    // one the drawer will not show under a selected project.
+    cwd: workspace,
+    // Clients list the agent's copy as a stub; this is what lets them
+    // replace it with the live session instead of showing it twice.
+    agentSessionId: message.agentSessionId,
+  });
+  // History can now stream without racing ahead of session.started.
+  daemon.markStreaming(pending.sessionId);
+  // Resolves whether a kickoff turn was started; never rejects (the failure
+  // is broadcast as `resume_failed`).
+  const opened = pending.ready.then(
+    () => {
+      broadcast({
+        t: "session.config",
+        sessionId: pending.sessionId,
+        providerId: message.providerId,
+        configOptions: daemon.configOptions(pending.sessionId),
+      });
+      daemon.finishStreaming(pending.sessionId);
+      // After the history and selectors, so the kickoff's output follows them.
+      return kickoffIfNeeded(ctx, pending.sessionId);
+    },
+    (error: unknown) => {
+      broadcast({
+        ...errorMessage("resume_failed", error),
+        sessionId: pending.sessionId,
+      });
+      daemon.finishStreaming(pending.sessionId);
+      return false;
+    },
+  );
+  return { sessionId: pending.sessionId, ready: opened };
+}
+
+/** Every client's goal list moves after a change. Best effort. */
+async function broadcastGoals(ctx: HandlerContext) {
+  try {
+    ctx.broadcast({ t: "goals", goals: await ctx.daemon.listGoals() });
+  } catch {
+    // The reply already said what happened; a failed refresh changes nothing.
+  }
+}
+
+/**
+ * `resume` on a goal: lift the pause and carry on, as a `goalTurn: "resume"`
+ * turn on the goal's open session — opening one first through the ordinary
+ * start/resume flows when none is.
+ */
+async function resumeGoal(ctx: HandlerContext, goalId: string): Promise<wire.GoalSummary> {
+  const { daemon } = ctx;
+  const goal = await daemon.findGoal(goalId);
+  let sessionId = goal.sessionId;
+  if (!sessionId) {
+    // The folder is a known project: listing the goal published it.
+    const opened = goal.agentSessionId
+      ? openResumed(ctx, GG_GOALS_ID, goal.agentSessionId, goal.path)
+      : await openStarted(ctx, GG_GOALS_ID, goal.path);
+    const kickedOff = "ready" in opened ? await opened.ready : opened.kickedOff;
+    sessionId = opened.sessionId;
+    // Its kickoff turn is already carrying it on.
+    if (kickedOff) return daemon.findGoal(goalId);
+    if (!daemon.sessionCwd(sessionId)) throw new Error("Could not open the goal.");
+  }
+  runTurn(ctx, sessionId, daemon.prompt(sessionId, "", [], { goalTurn: "resume" }));
+  return daemon.findGoal(goalId);
 }

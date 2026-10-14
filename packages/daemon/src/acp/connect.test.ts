@@ -27,6 +27,7 @@ import {
   withTimeout,
 } from "./connect.js";
 import type { LoadedProvider } from "../providers/registry.js";
+import { fileURLToPath } from "node:url";
 
 test("a promise that never settles is rejected with the caller's error", async () => {
   const never = new Promise<string>(() => {});
@@ -127,7 +128,7 @@ const echoProvider: LoadedProvider = {
   manifest: { id: "echo", name: "echo" } as LoadedProvider["manifest"],
   source: "<test>",
   command: "bun",
-  args: ["run", new URL("../testing/echo-agent.ts", import.meta.url).pathname],
+  args: ["run", fileURLToPath(new URL("../testing/echo-agent.ts", import.meta.url))],
   missingEnv: [],
   commandMissing: false,
 };

@@ -3,6 +3,10 @@ import { registryView } from "./registry-view.js";
 import { stripAnsi, styler, glyphs } from "./ui.js";
 import type { SyncResult } from "./registry-sync.js";
 
+/** A line is on the layout if it is a section mark, a closing square, or hangs under one. */
+const onLayout = (line: string): boolean => /^(■|░|▓|▒|\s{2})/.test(line);
+
+
 const plain = { style: styler(0), glyph: glyphs(true), columns: 80 };
 
 function result(over: Partial<SyncResult> = {}): SyncResult {
@@ -87,5 +91,5 @@ test("every line stays on the rail", () => {
     .map(stripAnsi)
     .filter((l) => l !== "");
 
-  expect(lines.every((l) => /^[│◇◆└]/.test(l))).toBe(true);
+  expect(lines.every(onLayout)).toBe(true);
 });

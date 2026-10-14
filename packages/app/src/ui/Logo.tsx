@@ -50,7 +50,8 @@ export function Logo({ size = 72 }: LogoProps) {
 }
 
 const styles = StyleSheet.create({
-  root: { alignItems: "center", gap: theme.space(5) },
+  root: { alignItems: "center", gap: theme.space(2) },
+  mark: { marginVertical: -theme.space(4) },
   word: {
     color: theme.color.text,
     // The wordmark is the purest expression of the display face, so it uses the

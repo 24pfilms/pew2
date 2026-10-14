@@ -12,9 +12,9 @@
 # shell is a real trust ask, and the only honest answer is a script you can read
 # in a minute.
 #
-# The layout is the same vertical rail `pew2 setup` uses, so the two read as one
-# product rather than two tools that happen to ship together. Every line hangs
-# off the rail at the same column; nothing is indented by eye.
+# The layout is the same look `pew2 setup` and `pew2 doctor` use (style B): a
+# dot-matrix mark opens each section, its title is set in spaced capitals, and
+# the lines under it hang two spaces in. Every line is at the same indent.
 
 set -eu
 
@@ -28,28 +28,32 @@ INSTALL_DIR="${PEW2_INSTALL_DIR:-$HOME/.local/bin}"
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
   B=$(printf '\033[1m'); D=$(printf '\033[2m'); R=$(printf '\033[0m')
   ACCENT=$(printf '\033[38;5;209m'); GREEN=$(printf '\033[32m'); RED=$(printf '\033[31m')
-  BAR="│"; OPEN="◆"; STEP="◇"; END="└"; TICK="✓"; CROSS="✗"
+  # The Stage marks: ■ opens and closes, ░ opens a section, ▓ is done, ■ red is a stop.
+  OPEN="■"; STEP="░"; OK="▓"; CROSS="■"; END="■"
 else
   B=''; D=''; R=''; ACCENT=''; GREEN=''; RED=''
-  BAR="|"; OPEN="*"; STEP="o"; END="\`"; TICK="+"; CROSS="x"
+  OPEN="*"; STEP="o"; OK="+"; CROSS="x"; END="\`"
 fi
 
 # One prefix for every line, so alignment is structural rather than counted out
 # by hand. This is what the old version got wrong: text landed at column 2 or 4
 # depending on whether it had a glyph in front of it.
-bar()  { printf '%s%s%s\n' "$D" "$BAR" "$R"; }
-line() { printf '%s%s%s  %s\n' "$D" "$BAR" "$R" "$1"; }
-step() { bar; printf '%s%s%s  %s%s%s\n' "$ACCENT" "$STEP" "$R" "$B" "$1" "$R"; }
+# A line under the current section, hung two spaces in.
+line() { printf '  %s\n' "$1"; }
+# A finished check, marked ▓ in green.
+ok() { printf '  %s%s%s  %s\n' "$GREEN" "$OK" "$R" "$1"; }
+# A section opening: a blank line, the step mark, and its title in bold.
+step() { printf '\n%s%s%s  %s%s%s\n' "$ACCENT" "$STEP" "$R" "$B" "$1" "$R"; }
 die() {
-  bar
-  printf '%s%s%s  %s%s%s\n' "$RED" "$CROSS" "$R" "$B" "$1" "$R" >&2
+  printf '\n%s%s%s  %s%s%s\n' "$RED" "$CROSS" "$R" "$B" "$1" "$R" >&2
   [ $# -gt 1 ] && printf '   %s%s%s\n' "$D" "$2" "$R" >&2
   printf '\n' >&2
   exit 1
 }
 
-printf '\n%s%s%s  %spew2%s\n' "$ACCENT" "$OPEN" "$R" "$B" "$R"
-line "${D}your coding agents, on your phone${R}"
+# The title, set the way the CLI sets its own: letters spaced, in capitals.
+printf '\n%s%s%s  %sP E W 2%s\n' "$ACCENT" "$OPEN" "$R" "$B" "$R"
+printf '   %sYOUR CODING AGENTS, ON YOUR PHONE%s\n' "$D" "$R"
 
 # --- which build ------------------------------------------------------------
 
@@ -74,7 +78,6 @@ url="https://github.com/${REPO}/releases/latest/download/${asset}"
 # --- download ---------------------------------------------------------------
 
 step "Downloading  ${D}${os_name} ${arch_name}${R}"
-bar
 
 tmp=$(mktemp -d)
 # Cleans up on failure too, so a half-downloaded binary is never left behind.
@@ -101,8 +104,6 @@ fi
 # later in a way that looks like a bug in pew2 rather than a bad transfer.
 [ -s "$tmp/pew2" ] || die "The download came out empty." "Try again."
 
-bar
-
 # --- verify -----------------------------------------------------------------
 
 # Required, not best effort. Every release publishes a `.sha256` beside its
@@ -126,7 +127,7 @@ fi
 # machine that installs an unverified binary is worse.
 [ -n "$actual" ] || die "No way to check this download's checksum here." "Install coreutils, perl or openssl and run this again."
 [ "$actual" = "$expected" ] || die "That download does not match its checksum." "Not installing it. Try again, and report it if it keeps happening."
-line "${GREEN}${TICK}${R} Checksum verified"
+ok "Checksum verified"
 
 # --- install ----------------------------------------------------------------
 
@@ -135,7 +136,7 @@ chmod +x "$tmp/pew2"
 mv "$tmp/pew2" "$INSTALL_DIR/pew2" \
   || die "Could not write to $INSTALL_DIR." "Set PEW2_INSTALL_DIR to somewhere you can write."
 
-line "${GREEN}${TICK}${R} Installed to ${D}${INSTALL_DIR}/pew2${R}"
+ok "Installed to ${D}${INSTALL_DIR}/pew2${R}"
 
 # macOS quarantines anything downloaded, and the first run dies with a Gatekeeper
 # dialog that says nothing useful. Stripping the flag turns that into a working
@@ -160,7 +161,7 @@ if [ -f "$HOME/Library/LaunchAgents/dev.pew2.daemon.plist" ]; then
   # Failure here is not fatal: the binary is installed and correct either way,
   # and `pew2 setup` reports an unreachable daemon with the command to fix it.
   if "$INSTALL_DIR/pew2" service restart >/dev/null 2>&1; then
-    line "${GREEN}${TICK}${R} Daemon restarted on the new version"
+    ok "Daemon restarted on the new version"
   else
     line "${D}Run ${B}pew2 service restart${R}${D} to finish updating the daemon.${R}"
   fi
@@ -181,7 +182,6 @@ if [ "$on_path" = "0" ]; then
     *)      hint="add $INSTALL_DIR to your PATH" ;;
   esac
   step "One thing first"
-  bar
   line "${INSTALL_DIR} is not on your PATH yet. Paste this:"
   line ""
   line "${B}${hint}${R}"
@@ -191,6 +191,5 @@ fi
 
 # --- done -------------------------------------------------------------------
 
-bar
-printf '%s%s%s  %sRun %spew2 setup%s to finish.%s\n\n' \
+printf '\n%s%s%s  %sRun %spew2 setup%s to finish.%s\n\n' \
   "$ACCENT" "$END" "$R" "$D" "$B" "$R$D" "$R"

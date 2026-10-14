@@ -8,11 +8,16 @@
  * That includes touch feedback: because every button routes through here, a tap
  * feels the same app-wide without a single call site opting in.
  */
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Pressable, StyleSheet, Text, View, type ViewStyle } from "react-native";
 import { theme } from "../theme";
+import Animated, { useAnimatedStyle, useReducedMotion, useSharedValue, withSpring } from "react-native-reanimated";
 import { Glass } from "./Glass";
+import { useAgentColor } from "./stage/agentColor";
+import { GlyphLitContext } from "./stage/DotGlyph";
+import { DotGrid } from "./stage/DotGrid";
 import { haptics } from "./haptics";
+import { SPRING } from "../motion";
 
 /**
  * Wrap a press handler so it pulses first.
@@ -45,7 +50,13 @@ interface CircleButtonProps {
   feel?: () => void;
 }
 
-/** Round icon button: menu, send, composer actions. */
+/**
+ * Round icon button: menu, send, composer actions.
+ *
+ * Stage-styled: a near-black dotted well inside a dashed ring. Under the
+ * finger the ring turns solid in the agent colour, a DotGlyph child lights up
+ * (via `GlyphLitContext`), and the button springs down a touch.
+ */
 export function CircleButton({
   onPress,
   label,
@@ -57,49 +68,47 @@ export function CircleButton({
   feel,
 }: CircleButtonProps) {
   const press = withHaptic(onPress, feel);
+  const agent = useAgentColor();
+  const reduceMotion = useReducedMotion();
+  const [pressed, setPressed] = useState(false);
+  const scale = useSharedValue(1);
+  const scaleStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+  const active = pressed && !disabled;
 
-  // A solid tint opts out of glass: used where a control must read as filled.
-  if (tint) {
-    return (
-      <Pressable
-        onPress={press}
-        disabled={disabled}
-        accessibilityRole="button"
-        accessibilityLabel={label}
-        accessibilityState={{ disabled }}
-        hitSlop={touchSlop(size)}
-        style={({ pressed }) => [
-          styles.circle,
-          { width: size, height: size, borderRadius: size / 2, backgroundColor: tint },
-          pressed && !disabled && styles.pressed,
-          disabled && styles.disabled,
-          style,
-        ]}
-      >
-        {children}
-      </Pressable>
-    );
-  }
+  const setDown = (down: boolean) => {
+    setPressed(down);
+    if (reduceMotion) return;
+    scale.value = withSpring(down ? 0.94 : 1, SPRING.press);
+  };
 
   return (
-    <Glass radius={size / 2} interactive style={[{ width: size, height: size }, style]}>
+    <Animated.View style={[{ width: size, height: size }, scaleStyle, style]}>
       <Pressable
         onPress={press}
+        onPressIn={() => setDown(true)}
+        onPressOut={() => setDown(false)}
         disabled={disabled}
         accessibilityRole="button"
         accessibilityLabel={label}
         accessibilityState={{ disabled }}
         hitSlop={touchSlop(size)}
-        style={({ pressed }) => [
+        style={[
           styles.circle,
-          { width: size, height: size },
-          pressed && !disabled && styles.pressedOverlay,
+          styles.stageCircle,
+          {
+            width: size,
+            height: size,
+            borderRadius: size / 2,
+            backgroundColor: tint ?? theme.stage.strip,
+          },
+          active && { borderStyle: "solid", borderColor: agent },
           disabled && styles.disabled,
         ]}
       >
-        {children}
+        {tint ? null : <DotGrid fine />}
+        <GlyphLitContext.Provider value={active ? agent : null}>{children}</GlyphLitContext.Provider>
       </Pressable>
-    </Glass>
+    </Animated.View>
   );
 }
 
@@ -153,6 +162,14 @@ export function Caption({ children }: { children: ReactNode }) {
 
 const styles = StyleSheet.create({
   circle: { alignItems: "center", justifyContent: "center" },
+  // One dashed ring all the way round: iOS only dashes a border when all four
+  // sides share it, which a full circle does.
+  stageCircle: {
+    overflow: "hidden",
+    borderWidth: StyleSheet.hairlineWidth > 0.5 ? StyleSheet.hairlineWidth : 1,
+    borderStyle: "dashed",
+    borderColor: theme.stage.dash,
+  },
   // A pill in a crowded row must be able to give up width, and every layer down
   // to the label needs to say so — one rigid ancestor and the text below it can
   // never truncate, so the pill overflows the row instead.

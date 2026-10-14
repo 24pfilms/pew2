@@ -14,6 +14,9 @@ dist/
 # at the repo root, and one has already been left behind once; the suffix makes
 # that impossible rather than something to remember.
 *.tmp.ts
+# Python's bytecode cache, left beside the asset scripts (make-icon.py,
+# make-sounds.py) every time they run.
+__pycache__/
 
 # Code-signing material, listed before anyone has any.
 #

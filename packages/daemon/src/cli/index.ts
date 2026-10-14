@@ -61,6 +61,7 @@ import { PALETTE, colorLevel, glyphs, statusLine, styler, unicodeOk } from "./ui
 // Imported rather than read from disk: this file ends up inside a compiled
 // binary, where there is no package.json next to it to read.
 import pkg from "../../package.json" with { type: "json" };
+import { helpView } from "./help-view.js";
 
 /** The version this build was cut from, for `pew2 --version`. */
 const VERSION = (pkg as { version: string }).version;
@@ -235,9 +236,7 @@ async function cmdValidate() {
     return 1;
   }
 
-  for (const line of r.outro(
-    `${style.hex(PALETTE.success, glyph.tick)} ${style.bold(`${plural(providers.length, "manifest")} valid.`)}`,
-  )) {
+  for (const line of r.outro(style.bold(`${plural(providers.length, "manifest")} valid.`), "ok")) {
     console.log(line);
   }
   return 0;
@@ -749,24 +748,7 @@ async function main() {
   if (group === "registry") return cmdRegistry(command, flags);
 
   if (group !== "providers") {
-    console.log(`${BOLD}pew2${RESET}\n`);
-    console.log("  pew2 setup [--json]              Detect, verify and diagnose in one call");
-    console.log("  pew2 pair [--rotate]           Show the QR a phone scans, then confirm it connected");
-    console.log("    --no-wait                      Print the code and exit instead of waiting");
-    console.log("  pew2 relay <url|off>             Reach this machine from anywhere");
-    console.log("  pew2 service install|restart     Keep the daemon running across reboots");
-    console.log("  pew2 serve                       Run the daemon in this terminal");
-    console.log("  pew2 doctor [--json]             What is wrong, and the command that fixes it");
-    console.log("  pew2 detect [--json]             Find installed agents and configure them");
-    console.log("  pew2 registry sync               Add every agent in the public ACP registry");
-    console.log("    --dry-run --force --json       Preview / overwrite edited files / machine output");
-    console.log("  pew2 providers list              List installed providers");
-    console.log("  pew2 providers validate          Validate every manifest");
-    console.log("  pew2 --version                   Which build this is");
-    console.log("  pew2 providers add <id>          Scaffold a new manifest");
-    console.log("  pew2 providers verify [id]       Spawn a provider and prove it speaks ACP");
-    console.log("  pew2 providers disable <id>      Hide an agent from the phone");
-    console.log("  pew2 providers enable <id>       Show it again");
+    console.log(helpView().join("\n"));
     return group ? 1 : 0;
   }
 

@@ -11,8 +11,8 @@
 import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, realpath, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, parse } from "node:path";
-import { browsableRoots, discoverRepos, listDirectory, resolveBrowsePath } from "./workspaces.js";
+import { basename, dirname, join, parse, resolve } from "node:path";
+import { browsableRoots, discoverRepos, listDirectory, resolveBrowsePath, suggestionRoots } from "./workspaces.js";
 
 /**
  * A home directory with a few projects in it.
@@ -243,4 +243,55 @@ test("browsing a drive root lists that root, not the daemon's working directory"
   const listing = await listDirectory(root, { roots: [root] });
   expect(listing?.path).toBe(root);
   expect(listing?.entries.every((entry) => dirname(entry.path) === root)).toBe(true);
+});
+
+test("asked for files, browsing lists them after folders, capped, and never dotfiles", async () => {
+  const { home, roots } = await fixture();
+  await writeFile(join(home, "code/README.md"), "# x");
+  await writeFile(join(home, "code/.env"), "SECRET=1");
+  await writeFile(join(home, "code/a.txt"), "a");
+
+  const listing = await listDirectory(join(home, "code"), { roots, home, files: true });
+  const rows = listing!.entries.map((entry) => [entry.name, entry.kind ?? "folder"]);
+  expect(rows).toEqual([
+    ["api", "folder"],
+    ["notes", "folder"],
+    ["web", "folder"],
+    ["a.txt", "file"],
+    ["README.md", "file"],
+  ]);
+
+  // Same confinement as folders: a file outside the roots is refused.
+  expect(await listDirectory("/etc", { roots, home, files: true })).toBeUndefined();
+});
+
+test("goal rows from GG Coder keep their instructions through the daemon's reader", async () => {
+  const { Daemon } = await import("./index.js");
+  const read = (Daemon as unknown as { readGoal: (v: unknown) => { instructions?: string } | undefined }).readGoal;
+  const row = { id: "g", name: "n", goal: "x", context: [], path: "/g", createdAt: "t", lastActiveMs: 1, status: "idle" };
+  expect(read({ ...row, instructions: "be brief" })?.instructions).toBe("be brief");
+  expect(read(row)?.instructions).toBeUndefined();
+});
+
+test("suggestions come only from the folders the user added, never the whole home", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "suggest-"));
+  const mine = join(dir, "mine");
+  const other = join(dir, "other");
+  await mkdir(mine);
+  await mkdir(other);
+  // GG Coder's list holds credentials as well; only the path may be read.
+  const ggFile = join(dir, "projects.json");
+  await writeFile(
+    ggFile,
+    JSON.stringify({ a: { name: "mine", path: mine, secret: "sk_live_SHOULD_NOT_LEAK" }, gone: { path: join(dir, "deleted") } }),
+  );
+  const roots = await suggestionRoots([other, mine], ggFile);
+  expect(roots).toEqual([resolve(other), resolve(mine)]);
+  expect(roots.join(" ")).not.toContain("sk_live");
+});
+
+test("with no GG Coder list, pew2's own folders are the whole answer", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "suggest-none-"));
+  await mkdir(join(dir, "one"));
+  expect(await suggestionRoots([join(dir, "one")], join(dir, "missing.json"))).toEqual([resolve(join(dir, "one"))]);
 });
