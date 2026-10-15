@@ -287,3 +287,80 @@ test("with the env var unset, a view request says the dashboard is off", async (
   });
   expect(out).toEqual([{ t: "dash", requestId: "r1", error: DASH_ERRORS.disabled }]);
 });
+
+const taskReply = { task: { id: 7, title: "Buy milk", priority: "medium", status: "pending", secret: "stripped" } };
+
+test("an add writes only the constant method, the title and the clientId", async () => {
+  const orca = await fakeOrca((req, socket) => send(socket, answer(req.requestId, taskReply)));
+  const result = await quiet(orca.path).changeTask({ action: "add", title: "Buy milk", clientId: "c1" });
+  expect(result).toEqual({ ok: true, value: { id: 7, title: "Buy milk", priority: "medium", status: "pending" } });
+  const written = JSON.parse(orca.lines[0] ?? "");
+  expect(Object.keys(written).sort()).toEqual(["clientId", "requestId", "title", "type"]);
+  expect(written.type).toBe("phone.task.add");
+});
+
+test("a complete writes only the method and the id", async () => {
+  const orca = await fakeOrca((req, socket) => send(socket, answer(req.requestId, taskReply)));
+  await quiet(orca.path).changeTask({ action: "complete", id: 7 });
+  const written = JSON.parse(orca.lines[0] ?? "");
+  expect(Object.keys(written).sort()).toEqual(["id", "requestId", "type"]);
+  expect(written).toMatchObject({ type: "phone.task.complete", id: 7 });
+});
+
+test("writes are never cached or coalesced", async () => {
+  const orca = await fakeOrca((req, socket) => send(socket, answer(req.requestId, taskReply)));
+  const dash = quiet(orca.path);
+  await Promise.all([dash.changeTask({ action: "complete", id: 7 }), dash.changeTask({ action: "complete", id: 7 })]);
+  await dash.changeTask({ action: "complete", id: 7 });
+  expect(orca.lines).toHaveLength(3);
+});
+
+test("write refusals say what changed for a write, and a busy Orca is not retried", async () => {
+  const off = await fakeOrca((req, socket) => send(socket, refusal(req.requestId, "TOOL_PERMISSION_DENIED")));
+  expect(await quiet(off.path).changeTask({ action: "complete", id: 1 })).toEqual({ ok: false, error: DASH_ERRORS.writesOff });
+  const gone = await fakeOrca((req, socket) => send(socket, refusal(req.requestId, "DATA_NOT_FOUND")));
+  expect(await quiet(gone.path).changeTask({ action: "complete", id: 1 })).toEqual({ ok: false, error: DASH_ERRORS.taskMissing });
+  const busy = await fakeOrca((req, socket) => send(socket, refusal(req.requestId, "DATA_VALIDATION", true)));
+  expect(await quiet(busy.path).changeTask({ action: "add", title: "x", clientId: "c" })).toEqual({ ok: false, error: DASH_ERRORS.busy });
+  expect(busy.lines).toHaveLength(1);
+});
+
+test("a write reply that is not a task is unreadable", async () => {
+  const orca = await fakeOrca((req, socket) => send(socket, answer(req.requestId, { task: { id: "x" } })));
+  expect(await quiet(orca.path).changeTask({ action: "complete", id: 1 })).toEqual({ ok: false, error: DASH_ERRORS.unreadable });
+});
+
+test("a dash frame with a task reaches Orca; a bad one is dropped by the schema before the pipe", async () => {
+  const daemon = new Daemon({ id: "t", name: "t" }, false, { PEW2_ORCA_DASHBOARD: "1" });
+  const orca = await fakeOrca((req, socket) => send(socket, answer(req.requestId, taskReply)));
+  Object.assign(daemon, { dashboard: quiet(orca.path) });
+  const out: Record<string, unknown>[] = [];
+  const run = (frame: unknown) =>
+    handleMessage(JSON.stringify(frame), { daemon, reply: (m) => out.push(m as Record<string, unknown>), broadcast: () => {} });
+  await run({ t: "dash", requestId: "r1", task: { action: "add", title: "  Buy milk ", clientId: "c1" } });
+  expect(out).toEqual([{ t: "dash", requestId: "r1", task: { id: 7, title: "Buy milk", priority: "medium", status: "pending" } }]);
+  expect(JSON.parse(orca.lines[0] ?? "").title).toBe("Buy milk");
+  for (const task of [
+    { action: "add", title: "", clientId: "c" },
+    { action: "add", title: "x".repeat(201), clientId: "c" },
+    { action: "complete", id: -1 },
+    { action: "complete", id: 1.5 },
+    { action: "delete", id: 1 },
+  ]) {
+    out.length = 0;
+    await run({ t: "dash", requestId: "r2", task });
+    expect(out[0]?.t).toBe("error");
+  }
+  expect(orca.lines).toHaveLength(1);
+});
+
+test("with the env var unset, a task request says the dashboard is off and nothing is written", async () => {
+  const daemon = new Daemon({ id: "t", name: "t" }, false, {});
+  const out: Record<string, unknown>[] = [];
+  await handleMessage(JSON.stringify({ t: "dash", requestId: "r1", task: { action: "complete", id: 1 } }), {
+    daemon,
+    reply: (m) => out.push(m as Record<string, unknown>),
+    broadcast: () => {},
+  });
+  expect(out).toEqual([{ t: "dash", requestId: "r1", error: DASH_ERRORS.disabled }]);
+});

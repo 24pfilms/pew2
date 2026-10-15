@@ -15,6 +15,7 @@ import {
   lastSeenLabel,
   money,
   pageOutcome,
+  taskOutcome,
   whenLabel,
   relativeTime,
   sectionView,
@@ -118,4 +119,14 @@ test("a date-only value is shown as written, a timestamp as relative time", () =
   expect(whenLabel("2026-10-20", now)).toBe("2026-10-20");
   expect(whenLabel("0026-10-20", now)).toBe("0026-10-20");
   expect(whenLabel("2026-10-15T09:00:00Z", now)).toBe("3h ago");
+});
+
+test("a task change reads as done, as an error sentence, or as an old daemon", () => {
+  const task = { id: 3, title: "Buy milk", priority: "medium", status: "pending" };
+  expect(taskOutcome({ t: "dash", requestId: "r", task })).toEqual({ kind: "done", task });
+  expect(taskOutcome({ t: "dash", requestId: "r", error: "Task changes from the phone are off." })).toEqual({ kind: "error", text: "Task changes from the phone are off." });
+  expect(taskOutcome({ t: "dash", requestId: "r" })).toEqual({ kind: "error", text: DASH_TEXT.noReply });
+  // An older daemon drops `task` and answers a snapshot: nothing changed, and the app must not call it a success.
+  const snapshot = { generatedAt: 1, overview: null, health: null, activity: null, tasks: null, cost: null, sessions: null, routines: null };
+  expect(taskOutcome({ t: "dash", requestId: "r", snapshot })).toEqual({ kind: "error", text: DASH_TEXT.tasksOldDaemon });
 });

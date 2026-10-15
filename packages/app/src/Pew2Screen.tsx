@@ -1125,7 +1125,7 @@ export function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => 
           not to the composer, so it must not ride up with the keyboard. */}
       <ContextDetailsSheet visible={contextOpen} workspace={daemon.workspace} usage={daemon.usage} inConversation={daemon.sessionId !== undefined} onClose={closeContext} />
       <VoiceScreen voice={voice} color={active?.color} />
-      {daemon.dashboard && <DashboardScreen visible={dashboardOpen} fetchDash={daemon.fetchDash} onOpenPage={setDashboardPage} onClose={closeDashboard} />}
+      {daemon.dashboard && <DashboardScreen visible={dashboardOpen} fetchDash={daemon.fetchDash} changeTask={daemon.changeTask} onOpenPage={setDashboardPage} onClose={closeDashboard} />}
       {daemon.dashboard && <DashboardPage view={dashboardPage} fetchDash={daemon.fetchDash} onClose={closeDashboardPage} />}
       <VoiceBar voice={voice} color={active?.color} />
       <VoiceIncomingBar voice={voice} />

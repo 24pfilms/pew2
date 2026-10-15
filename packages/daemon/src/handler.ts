@@ -501,6 +501,13 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
         const dashboard = daemon.dashboard;
         if (!dashboard) {
           reply({ t: "dash", requestId: message.requestId, error: DASH_ERRORS.disabled });
+        } else if (message.task) {
+          const result = await dashboard.changeTask(message.task);
+          reply(
+            result.ok
+              ? { t: "dash", requestId: message.requestId, task: result.value }
+              : { t: "dash", requestId: message.requestId, error: result.error },
+          );
         } else if (message.view) {
           const result = await dashboard.view(message.view);
           reply(

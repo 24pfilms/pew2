@@ -508,8 +508,8 @@ export function useDaemon(
    * cannot, and the answer goes to the caller alone — never into state, so the
    * snapshot lives only as long as the screen holding it.
    */
-  const fetchDash = useCallback(
-    (view?: wire.DashViewName): Promise<wire.Dash> => {
+  const askDash = useCallback(
+    (extra: { view?: wire.DashViewName; task?: wire.DashTaskOp }): Promise<wire.Dash> => {
       const requestId = `dash:${++dashCounter.current}`;
       return new Promise((resolve) => {
         const timer = setTimeout(() => finish({ t: "dash", requestId, error: DASH_TEXT.noReply }), DASH_REPLY_TIMEOUT_MS);
@@ -519,11 +519,15 @@ export function useDaemon(
           resolve(reply);
         };
         dashReplies.current.set(requestId, finish);
-        if (!post(view ? { t: "dash", requestId, view } : { t: "dash", requestId })) finish({ t: "dash", requestId, error: DASH_TEXT.offline });
+        if (!post({ t: "dash", requestId, ...extra })) finish({ t: "dash", requestId, error: DASH_TEXT.offline });
       });
     },
     [post],
   );
+
+  const fetchDash = useCallback((view?: wire.DashViewName): Promise<wire.Dash> => askDash(view ? { view } : {}), [askDash]);
+  /** Add or complete a task on the computer. Resolves like `fetchDash`; the answer is never kept. */
+  const changeTask = useCallback((task: wire.DashTaskOp): Promise<wire.Dash> => askDash({ task }), [askDash]);
 
   /**
    * Retry the connection now instead of waiting out the backoff.
@@ -826,6 +830,7 @@ export function useDaemon(
     images,
     fetchVideo,
     fetchDash,
+    changeTask,
     gg,
     hasGgCoder,
     openGoal,
