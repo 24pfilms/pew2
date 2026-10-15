@@ -83,6 +83,7 @@ export type FrameRefs = Pick<
   | "notifiedTurns"
   | "onTurnFinished"
   | "voiceListener"
+  | "videoReplies"
 >;
 
 export function handleSealedFrame(refs: FrameRefs, connection: FrameConnection, frame: unknown): void {
@@ -117,6 +118,7 @@ export function handleSealedFrame(refs: FrameRefs, connection: FrameConnection, 
     notifiedTurns,
     onTurnFinished,
     voiceListener,
+    videoReplies,
   } = refs;
   const { ws, secure, resetStream, batch, flushOutbox, watch } = connection;
 
@@ -723,6 +725,15 @@ export function handleSealedFrame(refs: FrameRefs, connection: FrameConnection, 
   // A voice call's handshake and progress: for the call, never the transcript.
   if (message.t === "voice.answer" || message.t === "voice.status") {
     voiceListener.current?.(message);
+    return;
+  }
+
+  // A video the user asked for by tapping its card: handed to that card, never
+  // held in state, since the bytes are megabytes and one card wants them once.
+  if (message.t === "video" && typeof message.requestId === "string") {
+    const waiting = videoReplies.current.get(message.requestId);
+    videoReplies.current.delete(message.requestId);
+    waiting?.(message);
     return;
   }
 

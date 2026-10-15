@@ -41,6 +41,7 @@ export type ConnectionRefs = FrameRefs &
     | "setRefreshingList"
     | "watch"
     | "voiceListener"
+    | "videoReplies"
     | "resume"
     | "retry"
     | "sessionsRef"

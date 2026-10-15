@@ -29,6 +29,7 @@ import { pushAddress } from "./ui/push";
 import { ComposerDock, type ComposerDockHandle } from "./ui/ComposerDock";
 import { ChatThread, type ChatThreadRef } from "./ui/ChatThread";
 import { ImageResolverProvider } from "./ui/ChatImage";
+import { VideoResolverProvider } from "./ui/VideoCard";
 import { CommandSheet } from "./ui/CommandSheet";
 import { NewChatSheet } from "./ui/NewChatSheet";
 import { AttachmentSheet } from "./ui/AttachmentSheet";
@@ -867,9 +868,12 @@ export function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => 
     }),
     [daemon.images, daemon.fetchImage, daemon.retryImage],
   );
+  // Videos are fetched by a tap on their card, so the resolver is only the one function.
+  const videoResolver = useMemo(() => ({ fetchVideo: daemon.fetchVideo }), [daemon.fetchVideo]);
 
   return (
     <ImageResolverProvider value={imageResolver}>
+    <VideoResolverProvider value={videoResolver}>
     <AgentColorProvider value={agentInk}>
     <View style={styles.root}>
       <StatusBar style="light" />
@@ -1187,6 +1191,7 @@ export function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => 
       </Reanimated.View>
     </View>
     </AgentColorProvider>
+    </VideoResolverProvider>
     </ImageResolverProvider>
   );
 }

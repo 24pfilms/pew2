@@ -17,6 +17,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { theme } from "../theme";
 import { MarkdownText } from "./MarkdownText";
 import { ChatImages } from "./ChatImage";
+import { ChatVideos } from "./VideoCard";
 import { CommandToken } from "./CommandToken";
 import { MessageTextContext, openCopyMenu } from "./copyMenu";
 import { splitCommand } from "../slashCommands";
@@ -233,6 +234,8 @@ function TurnBody({ turn, onOpenThought, retryPrompt, onRetry, liveIdentity }: T
     <View style={styles.agentRow}>
       {hasText && <MarkdownText text={text} liveIdentity={liveIdentity} />}
       <ChatImages images={images} />
+      {/* A finished render the agent names by path: a card the user taps to fetch it. */}
+      {hasText && <ChatVideos text={text} />}
     </View>
   );
 }

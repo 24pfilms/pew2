@@ -7,7 +7,7 @@
  * result, so identities are stable and nothing here is state of its own.
  */
 import type { Dispatch, RefObject, SetStateAction } from "react";
-import type { SecureChannel } from "@pew2/protocol";
+import type { SecureChannel, wire } from "@pew2/protocol";
 import type { RestoreTarget } from "./restoreState";
 import type { OutboxEntry } from "./outbox";
 import type { Cursors } from "./cursors";
@@ -72,4 +72,6 @@ export interface DaemonRefs {
   targetProviderRef: RefObject<string | undefined>;
   /** The voice call's ear on the socket: answers and status for a live call. */
   voiceListener: RefObject<((message: VoiceFrame) => void) | undefined>;
+  /** Video requests waiting for the computer's answer, by request id: a card is waiting on each. */
+  videoReplies: RefObject<Map<string, (reply: wire.VideoData) => void>>;
 }

@@ -71,6 +71,9 @@ export type { PushAddress, TurnFinished, VoiceFrame } from "./daemonState";
  * devices apart. Falls back to a constant so a direct LAN connection, where the
  * daemon does not care, still works.
  */
+/** Longest a tapped video may take to arrive: a 7MB clip measured 12-15 s over the relay. */
+const VIDEO_FETCH_TIMEOUT_MS = 90_000;
+
 export function useDaemon(
   url: string,
   deviceId = "phone",
@@ -202,6 +205,8 @@ export function useDaemon(
   const [refreshingList, setRefreshingList] = useState(false);
   // Where voice answers and status go: the call screen, while one is up.
   const voiceListener = useRef<((message: VoiceFrame) => void) | undefined>(undefined);
+  // Video requests waiting on an answer, by id: each belongs to a card that was tapped.
+  const videoReplies = useRef(new Map<string, (reply: wire.VideoData) => void>());
   // Capability requests in flight, keyed by provider. One slow or broken agent
   // must not keep another provider's already-loaded history behind a skeleton.
   const pendingCapabilities = useRef(new Set<string>());
@@ -405,6 +410,7 @@ export function useDaemon(
           streamForeground,
           streamGeneration,
           turnText,
+          videoReplies,
           viewingRef,
           voiceListener,
           watch,
@@ -459,6 +465,35 @@ export function useDaemon(
       );
     },
     [post, storeImage],
+  );
+
+  /**
+   * Ask the computer for a video, once the user taps its card.
+   *
+   * Always resolves, with a reason in `error` when it cannot deliver: a card
+   * shows that, where a rejection would be a crash. The wait is bounded because
+   * a clip is megabytes over a mobile link, and a socket that dropped mid-way
+   * would otherwise leave the card spinning for good.
+   */
+  const fetchVideo = useCallback(
+    (uri: string): Promise<wire.VideoData> => {
+      const requestId = `video:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+      return new Promise((resolve) => {
+        const timer = setTimeout(
+          () => finish({ t: "video", requestId, uri, error: "The video took too long to arrive. Tap to try again." }),
+          VIDEO_FETCH_TIMEOUT_MS,
+        );
+        const finish = (reply: wire.VideoData) => {
+          clearTimeout(timer);
+          videoReplies.current.delete(requestId);
+          resolve(reply);
+        };
+        videoReplies.current.set(requestId, finish);
+        const sent = post({ t: "video.fetch", requestId, sessionId: sessionRef.current, uri });
+        if (!sent) finish({ t: "video", requestId, uri, error: "Not connected to your computer" });
+      });
+    },
+    [post],
   );
 
   /**
@@ -760,6 +795,7 @@ export function useDaemon(
       voiceListener.current = listener;
     },
     images,
+    fetchVideo,
     gg,
     hasGgCoder,
     openGoal,
