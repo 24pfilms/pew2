@@ -309,9 +309,19 @@ function VideoControls({ player, state, name, onSave, onReload, onExpand, onClos
 
   return (
     <View style={styles.controls}>
-      <Text style={styles.name} numberOfLines={1}>
-        {name}
-      </Text>
+      <View style={styles.headerRow}>
+        <Text style={[styles.name, styles.headerName]} numberOfLines={1}>
+          {name}
+        </Text>
+        <ControlButton label="Save this video to your gallery" onPress={onSave}>
+          <Ionicons name="download-outline" size={22} color={theme.color.text} />
+        </ControlButton>
+        {onReload && (
+          <ControlButton label="Download this video again" onPress={onReload}>
+            <Ionicons name="refresh" size={22} color={theme.color.text} />
+          </ControlButton>
+        )}
+      </View>
       <View style={styles.progressRow}>
         <Pressable
           accessibilityRole="adjustable"
@@ -341,14 +351,6 @@ function VideoControls({ player, state, name, onSave, onReload, onExpand, onClos
           <Text style={styles.skipText}>+{SEEK_STEP_SECONDS}s</Text>
         </ControlButton>
         <View style={styles.spacer} />
-        <ControlButton label="Save this video to your gallery" onPress={onSave}>
-          <Ionicons name="download-outline" size={22} color={theme.color.text} />
-        </ControlButton>
-        {onReload && (
-          <ControlButton label="Download this video again" onPress={onReload}>
-            <Ionicons name="refresh" size={22} color={theme.color.text} />
-          </ControlButton>
-        )}
         {onExpand && (
           <ControlButton label="Open the video full screen" onPress={onExpand}>
             <Ionicons name="expand-outline" size={22} color={theme.color.text} />
@@ -496,6 +498,8 @@ const styles = StyleSheet.create({
   // Full width, as tall as the video's own shape makes it, but never taller than a phone screen's worth.
   video: { width: "100%", aspectRatio: DEFAULT_VIDEO_RATIO, maxHeight: VIDEO_HEIGHT, backgroundColor: "#000" },
   controls: { gap: theme.space(2), paddingHorizontal: theme.space(3), paddingVertical: theme.space(2) },
+  headerRow: { flexDirection: "row", alignItems: "center", gap: theme.space(2) },
+  headerName: { flex: 1 },
   progressRow: { flexDirection: "row", alignItems: "center", gap: theme.space(3) },
   track: {
     flex: 1,
