@@ -30,6 +30,7 @@ Your PC does the work. Your phone is how you talk to it. Nothing runs in the clo
 | 🎬 | **Videos in the chat** | A finished video an agent names by path shows up as a card. Tap it to fetch it over your private link, then watch it with always-visible controls (pause, skip 5 seconds, a progress bar), let it loop, turn the phone sideways to fill the screen for widescreen clips, and save it to your gallery. Nothing downloads until you tap, and clips up to 8 MB are supported. |
 | 🔈 | **Calm sounds** | Soft ticks and gentle chimes in place of bright bells, and they only play while OrcaCoder is on screen, so nothing dings over a ring. |
 | 🐋 | **The OrcaCoder look** | The Scarlet orca appears on the home screen, the launcher icon, the startup screen and the ring screen. The GG Coder agent is listed as *OrcaCoder*. |
+| 📊 | **OrcaZeroViva dashboard** | Opt-in (`PEW2_ORCA_DASHBOARD=1`). See your OrcaZeroViva tasks, projects, notes, calendar, meetings, workflows, prompts, memory facts, cost and activity as titles and dates only, nothing from chat or settings. You can add and complete tasks from the phone, but only after you switch on **Phone task changes** in OrcaZeroViva (Settings › Privacy & data). Each change is logged there. |
 | 🪟 | **Solid on Windows** | Daemon fixes for running under Task Scheduler, a crash guard for GG Coder's self-updater, a safe restart script, pull-to-refresh chat lists and pinch-zoom images. Details in [windows/README.md](windows/README.md). |
 
 ## 🗺️ Coming next
