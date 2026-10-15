@@ -117,6 +117,8 @@ test("every message the app actually sends is accepted", () => {
     { t: "session.resume", providerId: "claude-code", agentSessionId: "a1", cwd: "/x" },
     { t: "session.cancel", sessionId: "s1" },
     { t: "image.fetch", requestId: "u", uri: "u", sessionId: "s1" },
+    { t: "video.fetch", requestId: "v", uri: "L:/renders/clip.mp4", sessionId: "s1" },
+    { t: "video.fetch", requestId: "v", uri: "L:/renders/clip.mp4" },
     { t: "workspaces", requestId: "r1" },
     { t: "workspaces", requestId: "r1", path: "/Users/someone" },
     { t: "workspace.status", sessionId: "s1", providerId: "claude-code" },
@@ -186,6 +188,8 @@ test("a message missing what the daemon will use is refused", () => {
     { t: "provider.sessions", providerId: "claude-code" },
     { t: "session.permission", sessionId: "s1", requestId: "r1" },
     { t: "image.fetch", requestId: "r1" },
+    { t: "video.fetch", requestId: "r1" },
+    { t: "video.fetch", uri: "L:/renders/clip.mp4" },
     { t: "session.config", sessionId: "s1", configId: "model" },
   ]) {
     expect({ t: bad.t, ok: ClientMessage.safeParse(bad).success }).toEqual({

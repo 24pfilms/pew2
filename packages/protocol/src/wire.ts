@@ -528,6 +528,36 @@ export const ImageData = z.object({
 });
 
 /**
+ * App -> daemon. Fetch a finished video the agent named by path.
+ *
+ * The same shape as `ImageRequest`, and answered the same way, but asked only
+ * when the user taps a video card: a clip is megabytes, so nothing fetches
+ * one on its own.
+ */
+export const VideoRequest = z.object({
+  t: z.literal("video.fetch"),
+  /** Echoed back, so a client can match a reply to the card that asked. */
+  requestId: z.string(),
+  /** Which session's working directory relative paths resolve against. */
+  sessionId: z.string().optional(),
+  uri: z.string(),
+});
+
+/**
+ * A video, answered to one client and never entered into the replayable log
+ * (megabytes of base64 there would be re-downloaded on every reconnect).
+ */
+export const VideoData = z.object({
+  t: z.literal("video"),
+  requestId: z.string(),
+  uri: z.string(),
+  /** `data:<mime>;base64,...`, absent when `error` explains why not. */
+  dataUri: z.string().optional(),
+  mimeType: z.string().optional(),
+  error: z.string().optional(),
+});
+
+/**
  * App -> daemon. Which project is this session in, and how dirty is it?
  *
  * The phone has no filesystem to look at, so the working directory and the
@@ -1233,6 +1263,7 @@ export const ClientMessage = z.discriminatedUnion("t", [
   Cancel,
   PermissionReply,
   ImageRequest,
+  VideoRequest,
   WorkspaceRequest,
   WorkspacesRequest,
   PushRegister,
@@ -1259,6 +1290,7 @@ export const ServerMessage = z.discriminatedUnion("t", [
   SessionIdle,
   Replay,
   ImageData,
+  VideoData,
   Workspace,
   Workspaces,
   DeviceJoined,
@@ -1314,6 +1346,8 @@ export type Cancel = z.output<typeof Cancel>;
 export type PermissionReply = z.output<typeof PermissionReply>;
 export type ImageRequest = z.output<typeof ImageRequest>;
 export type ImageData = z.output<typeof ImageData>;
+export type VideoRequest = z.output<typeof VideoRequest>;
+export type VideoData = z.output<typeof VideoData>;
 export type WorkspaceRequest = z.output<typeof WorkspaceRequest>;
 export type Workspace = z.output<typeof Workspace>;
 export type SessionEvent = z.output<typeof SessionEvent>;
