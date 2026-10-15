@@ -42,6 +42,7 @@ export function reduceMessage(prev: State, message: any, scope: MessageScope): S
         // update it describes.
         update: message.update,
         voice: message.voice,
+        dashboard: message.dashboard,
         loadingSessions: pendingCapabilities.current.size > 0,
       };
 

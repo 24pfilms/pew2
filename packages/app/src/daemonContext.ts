@@ -74,4 +74,6 @@ export interface DaemonRefs {
   voiceListener: RefObject<((message: VoiceFrame) => void) | undefined>;
   /** Video requests waiting for the computer's answer, by request id: a card is waiting on each. */
   videoReplies: RefObject<Map<string, (reply: wire.VideoData) => void>>;
+  /** Dashboard requests waiting for the computer's answer, by request id: the open dashboard waits on each. */
+  dashReplies: RefObject<Map<string, (reply: wire.Dash) => void>>;
 }

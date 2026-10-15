@@ -62,6 +62,7 @@ import { useImageCache } from "./useImageCache";
 import { openConnection } from "./daemonConnection";
 import { CapabilityProbes } from "./capabilityProbes";
 import { ListRefresh } from "./listRefresh";
+import { DASH_REPLY_TIMEOUT_MS, DASH_TEXT } from "./dashboard";
 import type { ConnectionWatch } from "./connectionWatch";
 import { createActions, deliverPrompt as deliverPromptVia } from "./daemonActions";
 export type { PushAddress, TurnFinished, VoiceFrame } from "./daemonState";
@@ -207,6 +208,9 @@ export function useDaemon(
   const voiceListener = useRef<((message: VoiceFrame) => void) | undefined>(undefined);
   // Video requests waiting on an answer, by id: each belongs to a card that was tapped.
   const videoReplies = useRef(new Map<string, (reply: wire.VideoData) => void>());
+  // Dashboard requests waiting on an answer, by id: the open dashboard's.
+  const dashReplies = useRef(new Map<string, (reply: wire.Dash) => void>());
+  const dashCounter = useRef(0);
   // Capability requests in flight, keyed by provider. One slow or broken agent
   // must not keep another provider's already-loaded history behind a skeleton.
   const pendingCapabilities = useRef(new Set<string>());
@@ -411,6 +415,7 @@ export function useDaemon(
           streamGeneration,
           turnText,
           videoReplies,
+          dashReplies,
           viewingRef,
           voiceListener,
           watch,
@@ -491,6 +496,30 @@ export function useDaemon(
         videoReplies.current.set(requestId, finish);
         const sent = post({ t: "video.fetch", requestId, sessionId: sessionRef.current, uri });
         if (!sent) finish({ t: "video", requestId, uri, error: "Not connected to your computer" });
+      });
+    },
+    [post],
+  );
+
+  /**
+   * Ask the computer for the OrcaZeroViva dashboard.
+   *
+   * Like `fetchVideo`: always resolves, with a sentence in `error` when it
+   * cannot, and the answer goes to the caller alone — never into state, so the
+   * snapshot lives only as long as the screen holding it.
+   */
+  const fetchDash = useCallback(
+    (): Promise<wire.Dash> => {
+      const requestId = `dash:${++dashCounter.current}`;
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => finish({ t: "dash", requestId, error: DASH_TEXT.noReply }), DASH_REPLY_TIMEOUT_MS);
+        const finish = (reply: wire.Dash) => {
+          clearTimeout(timer);
+          dashReplies.current.delete(requestId);
+          resolve(reply);
+        };
+        dashReplies.current.set(requestId, finish);
+        if (!post({ t: "dash", requestId })) finish({ t: "dash", requestId, error: DASH_TEXT.offline });
       });
     },
     [post],
@@ -796,6 +825,7 @@ export function useDaemon(
     },
     images,
     fetchVideo,
+    fetchDash,
     gg,
     hasGgCoder,
     openGoal,

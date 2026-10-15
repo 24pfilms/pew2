@@ -21,6 +21,7 @@ import { wire } from "@pew2/protocol";
 import { pushFinishedTurn } from "./push.js";
 import { storeGoalFiles } from "./goalFiles";
 import { readKnownProjects } from "./known-projects.js";
+import { DASH_ERRORS } from "./orcaDash.js";
 
 const NOT_A_GOAL = "Open or create a goal first.";
 /** OrcaGoals' engine is reached through Goals only, never opened as an agent of its own. */
@@ -492,6 +493,17 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
         } catch (error) {
           reply({ t: "goals", requestId: message.requestId, goals: [], error: humanError(error) });
         }
+        break;
+      }
+
+      case "dash": {
+        // A reply, never a session event: nothing about the PC enters the log.
+        const result = daemon.dashboard ? await daemon.dashboard.snapshot() : { ok: false as const, error: DASH_ERRORS.disabled };
+        reply(
+          result.ok
+            ? { t: "dash", requestId: message.requestId, snapshot: result.snapshot }
+            : { t: "dash", requestId: message.requestId, error: result.error },
+        );
         break;
       }
 
