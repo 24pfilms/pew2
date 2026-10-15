@@ -13,6 +13,9 @@
  *  - The relay treats `payload` as opaque. Under E2EE it is a ciphertext blob.
  */
 import { z } from "zod";
+import { DashSnapshot } from "./dash.js";
+
+export * from "./dash.js";
 
 /**
  * Bump only on breaking envelope changes.
@@ -178,6 +181,19 @@ export const ProviderAnnounce = z.object({
    * fix at their desk.
    */
   voice: z
+    .object({
+      available: z.boolean(),
+      reason: z.string().optional(),
+    })
+    .optional(),
+  /**
+   * Whether this machine serves the OrcaZeroViva dashboard.
+   *
+   * Opt-in: sent only when the daemon runs with `PEW2_ORCA_DASHBOARD=1`, so
+   * anyone else never sees a Dashboard row. Absent means off or an older
+   * daemon; `available: false` shows the row dimmed with `reason`.
+   */
+  dashboard: z
     .object({
       available: z.boolean(),
       reason: z.string().optional(),
@@ -899,6 +915,26 @@ export const Goals = z.object({
   error: z.string().optional(),
 });
 
+/**
+ * App -> daemon. Fetch the OrcaZeroViva dashboard snapshot.
+ *
+ * Carries no parameters on purpose: the daemon sends one fixed request to
+ * Orca, so nothing from the phone ever reaches the PC's pipe.
+ */
+export const DashRequest = z.object({
+  t: z.literal("dash"),
+  requestId: z.string(),
+});
+
+/** Daemon -> app. Answer to `dash`: a snapshot, or a sentence saying why not. */
+export const Dash = z.object({
+  t: z.literal("dash"),
+  requestId: z.string(),
+  snapshot: DashSnapshot.optional(),
+  /** Plain words for the person holding the phone. Absent on success. */
+  error: z.string().optional(),
+});
+
 /** App -> daemon. Create a goal (briefing phase). Context paths are desktop paths. */
 export const GoalCreate = z.object({
   t: z.literal("goal.create"),
@@ -1277,6 +1313,7 @@ export const ClientMessage = z.discriminatedUnion("t", [
   ChecklistRequest,
   VoiceStart,
   VoiceStop,
+  DashRequest,
 ]);
 
 export const ServerMessage = z.discriminatedUnion("t", [
@@ -1303,6 +1340,7 @@ export const ServerMessage = z.discriminatedUnion("t", [
   Checklist,
   VoiceAnswer,
   VoiceStatus,
+  Dash,
   ErrorMessage,
 ]);
 
@@ -1319,6 +1357,8 @@ export type GoalContextItem = z.output<typeof GoalContextItem>;
 export type GoalSummary = z.output<typeof GoalSummary>;
 export type GoalsRequest = z.output<typeof GoalsRequest>;
 export type Goals = z.output<typeof Goals>;
+export type DashRequest = z.output<typeof DashRequest>;
+export type Dash = z.output<typeof Dash>;
 export type GoalCreate = z.output<typeof GoalCreate>;
 export type GoalAction = z.output<typeof GoalAction>;
 export type GoalResult = z.output<typeof GoalResult>;

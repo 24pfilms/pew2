@@ -38,6 +38,7 @@ import { NOTICE_BUFFER, type TurnFinished } from "./daemonState";
 import type { DaemonRefs } from "./daemonContext";
 import { reduceMessage } from "./daemonReducer";
 import { readPermissionRequest } from "./permissions";
+import { DASH_TEXT, isDashUnknown } from "./dashboard";
 
 /** The one socket this frame arrived on, and its per-connection helpers. */
 export interface FrameConnection {
@@ -84,6 +85,7 @@ export type FrameRefs = Pick<
   | "onTurnFinished"
   | "voiceListener"
   | "videoReplies"
+  | "dashReplies"
 >;
 
 export function handleSealedFrame(refs: FrameRefs, connection: FrameConnection, frame: unknown): void {
@@ -119,6 +121,7 @@ export function handleSealedFrame(refs: FrameRefs, connection: FrameConnection, 
     onTurnFinished,
     voiceListener,
     videoReplies,
+    dashReplies,
   } = refs;
   const { ws, secure, resetStream, batch, flushOutbox, watch } = connection;
 
@@ -172,6 +175,13 @@ export function handleSealedFrame(refs: FrameRefs, connection: FrameConnection, 
   // An older daemon that has never heard of `goals`: stop the spinner.
   if (message.t === "error" && message.code === "unknown_message") {
     setGg((g) => (g.goalsLoading ? { ...g, goalsLoading: false } : g));
+  }
+  // Nor of `dash`. The error names no request, so every waiting one ends.
+  if (message.t === "error" && isDashUnknown(message.code, message.message)) {
+    for (const [requestId, waiting] of [...dashReplies.current]) {
+      dashReplies.current.delete(requestId);
+      waiting({ t: "dash", requestId, error: DASH_TEXT.oldDaemon });
+    }
   }
 
   // Replayed history, after a reconnect or a resume. Progressive batches
@@ -725,6 +735,15 @@ export function handleSealedFrame(refs: FrameRefs, connection: FrameConnection, 
   // A voice call's handshake and progress: for the call, never the transcript.
   if (message.t === "voice.answer" || message.t === "voice.status") {
     voiceListener.current?.(message);
+    return;
+  }
+
+  // The dashboard: handed to the open screen, never held in state or written
+  // anywhere, so no PC data stays on the phone.
+  if (message.t === "dash" && typeof message.requestId === "string") {
+    const waiting = dashReplies.current.get(message.requestId);
+    dashReplies.current.delete(message.requestId);
+    waiting?.(message);
     return;
   }
 

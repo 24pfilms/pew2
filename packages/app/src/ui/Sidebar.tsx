@@ -101,6 +101,12 @@ interface SidebarProps {
    * lists cannot drift apart.
    */
   goals?: SidebarGoals;
+  /**
+   * The computer's OrcaZeroViva dashboard. Absent: not offered there (it is
+   * opt-in), so no button. `available: false` dims it and says why.
+   */
+  dashboard?: { available: boolean; reason?: string };
+  onOpenDashboard?: () => void;
 }
 
 export interface SidebarGoals {
@@ -378,6 +384,8 @@ function SidebarView({
   historyLoading = false,
   reduceMotion = false,
   goals,
+  dashboard,
+  onOpenDashboard,
 }: SidebarProps) {
   const insets = useSafeAreaInsets();
   const appActive = useAppActive();
@@ -450,6 +458,22 @@ function SidebarView({
               />
             ))}
           </ScrollView>
+          {dashboard && onOpenDashboard && (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={dashboard.available ? "Dashboard" : `Dashboard, unavailable${dashboard.reason ? `. ${dashboard.reason}` : ""}`}
+              accessibilityState={{ disabled: !dashboard.available }}
+              disabled={!dashboard.available}
+              hitSlop={touchSlop(theme.space(1))}
+              onPress={() => {
+                haptics.tap();
+                onOpenDashboard();
+              }}
+              style={({ pressed }) => [styles.railButton, !dashboard.available && styles.unavailable, pressed && styles.pressed]}
+            >
+              <Ionicons name="speedometer-outline" size={22} color={theme.color.textDim} />
+            </Pressable>
+          )}
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`Connection details for ${machineLabel}${update ? (update.automatic ? ", updating pew2" : ", update available") : ""}`}

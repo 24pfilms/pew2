@@ -110,6 +110,11 @@ export interface State {
    */
   voice?: { available: boolean; reason?: string };
   /**
+   * Whether the computer serves the OrcaZeroViva dashboard. Absent: off there
+   * (it is opt-in) or a daemon older than it, so no drawer row.
+   */
+  dashboard?: { available: boolean; reason?: string };
+  /**
    * The paired computer's own name (its hostname), as it reports itself. Shown
    * in settings in place of the relay's address. Absent from a daemon too old
    * to send it: settings then falls back to the status alone.

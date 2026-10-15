@@ -19,6 +19,7 @@ import { writeSessionPrefs } from "./session-prefs.js";
 import type { wire } from "@pew2/protocol";
 import { DaemonConnectSession } from "./daemon/connect-session.js";
 import { VoiceManager } from "./voice/manager.js";
+import { orcaDashFromEnv } from "./orcaDash.js";
 import { daemonHost, type SessionView } from "./voice/host.js";
 import {
   GG_GOALS_ID,
@@ -47,6 +48,9 @@ export class Daemon extends DaemonConnectSession {
    * and the announcement can reach it; it does nothing until `voice.start`.
    */
   readonly voice = new VoiceManager(daemonHost(this, this.env));
+
+  /** The OrcaZeroViva dashboard; undefined unless `PEW2_ORCA_DASHBOARD=1`. */
+  readonly dashboard = orcaDashFromEnv(this.env);
 
   constructor(...args: ConstructorParameters<typeof DaemonConnectSession>) {
     super(...args);
@@ -365,6 +369,8 @@ export class Daemon extends DaemonConnectSession {
       // told once does not keep a stale banner when the update lands.
       update: this.updateStatus,
       voice: this.voice.status,
+      // Opt-in, so a daemon without it says nothing and no row appears.
+      ...(this.dashboard ? { dashboard: { available: true } } : {}),
     };
     this.send(announce);
   }
