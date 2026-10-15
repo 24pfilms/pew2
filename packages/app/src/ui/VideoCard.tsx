@@ -120,7 +120,7 @@ function VideoCardView({ video }: { video: ChatVideo }) {
   }, [resolver, video.src]);
 
   if (state.status === "ready") {
-    return <ReadyVideo name={video.name} stored={state.video} onReload={() => void load()} />;
+    return <ReadyVideo name={video.name} stored={state.video} />;
   }
 
   const loading = state.status === "loading";
@@ -195,7 +195,7 @@ function usePlayerState(player: VideoPlayer): PlayerState {
   return { playing, time, duration, ratio };
 }
 
-function ReadyVideo({ name, stored, onReload }: { name: string; stored: StoredVideo; onReload: () => void }) {
+function ReadyVideo({ name, stored }: { name: string; stored: StoredVideo }) {
   const player = useVideoPlayer(stored.uri, (p) => {
     // A short clip is meant to be watched more than once: it repeats until paused.
     p.loop = true;
@@ -250,7 +250,6 @@ function ReadyVideo({ name, stored, onReload }: { name: string; stored: StoredVi
         state={state}
         name={name}
         onSave={() => void save()}
-        onReload={onReload}
         onExpand={() => {
           haptics.tap();
           setExpanded(true);
@@ -275,7 +274,6 @@ interface VideoControlsProps {
   state: PlayerState;
   name: string;
   onSave: () => void;
-  onReload?: () => void;
   /** Shown only where the video can be made larger. */
   onExpand?: () => void;
   /** Shown only in the full-screen viewer, in place of the expand button. */
@@ -283,7 +281,7 @@ interface VideoControlsProps {
 }
 
 /** Name, progress bar, and the buttons: always visible, unlike the player's own bar. */
-function VideoControls({ player, state, name, onSave, onReload, onExpand, onClose }: VideoControlsProps) {
+function VideoControls({ player, state, name, onSave, onExpand, onClose }: VideoControlsProps) {
   const [trackWidth, setTrackWidth] = useState(0);
 
   const togglePlay = useCallback(() => {
@@ -316,11 +314,6 @@ function VideoControls({ player, state, name, onSave, onReload, onExpand, onClos
         <ControlButton label="Save this video to your gallery" onPress={onSave}>
           <Ionicons name="download-outline" size={22} color={theme.color.text} />
         </ControlButton>
-        {onReload && (
-          <ControlButton label="Download this video again" onPress={onReload}>
-            <Ionicons name="refresh" size={22} color={theme.color.text} />
-          </ControlButton>
-        )}
       </View>
       <View style={styles.progressRow}>
         <Pressable
