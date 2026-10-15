@@ -14,6 +14,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import type { wire } from "@pew2/protocol";
 import { theme } from "../theme";
 import {
+  DASH_PAGES,
   DASH_REFRESH_MS,
   DASH_TEXT,
   activityLabel,
@@ -47,10 +48,11 @@ const SPEND_COLOR: Record<SpendTone, string> = {
 interface Props {
   visible: boolean;
   fetchDash: () => Promise<wire.Dash>;
+  onOpenPage: (view: wire.DashViewName) => void;
   onClose: () => void;
 }
 
-function DashboardScreenView({ visible, fetchDash, onClose }: Props) {
+function DashboardScreenView({ visible, fetchDash, onOpenPage, onClose }: Props) {
   const insets = useSafeAreaInsets();
   const appActive = useAppActive();
   const [snapshot, setSnapshot] = useState<wire.DashSnapshot>();
@@ -108,6 +110,13 @@ function DashboardScreenView({ visible, fetchDash, onClose }: Props) {
           }
         >
           {snapshot ? <Sections snapshot={snapshot} /> : loading && <Placeholder />}
+          <Section title="Pages">
+            {DASH_PAGES.map((page) => (
+              <Pressable key={page.view} accessibilityRole="button" accessibilityLabel={`Open ${page.label}`} onPress={() => onOpenPage(page.view)} style={({ pressed }) => pressed && styles.pressed}>
+                <Row main={page.label} side="›" />
+              </Pressable>
+            ))}
+          </Section>
         </StageScroll>
       </View>
     </Modal>

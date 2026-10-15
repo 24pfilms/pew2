@@ -3,8 +3,10 @@
  * wrong percent or a missing "couldn't load" is caught here.
  */
 import { expect, test } from "bun:test";
+import { wire } from "@pew2/protocol";
 import {
   DASH_LIST_ROWS,
+  DASH_PAGES,
   DASH_TEXT,
   activityLabel,
   dueLabel,
@@ -12,6 +14,8 @@ import {
   isDashUnknown,
   lastSeenLabel,
   money,
+  pageOutcome,
+  whenLabel,
   relativeTime,
   sectionView,
   spendPercent,
@@ -87,4 +91,31 @@ test("health dots keep one order, and a missing section has none", () => {
   const dots = healthDots({ agentCore: "ok", database: "error", openRouter: "degraded", mcpServers: "ok", uptimeMs: 1 });
   expect(dots?.map((d) => `${d.label}:${d.level}`)).toEqual(["Agent:ok", "Database:error", "OpenRouter:degraded", "MCP:ok"]);
   expect(healthDots(null)).toBeUndefined();
+});
+
+test("a page reply is shown only for the page that was asked for", () => {
+  const items = [{ id: 1, title: "Trip" }];
+  expect(pageOutcome({ t: "dash", requestId: "r", view: "notes", items, generatedAt: 5 }, "notes")).toEqual({ kind: "items", items, generatedAt: 5 });
+  expect(pageOutcome({ t: "dash", requestId: "r", view: "projects", items }, "notes").kind).toBe("error");
+});
+
+test("an old daemon's summary reply to a page request reads as 'update pew2', not as a page", () => {
+  const snapshot = { generatedAt: 1, overview: null, health: null, activity: null, tasks: null, cost: null, sessions: null, routines: null };
+  expect(pageOutcome({ t: "dash", requestId: "r", snapshot }, "notes")).toEqual({ kind: "error", text: DASH_TEXT.pagesOldDaemon });
+});
+
+test("a refusal passes its sentence through, and silence falls back to the generic one", () => {
+  expect(pageOutcome({ t: "dash", requestId: "r", error: "Orca is busy. Try again." }, "notes")).toEqual({ kind: "error", text: "Orca is busy. Try again." });
+  expect(pageOutcome({ t: "dash", requestId: "r" }, "notes")).toEqual({ kind: "error", text: DASH_TEXT.noReply });
+});
+
+test("every listed page name is a real wire view", () => {
+  expect(DASH_PAGES.map((p) => p.view)).toEqual([...wire.DASH_VIEWS]);
+});
+
+test("a date-only value is shown as written, a timestamp as relative time", () => {
+  const now = Date.parse("2026-10-15T12:00:00Z");
+  expect(whenLabel("2026-10-20", now)).toBe("2026-10-20");
+  expect(whenLabel("0026-10-20", now)).toBe("0026-10-20");
+  expect(whenLabel("2026-10-15T09:00:00Z", now)).toBe("3h ago");
 });

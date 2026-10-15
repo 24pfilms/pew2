@@ -25,7 +25,33 @@ export const DASH_TEXT = {
   noActivity: "Nothing yet today.",
   noChats: "No chats yet.",
   noLimit: "No daily limit",
+  noItems: "Nothing here.",
+  pagesOldDaemon: "Update pew2 on your computer to open pages.",
 } as const;
+
+/** The pages the phone can open, in the order they are listed. Names match the wire enum. */
+export const DASH_PAGES: readonly { view: wire.DashViewName; label: string }[] = [
+  { view: "projects", label: "Projects" },
+  { view: "notes", label: "Notes" },
+  { view: "calendar", label: "Calendar" },
+  { view: "meetings", label: "Meetings" },
+  { view: "workflows", label: "Workflows" },
+  { view: "prompts", label: "Prompts" },
+  { view: "facts", label: "Memory facts" },
+];
+
+export type PageOutcome = { kind: "items"; items: wire.DashViewItem[]; generatedAt: number } | { kind: "error"; text: string };
+
+/**
+ * What a page request came back with. An older daemon ignores `view` and
+ * answers with the summary, so a reply that has a snapshot but no `view` is
+ * that, not a page. A reply for some other page is refused, never shown.
+ */
+export function pageOutcome(reply: wire.Dash, view: wire.DashViewName): PageOutcome {
+  if (reply.view === view && reply.items) return { kind: "items", items: reply.items, generatedAt: reply.generatedAt ?? 0 };
+  if (reply.snapshot && reply.view === undefined) return { kind: "error", text: DASH_TEXT.pagesOldDaemon };
+  return { kind: "error", text: reply.error ?? DASH_TEXT.noReply };
+}
 
 /**
  * Whether an error frame is a daemon too old to know `dash`. It names no
@@ -103,4 +129,9 @@ export function healthDots(health: wire.DashHealth | null): { label: string; lev
     { label: "OpenRouter", level: health.openRouter },
     { label: "MCP", level: health.mcpServers },
   ];
+}
+
+/** A date with no time ("2026-10-20", a due date) reads as written; a timestamp reads as "3h ago". */
+export function whenLabel(at: string, now: number): string {
+  return /^\d{4}-\d{2}-\d{2}$/.test(at) ? at : relativeTime(at, now);
 }

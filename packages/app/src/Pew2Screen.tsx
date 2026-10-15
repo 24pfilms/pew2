@@ -68,9 +68,11 @@ import { DEFAULT_LINK_SETTINGS, type LinkSettings } from "./linkSettings";
 import { loadLinkSettings, saveLinkSettings } from "./preferences";
 import { useBackgroundLink } from "./ui/useBackgroundLink";
 import NetInfo from "@react-native-community/netinfo";
+import type { wire } from "@pew2/protocol";
 import { NetworkChange } from "./networkChange";
 import { useVoice, type IncomingCall } from "./ui/useVoice";
 import { VoiceScreen } from "./ui/VoiceScreen";
+import { DashboardPage } from "./ui/DashboardPage";
 import { DashboardScreen } from "./ui/DashboardScreen";
 import { VoiceBar, VoiceIncomingBar } from "./ui/VoiceBar";
 import { GoalSheets } from "./ui/GoalSheets";
@@ -258,6 +260,8 @@ export function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => 
     setDashboardOpen(true);
   }, []);
   const closeDashboard = useCallback(() => setDashboardOpen(false), []);
+  const [dashboardPage, setDashboardPage] = useState<wire.DashViewName>();
+  const closeDashboardPage = useCallback(() => setDashboardPage(undefined), []);
   // Which pill's menu is open, and where that pill sits, so the menu opens
   // under it instead of always at the gutter.
   const [picker, setPicker] = useState<"model" | "mode" | null>(() => (devSheet === "model" ? "model" : null));
@@ -1121,7 +1125,8 @@ export function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => 
           not to the composer, so it must not ride up with the keyboard. */}
       <ContextDetailsSheet visible={contextOpen} workspace={daemon.workspace} usage={daemon.usage} inConversation={daemon.sessionId !== undefined} onClose={closeContext} />
       <VoiceScreen voice={voice} color={active?.color} />
-      {daemon.dashboard && <DashboardScreen visible={dashboardOpen} fetchDash={daemon.fetchDash} onClose={closeDashboard} />}
+      {daemon.dashboard && <DashboardScreen visible={dashboardOpen} fetchDash={daemon.fetchDash} onOpenPage={setDashboardPage} onClose={closeDashboard} />}
+      {daemon.dashboard && <DashboardPage view={dashboardPage} fetchDash={daemon.fetchDash} onClose={closeDashboardPage} />}
       <VoiceBar voice={voice} color={active?.color} />
       <VoiceIncomingBar voice={voice} />
       <ConnectionSheet visible={connectionOpen} machineLabel={daemon.machineName ?? "Your computer"} machineRemote={pairing.remote} status={daemon.status} update={daemon.update} onClose={closeConnection} onUnpair={onUnpair} linkSettings={linkSettings} onLinkSettings={changeLinkSettings} />

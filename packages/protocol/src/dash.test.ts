@@ -3,7 +3,7 @@
  * announcement field, and a snapshot schema that strips whatever the PC adds.
  */
 import { expect, test } from "bun:test";
-import { DashSnapshot } from "./dash.js";
+import { DASH_VIEWS, DashSnapshot, DashView } from "./dash.js";
 import { ClientMessage, ServerMessage } from "./wire.js";
 
 const snapshot = {
@@ -62,4 +62,26 @@ test("an announcement parses with and without the dashboard field", () => {
   expect(old.t === "providers" && old.dashboard).toBeUndefined();
   const on = ServerMessage.parse({ ...announce, dashboard: { available: false, reason: "Orca is off." } });
   expect(on.t === "providers" && on.dashboard).toEqual({ available: false, reason: "Orca is off." });
+});
+
+test("every page name is accepted and nothing else is", () => {
+  for (const view of DASH_VIEWS) expect(ClientMessage.safeParse({ t: "dash", requestId: "r", view }).success).toBe(true);
+  expect(ClientMessage.safeParse({ t: "dash", requestId: "r" }).success).toBe(true);
+  for (const view of ["settings", "chat", "", "NOTES", 5]) {
+    expect(ClientMessage.safeParse({ t: "dash", requestId: "r", view }).success).toBe(false);
+  }
+});
+
+test("a page view keeps titles and dates and strips body text", () => {
+  const parsed = DashView.parse({
+    view: "notes",
+    generatedAt: 1,
+    items: [{ id: 1, title: "Trip", detail: "3 words", at: "2026-10-09", content: "private body" }],
+  });
+  expect(parsed.items).toEqual([{ id: 1, title: "Trip", detail: "3 words", at: "2026-10-09" }]);
+});
+
+test("an old daemon's reply to a page request has no view, which the app can tell apart", () => {
+  const reply = ServerMessage.parse({ t: "dash", requestId: "r", snapshot });
+  expect(reply.t === "dash" && reply.view).toBeUndefined();
 });
