@@ -38,19 +38,30 @@ export const DASH_ERRORS = {
   orcaTooOld: "Orca on this computer is too old for the phone dashboard. Update Orca.",
   failed: "Orca couldn't build the dashboard. Try again.",
   disabled: "Dashboard isn't enabled on this computer.",
+  writesOff: "Task changes from the phone are off. Turn them on in Orca: Settings › Privacy & data.",
+  taskMissing: "That task is gone, or Orca is too old for task changes. Update Orca.",
 } as const;
 
 export type Outcome<T> = { ok: true; value: T } | { ok: false; error: string };
 export type DashResult = { ok: true; snapshot: wire.DashSnapshot } | { ok: false; error: string };
 export type ViewResult = Outcome<wire.DashView>;
 
+interface Refusals {
+  denied: string;
+  missing: string;
+}
+const READ_REFUSALS: Refusals = { denied: DASH_ERRORS.switchedOff, missing: DASH_ERRORS.orcaTooOld };
+
 /** One round trip; `rateLimited` is the only failure worth a retry. */
 type Attempt<T> = Outcome<T> | { ok: false; rateLimited: true };
 
 /** What goes on the wire to Orca, and how its answer is read. */
 interface Call<T> {
-  type: "phone.dash.snapshot" | "phone.view.get";
-  view?: wire.DashViewName;
+  type: "phone.dash.snapshot" | "phone.view.get" | "phone.task.add" | "phone.task.complete";
+  /** Fields written next to `type` and `requestId`: constants, or values the wire schema already validated. */
+  params?: Record<string, string | number>;
+  /** Sentences for the two refusals whose meaning differs for a write. */
+  refusals?: Refusals;
   parse: (data: unknown) => T | undefined;
 }
 
@@ -109,11 +120,33 @@ export class OrcaDash {
     return result.ok ? { ok: true, snapshot: result.value } : result;
   }
 
+  /**
+   * Add or complete one task. Never cached or coalesced: a write is asked for
+   * once, and a retry is Orca's to recognise by `clientId`. A busy answer is
+   * reported rather than retried, so the phone decides.
+   */
+  async changeTask(op: wire.DashTaskOp): Promise<Outcome<wire.DashTask>> {
+    const started = this.now();
+    const call: Call<wire.DashTask> = {
+      type: op.action === "add" ? "phone.task.add" : "phone.task.complete",
+      params: op.action === "add" ? { title: op.title, clientId: op.clientId } : { id: op.id },
+      refusals: { denied: DASH_ERRORS.writesOff, missing: DASH_ERRORS.taskMissing },
+      parse: (data) => {
+        const parsed = z.object({ task: wire.DashTask }).safeParse(data);
+        return parsed.success ? parsed.data.task : undefined;
+      },
+    };
+    const attempt = await this.ask(call);
+    const result: Outcome<wire.DashTask> = attempt.ok || !("rateLimited" in attempt) ? attempt : { ok: false, error: DASH_ERRORS.busy };
+    this.log(`[dash] task.${op.action} ${result.ok ? "ok" : "failed"} in ${this.now() - started}ms`);
+    return result;
+  }
+
   /** One page's titles and dates, same coalescing and reuse as the snapshot. */
   view(view: wire.DashViewName): Promise<ViewResult> {
     return this.gated(`view:${view}`, {
       type: "phone.view.get",
-      view,
+      params: { view },
       parse: (data) => {
         const parsed = wire.DashView.safeParse(data);
         return parsed.success && parsed.data.view === view ? parsed.data : undefined;
@@ -175,7 +208,7 @@ export class OrcaDash {
       const timer = setTimeout(() => finish({ ok: false, error: DASH_ERRORS.timeout }), this.options.timeoutMs ?? DASH_TIMEOUT_MS);
 
       socket.on("connect", () => {
-        const message = call.view ? { type: call.type, view: call.view, requestId } : { type: call.type, requestId };
+        const message = { type: call.type, ...call.params, requestId };
         socket.write(`${JSON.stringify(message)}\n`);
       });
       socket.on("error", (error: NodeJS.ErrnoException) => {
@@ -193,7 +226,7 @@ export class OrcaDash {
         while (newline !== -1 && !settled) {
           const line = buffer.slice(0, newline);
           buffer = buffer.slice(newline + 1);
-          const answer = readLine(line, requestId, call.parse);
+          const answer = readLine(line, requestId, call.parse, call.refusals ?? READ_REFUSALS);
           if (answer) finish(answer);
           newline = buffer.indexOf("\n");
         }
@@ -203,7 +236,7 @@ export class OrcaDash {
 }
 
 /** Our answer, or undefined for a line that belongs to someone else. */
-function readLine<T>(line: string, requestId: string, parse: (data: unknown) => T | undefined): Attempt<T> | undefined {
+function readLine<T>(line: string, requestId: string, parse: (data: unknown) => T | undefined, refusals: Refusals): Attempt<T> | undefined {
   // Cheap pre-check, so broadcast lines are never parsed at all.
   if (!line.includes(requestId)) return undefined;
   if (Buffer.byteLength(line) > MAX_REPLY_BYTES) return { ok: false, error: DASH_ERRORS.unreadable };
@@ -218,8 +251,8 @@ function readLine<T>(line: string, requestId: string, parse: (data: unknown) => 
   if (reply.data.requestId !== requestId) return undefined;
   if (!reply.data.ok) {
     const code = reply.data.error?.code;
-    if (code === "TOOL_PERMISSION_DENIED") return { ok: false, error: DASH_ERRORS.switchedOff };
-    if (code === "DATA_NOT_FOUND") return { ok: false, error: DASH_ERRORS.orcaTooOld };
+    if (code === "TOOL_PERMISSION_DENIED") return { ok: false, error: refusals.denied };
+    if (code === "DATA_NOT_FOUND") return { ok: false, error: refusals.missing };
     if (reply.data.error?.retryable === true) return { ok: false, rateLimited: true };
     return { ok: false, error: DASH_ERRORS.failed };
   }

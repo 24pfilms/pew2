@@ -85,3 +85,22 @@ test("an old daemon's reply to a page request has no view, which the app can tel
   const reply = ServerMessage.parse({ t: "dash", requestId: "r", snapshot });
   expect(reply.t === "dash" && reply.view).toBeUndefined();
 });
+
+test("a task change rides the dash frame, and its reply carries the task", () => {
+  const add = { t: "dash", requestId: "r", task: { action: "add", title: "Buy milk", clientId: "c1" } } as const;
+  expect(ClientMessage.parse(add)).toEqual(add);
+  const done = { t: "dash", requestId: "r", task: { action: "complete", id: 3 } } as const;
+  expect(ClientMessage.parse(done)).toEqual(done);
+  const reply = { t: "dash", requestId: "r", task: { id: 3, title: "Buy milk", priority: "medium", status: "pending" } } as const;
+  expect(ServerMessage.parse(reply)).toEqual(reply);
+});
+
+test("a task change is trimmed, bounded, and limited to add and complete", () => {
+  const parse = (task: unknown) => ClientMessage.safeParse({ t: "dash", requestId: "r", task }).success;
+  expect(ClientMessage.parse({ t: "dash", requestId: "r", task: { action: "add", title: "  hi ", clientId: "c" } })).toMatchObject({ task: { title: "hi" } });
+  expect(parse({ action: "add", title: "   ", clientId: "c" })).toBe(false);
+  expect(parse({ action: "add", title: "x".repeat(201), clientId: "c" })).toBe(false);
+  expect(parse({ action: "add", title: "ok" })).toBe(false);
+  expect(parse({ action: "complete", id: 0 })).toBe(false);
+  expect(parse({ action: "delete", id: 1 })).toBe(false);
+});

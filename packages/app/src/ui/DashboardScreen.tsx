@@ -18,7 +18,6 @@ import {
   DASH_REFRESH_MS,
   DASH_TEXT,
   activityLabel,
-  dueLabel,
   healthDots,
   lastSeenLabel,
   money,
@@ -28,6 +27,7 @@ import {
   spendTone,
   type SpendTone,
 } from "../dashboard";
+import { DashboardTasks } from "./DashboardTasks";
 import { Glass } from "./Glass";
 import { Skeleton } from "./Skeleton";
 import { Led } from "./stage/Led";
@@ -48,11 +48,12 @@ const SPEND_COLOR: Record<SpendTone, string> = {
 interface Props {
   visible: boolean;
   fetchDash: () => Promise<wire.Dash>;
+  changeTask: (task: wire.DashTaskOp) => Promise<wire.Dash>;
   onOpenPage: (view: wire.DashViewName) => void;
   onClose: () => void;
 }
 
-function DashboardScreenView({ visible, fetchDash, onOpenPage, onClose }: Props) {
+function DashboardScreenView({ visible, fetchDash, changeTask, onOpenPage, onClose }: Props) {
   const insets = useSafeAreaInsets();
   const appActive = useAppActive();
   const [snapshot, setSnapshot] = useState<wire.DashSnapshot>();
@@ -109,7 +110,7 @@ function DashboardScreenView({ visible, fetchDash, onOpenPage, onClose }: Props)
             />
           }
         >
-          {snapshot ? <Sections snapshot={snapshot} /> : loading && <Placeholder />}
+          {snapshot ? <Sections snapshot={snapshot} changeTask={changeTask} onChanged={() => void load()} /> : loading && <Placeholder />}
           <Section title="Pages">
             {DASH_PAGES.map((page) => (
               <Pressable key={page.view} accessibilityRole="button" accessibilityLabel={`Open ${page.label}`} onPress={() => onOpenPage(page.view)} style={({ pressed }) => pressed && styles.pressed}>
@@ -123,7 +124,7 @@ function DashboardScreenView({ visible, fetchDash, onOpenPage, onClose }: Props)
   );
 }
 
-function Sections({ snapshot }: { snapshot: wire.DashSnapshot }) {
+function Sections({ snapshot, changeTask, onChanged }: { snapshot: wire.DashSnapshot; changeTask: Props["changeTask"]; onChanged: () => void }) {
   const now = Date.now();
   return (
     <>
@@ -131,9 +132,7 @@ function Sections({ snapshot }: { snapshot: wire.DashSnapshot }) {
         <Spend cost={snapshot.cost} />
         <Health health={snapshot.health} />
       </Section>
-      <Section title="Tasks">
-        <Rows view={sectionView(snapshot.tasks, DASH_TEXT.noTasks)} render={(task) => <Row key={task.id} main={task.title} side={dueLabel(task.dueDate)} />} />
-      </Section>
+      <DashboardTasks tasks={snapshot.tasks} changeTask={changeTask} onChanged={onChanged} />
       <Section title="Routines">
         <Rows
           view={sectionView(snapshot.routines, DASH_TEXT.noRoutines)}

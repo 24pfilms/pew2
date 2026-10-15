@@ -13,7 +13,7 @@
  *  - The relay treats `payload` as opaque. Under E2EE it is a ciphertext blob.
  */
 import { z } from "zod";
-import { DashSnapshot, DashViewItem, DashViewName } from "./dash.js";
+import { DashSnapshot, DashTask, DashTaskOp, DashViewItem, DashViewName } from "./dash.js";
 
 export * from "./dash.js";
 
@@ -926,6 +926,8 @@ export const DashRequest = z.object({
   t: z.literal("dash"),
   requestId: z.string(),
   view: DashViewName.optional(),
+  /** Add or complete a task. Takes the place of `view`; an older daemon drops it and answers a snapshot. */
+  task: DashTaskOp.optional(),
 });
 
 /** Daemon -> app. Answer to `dash`: a snapshot, or a sentence saying why not. */
@@ -941,6 +943,8 @@ export const Dash = z.object({
   view: DashViewName.optional(),
   items: z.array(DashViewItem).optional(),
   generatedAt: z.number().optional(),
+  /** The task an add or complete produced, as Orca now holds it. */
+  task: DashTask.optional(),
   /** Plain words for the person holding the phone. Absent on success. */
   error: z.string().optional(),
 });

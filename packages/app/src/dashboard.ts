@@ -27,6 +27,8 @@ export const DASH_TEXT = {
   noLimit: "No daily limit",
   noItems: "Nothing here.",
   pagesOldDaemon: "Update pew2 on your computer to open pages.",
+  tasksOldDaemon: "Update pew2 on your computer to change tasks.",
+  addTaskPlaceholder: "Add a task",
 } as const;
 
 /** The pages the phone can open, in the order they are listed. Names match the wire enum. */
@@ -39,6 +41,15 @@ export const DASH_PAGES: readonly { view: wire.DashViewName; label: string }[] =
   { view: "prompts", label: "Prompts" },
   { view: "facts", label: "Memory facts" },
 ];
+
+export type TaskOutcome = { kind: "done"; task: wire.DashTask } | { kind: "error"; text: string };
+
+/** What a task change came back with. An older daemon drops `task` and answers a snapshot, which changed nothing. */
+export function taskOutcome(reply: wire.Dash): TaskOutcome {
+  if (reply.task) return { kind: "done", task: reply.task };
+  if (reply.snapshot) return { kind: "error", text: DASH_TEXT.tasksOldDaemon };
+  return { kind: "error", text: reply.error ?? DASH_TEXT.noReply };
+}
 
 export type PageOutcome = { kind: "items"; items: wire.DashViewItem[]; generatedAt: number } | { kind: "error"; text: string };
 

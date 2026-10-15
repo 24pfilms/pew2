@@ -97,6 +97,17 @@ export const DashView = z.object({
   items: z.array(DashViewItem),
 });
 
+/**
+ * The only two changes the phone may ask for, both on tasks. The title limit
+ * matches Orca's `phone-bridge/writes.ts`; the `clientId` lets a retry after
+ * flaky mobile data return the first task instead of adding a second.
+ */
+export const DashTaskOp = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("add"), title: z.string().trim().min(1).max(200), clientId: z.string().min(1).max(64) }),
+  z.object({ action: z.literal("complete"), id: z.number().int().positive() }),
+]);
+
+export type DashTaskOp = z.output<typeof DashTaskOp>;
 export type DashViewName = z.output<typeof DashViewName>;
 export type DashViewItem = z.output<typeof DashViewItem>;
 export type DashView = z.output<typeof DashView>;
