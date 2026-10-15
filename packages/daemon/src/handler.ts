@@ -498,12 +498,24 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
 
       case "dash": {
         // A reply, never a session event: nothing about the PC enters the log.
-        const result = daemon.dashboard ? await daemon.dashboard.snapshot() : { ok: false as const, error: DASH_ERRORS.disabled };
-        reply(
-          result.ok
-            ? { t: "dash", requestId: message.requestId, snapshot: result.snapshot }
-            : { t: "dash", requestId: message.requestId, error: result.error },
-        );
+        const dashboard = daemon.dashboard;
+        if (!dashboard) {
+          reply({ t: "dash", requestId: message.requestId, error: DASH_ERRORS.disabled });
+        } else if (message.view) {
+          const result = await dashboard.view(message.view);
+          reply(
+            result.ok
+              ? { t: "dash", requestId: message.requestId, view: result.value.view, items: result.value.items, generatedAt: result.value.generatedAt }
+              : { t: "dash", requestId: message.requestId, error: result.error },
+          );
+        } else {
+          const result = await dashboard.snapshot();
+          reply(
+            result.ok
+              ? { t: "dash", requestId: message.requestId, snapshot: result.snapshot }
+              : { t: "dash", requestId: message.requestId, error: result.error },
+          );
+        }
         break;
       }
 

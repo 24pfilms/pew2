@@ -77,6 +77,29 @@ export const DashSnapshot = z.object({
   routines: z.array(DashRoutine).nullable(),
 });
 
+/**
+ * Page views: titles and dates only, mirroring Orca's `phone-bridge/views.ts`.
+ * The phone names a page from this fixed list; it never sends a query.
+ */
+export const DASH_VIEWS = ["projects", "notes", "calendar", "meetings", "workflows", "prompts", "facts"] as const;
+export const DashViewName = z.enum(DASH_VIEWS);
+
+export const DashViewItem = z.object({
+  id: z.number(),
+  title: z.string(),
+  detail: z.string().optional(),
+  at: z.string().optional(),
+});
+
+export const DashView = z.object({
+  view: DashViewName,
+  generatedAt: z.number(),
+  items: z.array(DashViewItem),
+});
+
+export type DashViewName = z.output<typeof DashViewName>;
+export type DashViewItem = z.output<typeof DashViewItem>;
+export type DashView = z.output<typeof DashView>;
 export type DashOverview = z.output<typeof DashOverview>;
 export type DashHealth = z.output<typeof DashHealth>;
 export type DashActivity = z.output<typeof DashActivity>;

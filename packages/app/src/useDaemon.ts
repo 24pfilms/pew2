@@ -509,7 +509,7 @@ export function useDaemon(
    * snapshot lives only as long as the screen holding it.
    */
   const fetchDash = useCallback(
-    (): Promise<wire.Dash> => {
+    (view?: wire.DashViewName): Promise<wire.Dash> => {
       const requestId = `dash:${++dashCounter.current}`;
       return new Promise((resolve) => {
         const timer = setTimeout(() => finish({ t: "dash", requestId, error: DASH_TEXT.noReply }), DASH_REPLY_TIMEOUT_MS);
@@ -519,7 +519,7 @@ export function useDaemon(
           resolve(reply);
         };
         dashReplies.current.set(requestId, finish);
-        if (!post({ t: "dash", requestId })) finish({ t: "dash", requestId, error: DASH_TEXT.offline });
+        if (!post(view ? { t: "dash", requestId, view } : { t: "dash", requestId })) finish({ t: "dash", requestId, error: DASH_TEXT.offline });
       });
     },
     [post],

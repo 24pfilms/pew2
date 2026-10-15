@@ -13,7 +13,7 @@
  *  - The relay treats `payload` as opaque. Under E2EE it is a ciphertext blob.
  */
 import { z } from "zod";
-import { DashSnapshot } from "./dash.js";
+import { DashSnapshot, DashViewItem, DashViewName } from "./dash.js";
 
 export * from "./dash.js";
 
@@ -918,12 +918,14 @@ export const Goals = z.object({
 /**
  * App -> daemon. Fetch the OrcaZeroViva dashboard snapshot.
  *
- * Carries no parameters on purpose: the daemon sends one fixed request to
- * Orca, so nothing from the phone ever reaches the PC's pipe.
+ * The only choice the phone makes is a page name from a fixed list
+ * (`view`); absent means the summary. The daemon builds the request to Orca
+ * from constants, so nothing from the phone ever reaches the PC's pipe.
  */
 export const DashRequest = z.object({
   t: z.literal("dash"),
   requestId: z.string(),
+  view: DashViewName.optional(),
 });
 
 /** Daemon -> app. Answer to `dash`: a snapshot, or a sentence saying why not. */
@@ -931,6 +933,14 @@ export const Dash = z.object({
   t: z.literal("dash"),
   requestId: z.string(),
   snapshot: DashSnapshot.optional(),
+  /**
+   * Answer to a `view` request. An older daemon ignores `view` and answers
+   * with a snapshot instead, so the app treats a reply without `view` as
+   * "this computer can't show pages yet".
+   */
+  view: DashViewName.optional(),
+  items: z.array(DashViewItem).optional(),
+  generatedAt: z.number().optional(),
   /** Plain words for the person holding the phone. Absent on success. */
   error: z.string().optional(),
 });

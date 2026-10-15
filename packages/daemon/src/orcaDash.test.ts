@@ -230,3 +230,60 @@ test("with the env var set, the announcement carries dashboard and dash answers 
   expect(await dashReply(daemon, { type: "tasks.complete", id: 1 })).toEqual([{ t: "dash", requestId: "r1", snapshot }]);
   expect(orca.lines.map((line) => JSON.parse(line).type)).toEqual(["phone.dash.snapshot"]);
 });
+
+const notesView = {
+  view: "notes",
+  generatedAt: 1_760_000_000_000,
+  items: [{ id: 4, title: "Trip plan", detail: "★ 120 words", at: "2026-10-09T10:00:00Z" }],
+} satisfies wire.DashView;
+
+test("a page view writes only the enum name, and strips unknown keys from the reply", async () => {
+  const orca = await fakeOrca((req, socket) =>
+    send(socket, answer(req.requestId, { ...notesView, secret: "x", items: [{ ...notesView.items[0], content: "private body" }] })),
+  );
+  expect(await quiet(orca.path).view("notes")).toEqual({ ok: true, value: notesView });
+  const written = JSON.parse(orca.lines[0] ?? "");
+  expect(Object.keys(written).sort()).toEqual(["requestId", "type", "view"]);
+  expect(written).toMatchObject({ type: "phone.view.get", view: "notes" });
+});
+
+test("a reply for a different page is refused", async () => {
+  const orca = await fakeOrca((req, socket) => send(socket, answer(req.requestId, { ...notesView, view: "projects" })));
+  expect(await quiet(orca.path).view("notes")).toEqual({ ok: false, error: DASH_ERRORS.unreadable });
+});
+
+test("views are cached and coalesced per page, not across pages", async () => {
+  const orca = await fakeOrca((req, socket) => send(socket, answer(req.requestId, notesView)));
+  const dash = quiet(orca.path);
+  await Promise.all([dash.view("notes"), dash.view("notes")]);
+  await dash.view("notes");
+  expect(orca.lines).toHaveLength(1);
+  await dash.view("projects");
+  expect(orca.lines).toHaveLength(2);
+});
+
+test("with the dashboard on, a dash frame with a view answers items; an unlisted name is dropped by the schema", async () => {
+  const daemon = new Daemon({ id: "t", name: "t" }, false, { PEW2_ORCA_DASHBOARD: "1" });
+  const orca = await fakeOrca((req, socket) => send(socket, answer(req.requestId, notesView)));
+  Object.assign(daemon, { dashboard: quiet(orca.path) });
+  const out: Record<string, unknown>[] = [];
+  const run = (frame: unknown) =>
+    handleMessage(JSON.stringify(frame), { daemon, reply: (m) => out.push(m as Record<string, unknown>), broadcast: () => {} });
+  await run({ t: "dash", requestId: "r1", view: "notes" });
+  expect(out).toEqual([{ t: "dash", requestId: "r1", view: "notes", items: notesView.items, generatedAt: notesView.generatedAt }]);
+  out.length = 0;
+  await run({ t: "dash", requestId: "r2", view: "settings" });
+  expect(out[0]?.t).toBe("error");
+  expect(orca.lines).toHaveLength(1);
+});
+
+test("with the env var unset, a view request says the dashboard is off", async () => {
+  const daemon = new Daemon({ id: "t", name: "t" }, false, {});
+  const out: Record<string, unknown>[] = [];
+  await handleMessage(JSON.stringify({ t: "dash", requestId: "r1", view: "notes" }), {
+    daemon,
+    reply: (m) => out.push(m as Record<string, unknown>),
+    broadcast: () => {},
+  });
+  expect(out).toEqual([{ t: "dash", requestId: "r1", error: DASH_ERRORS.disabled }]);
+});
