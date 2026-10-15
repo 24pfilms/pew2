@@ -50,6 +50,26 @@ export function imageMimeType(path: string): string | undefined {
   return MIME_BY_EXTENSION[extname(path).toLowerCase()];
 }
 
+/** Containers the phone's player handles. Anything else is declined rather than sent unplayable. */
+const VIDEO_MIME_BY_EXTENSION: Record<string, string> = {
+  ".mp4": "video/mp4",
+  ".mov": "video/quicktime",
+  ".webm": "video/webm",
+};
+
+/**
+ * Largest video sent, the same ceiling as a picture: a 7.4MB file (about 10MB
+ * on the wire) was measured crossing the relay in one message in 12-15 seconds,
+ * and nothing here splits a clip into pieces. A longer one is declined with its
+ * size, so the user knows to fetch it another way.
+ */
+export const MAX_VIDEO_BYTES = 8 * 1024 * 1024;
+
+/** The mime type for a path, or undefined when it is not a video the phone can play. */
+export function videoMimeType(path: string): string | undefined {
+  return VIDEO_MIME_BY_EXTENSION[extname(path).toLowerCase()];
+}
+
 /**
  * Turn whatever the agent wrote into an absolute path.
  *
@@ -202,6 +222,7 @@ export function historyToolImages(content: unknown): HistoryImage[] {
   );
 }
 
+/** A file read and inlined for the phone: a picture or a video. */
 export interface LoadedImage {
   dataUri: string;
   mimeType: string;
@@ -254,16 +275,47 @@ export const nodeImageFs: ImageFs = {
  * place of the picture, and "blank box, no reason" is the bug this whole path
  * exists to remove.
  */
-export async function loadImage(
-  uri: string,
-  options: { cwd: string; env?: NodeJS.ProcessEnv; fs?: ImageFs; home?: string },
-): Promise<LoadedImage> {
+export function loadImage(uri: string, options: MediaOptions): Promise<LoadedImage> {
+  return loadMedia(uri, options, IMAGE_KIND);
+}
+
+/**
+ * Read one video and inline it, or explain why not. The same containment, the
+ * same descriptor-based read; only the formats and the size ceiling differ.
+ */
+export function loadVideo(uri: string, options: MediaOptions): Promise<LoadedImage> {
+  return loadMedia(uri, options, VIDEO_KIND);
+}
+
+type MediaOptions = { cwd: string; env?: NodeJS.ProcessEnv; fs?: ImageFs; home?: string };
+
+/** What tells one kind of file the phone may be sent from another. */
+interface MediaKind {
+  mimeType: (path: string) => string | undefined;
+  maxBytes: number;
+  /** Finishes "'<uri>' is not ...". */
+  unsupported: string;
+}
+
+const IMAGE_KIND: MediaKind = {
+  mimeType: imageMimeType,
+  maxBytes: MAX_IMAGE_BYTES,
+  unsupported: "an image this app can display",
+};
+
+const VIDEO_KIND: MediaKind = {
+  mimeType: videoMimeType,
+  maxBytes: MAX_VIDEO_BYTES,
+  unsupported: "a video this app can play",
+};
+
+async function loadMedia(uri: string, options: MediaOptions, kind: MediaKind): Promise<LoadedImage> {
   const fs = options.fs ?? nodeImageFs;
   const path = toLocalPath(uri, options.cwd, options.home);
   if (!path) throw new Error(`'${uri}' is not a file on this machine`);
 
-  const mimeType = imageMimeType(path);
-  if (!mimeType) throw new Error(`'${uri}' is not an image this app can display`);
+  const mimeType = kind.mimeType(path);
+  if (!mimeType) throw new Error(`'${uri}' is not ${kind.unsupported}`);
 
   // Resolve symlinks *before* the containment check: `project/link -> /etc` is
   // otherwise inside the root by spelling alone.
@@ -308,7 +360,7 @@ export async function loadImage(
 
   try {
     if (!file.isFile()) throw new Error(`'${uri}' is not a file`);
-    if (file.size > MAX_IMAGE_BYTES) {
+    if (file.size > kind.maxBytes) {
       throw new Error(
         `'${uri}' is ${Math.round(file.size / 1024 / 1024)}MB, too large to send to the app`,
       );

@@ -8,9 +8,9 @@
  * anyone holding the pairing token can send.
  */
 import { expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { handleMessage } from "./handler.js";
 import { Daemon } from "./index.js";
 import { readKnownProjects } from "./known-projects.js";
@@ -395,4 +395,43 @@ test("reconnecting with a rotated token replaces the old one", async () => {
   await send(daemon, { t: "app.push", token: "ExponentPushToken[new]", platform: "ios" }, "phone-1");
 
   expect(daemon.pushTargets.list()).toEqual([{ token: "ExponentPushToken[new]", platform: "ios" }]);
+});
+
+test("a video is sent to the asking client from the session's project, and only from there", async () => {
+  const { daemon } = stubbed();
+  const project = mkdtempSync(join(tmpdir(), "pew2-video-project-"));
+  // Outside the session's project and outside the temp directory, which is always allowed: inside this repo.
+  const outside = resolve(import.meta.dir, "testing", "outside-every-root.mp4");
+  mkdirSync(join(project, "renders"));
+  const clip = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from("ftypmp42"), Buffer.alloc(16, 3)]);
+  writeFileSync(join(project, "renders", "clip.mp4"), clip);
+  writeFileSync(outside, clip);
+  Object.assign(daemon, { sessionCwd: () => project });
+
+  const ok = await send(
+    daemon,
+    { t: "video.fetch", requestId: "v1", sessionId: "s1", uri: "renders/clip.mp4" },
+    "device-1",
+  );
+  expect(ok).toEqual([
+    {
+      t: "video",
+      requestId: "v1",
+      uri: "renders/clip.mp4",
+      mimeType: "video/mp4",
+      dataUri: `data:video/mp4;base64,${clip.toString("base64")}`,
+    },
+  ]);
+
+  // A path outside the session's roots is answered with a reason, not a transport error.
+  let refused: any[];
+  try {
+    refused = await send(daemon, { t: "video.fetch", requestId: "v2", sessionId: "s1", uri: outside }, "device-1");
+  } finally {
+    rmSync(outside, { force: true });
+  }
+  expect(refused).toHaveLength(1);
+  expect(refused[0]).toMatchObject({ t: "video", requestId: "v2" });
+  expect(refused[0].dataUri).toBeUndefined();
+  expect(refused[0].error).toContain("outside");
 });

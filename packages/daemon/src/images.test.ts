@@ -8,8 +8,11 @@ import {
   historyImages,
   imageMimeType,
   loadImage,
+  loadVideo,
+  MAX_VIDEO_BYTES,
   nodeImageFs,
   toLocalPath,
+  videoMimeType,
 } from "./images";
 
 const PNG = Buffer.from(
@@ -210,4 +213,66 @@ test.if(!WIN)("POSIX image roots still split on ':'", () => {
 
   expect(roots).toContain("/mnt/shots");
   expect(roots).toContain("/mnt/renders");
+});
+
+// -- Video: the same file reader, a different kind of file ---------------
+
+const MP4 = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from("ftypmp42"), Buffer.alloc(32, 7)]);
+
+async function videoProject() {
+  const root = await mkdtemp(join(tmpdir(), "pew2-videos-"));
+  await mkdir(join(root, "renders"), { recursive: true });
+  await writeFile(join(root, "renders", "clip.mp4"), MP4);
+  await writeFile(join(root, "renders", "plot.png"), PNG);
+  return root;
+}
+
+test("only containers the phone can play are offered as video", () => {
+  expect(videoMimeType("a.MP4")).toBe("video/mp4");
+  expect(videoMimeType("a.mov")).toBe("video/quicktime");
+  expect(videoMimeType("a.webm")).toBe("video/webm");
+  expect(videoMimeType("a.mkv")).toBeUndefined();
+  expect(videoMimeType("a.png")).toBeUndefined();
+  // A picture is not a video, and a video is not a picture.
+  expect(imageMimeType("a.mp4")).toBeUndefined();
+});
+
+test("a video in the session's project is inlined", async () => {
+  const root = await videoProject();
+  const video = await loadVideo("renders/clip.mp4", { cwd: root, env: {} });
+  expect(video.mimeType).toBe("video/mp4");
+  expect(video.dataUri).toBe(`data:video/mp4;base64,${MP4.toString("base64")}`);
+});
+
+test("a video request does not hand over pictures, or the other way round", async () => {
+  const root = await videoProject();
+  await expect(loadVideo("renders/plot.png", { cwd: root, env: {} })).rejects.toThrow(/not a video/);
+  await expect(loadImage("renders/clip.mp4", { cwd: root, env: {} })).rejects.toThrow(/not an image/);
+});
+
+test("a video outside every allowed root is refused like a picture", async () => {
+  const root = await videoProject();
+  // Not in the project and not in the temp directory (always allowed): inside this repo.
+  const elsewhere = resolve(import.meta.dir, "testing", "outside-every-root.mp4");
+  await writeFile(elsewhere, MP4);
+  try {
+    await expect(loadVideo(elsewhere, { cwd: root, env: {} })).rejects.toThrow(/outside this session/);
+  } finally {
+    await rm(elsewhere, { force: true });
+  }
+  await expect(loadVideo("renders/missing.mp4", { cwd: root, env: {} })).rejects.toThrow(/was not found/);
+});
+
+test("a video over the ceiling says so instead of stalling the socket", async () => {
+  const root = await videoProject();
+  const over = {
+    realpath: async (path: string) => path,
+    open: async () => openStub(MAX_VIDEO_BYTES + 1),
+  };
+  await expect(loadVideo("renders/clip.mp4", { cwd: root, env: {}, fs: over })).rejects.toThrow(/too large/);
+  const atCeiling = {
+    realpath: async (path: string) => path,
+    open: async () => openStub(MAX_VIDEO_BYTES),
+  };
+  await expect(loadVideo("renders/clip.mp4", { cwd: root, env: {}, fs: atCeiling })).resolves.toBeDefined();
 });

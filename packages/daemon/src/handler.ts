@@ -13,7 +13,7 @@
  */
 import { GG_GOALS_ID, ORCA_GOALS_ENGINE_ID, type Daemon } from "./index.js";
 import { humanError } from "./errors.js";
-import { loadImage } from "./images.js";
+import { loadImage, loadVideo } from "./images.js";
 import { workspaceStatus } from "./git.js";
 import { resolveWorkspace } from "./workspace.js";
 import { suggestionRoots, discoverRepos, listDirectory } from "./workspaces.js";
@@ -322,6 +322,23 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
           // A failure is part of the answer, not a transport error: the app
           // shows the reason in place of the picture instead of a blank frame.
           reply({ t: "image", requestId, uri, error: humanError(error) });
+        }
+        break;
+      }
+
+      case "video.fetch": {
+        // Asked only when the user taps a video card. Answered exactly like a
+        // picture: to the asking client, never into the replayable log, and
+        // contained to the session's own roots.
+        const uri = message.uri;
+        const requestId = message.requestId;
+        const root =
+          (message.sessionId ? daemon.sessionCwd(message.sessionId) : undefined) ?? cwd;
+        try {
+          const video = await loadVideo(uri, { cwd: root });
+          reply({ t: "video", requestId, uri, ...video });
+        } catch (error) {
+          reply({ t: "video", requestId, uri, error: humanError(error) });
         }
         break;
       }
