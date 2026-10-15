@@ -133,7 +133,8 @@ function VideoCardView({ video }: { video: ChatVideo }) {
 
 function ReadyVideo({ name, stored, onReload }: { name: string; stored: StoredVideo; onReload: () => void }) {
   const player = useVideoPlayer(stored.uri, (p) => {
-    p.loop = false;
+    // A short clip is meant to be watched more than once: it repeats until paused.
+    p.loop = true;
     // The user tapped to watch it: start now rather than asking for a second tap.
     p.play();
   });
@@ -147,14 +148,19 @@ function ReadyVideo({ name, stored, onReload }: { name: string; stored: StoredVi
 
   return (
     <View style={styles.frame}>
-      <VideoView
-        player={player}
-        nativeControls
-        contentFit="contain"
-        allowsFullscreen
-        allowsPictureInPicture={false}
-        style={styles.video}
-      />
+      {/* Claims its own touches. A message holds a "Copy / Cancel" menu on a long
+          press, and dragging the seek bar or holding the picture counted as holding
+          the message, so the menu opened over the video. */}
+      <View onStartShouldSetResponder={() => true} onResponderTerminationRequest={() => false}>
+        <VideoView
+          player={player}
+          nativeControls
+          contentFit="contain"
+          allowsFullscreen
+          allowsPictureInPicture={false}
+          style={styles.video}
+        />
+      </View>
       <View style={styles.actions}>
         <Text style={[styles.name, styles.actionName]} numberOfLines={1}>
           {name}
