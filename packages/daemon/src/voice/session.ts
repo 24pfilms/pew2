@@ -117,6 +117,13 @@ export class LiveVoiceSession {
    * ends mid-sentence, which reads as being cut off, not hung up.
    */
   static HANGUP_DELAY_MS = 4000;
+  /**
+   * The longest `coding_status` waits for any one agent's project list. Orca says
+   * nothing while a tool runs, so a slow or broken agent (one that has to start up,
+   * or fails to) must not hold the whole call in silence: it is listed with no
+   * projects instead, and the call carries on. 12 s of silence got calls hung up.
+   */
+  static STATUS_AGENT_MS = 1500;
   private hangupTimer?: ReturnType<typeof setTimeout>;
   private timer?: ReturnType<typeof setTimeout>;
   private closing?: Promise<void>;
@@ -313,7 +320,9 @@ export class LiveVoiceSession {
         .filter((a) => a.available)
         .map(async (a) => ({
           agent: a.name,
-          projects: (await this.host.projects(a.id).catch(() => [])).slice(0, 6).map((p) => p.name),
+          projects: (await this.projectsWithin(a.id, LiveVoiceSession.STATUS_AGENT_MS))
+            .slice(0, 6)
+            .map((p) => p.name),
         })),
     );
     const view = this.target.sessionId ? this.host.session(this.target.sessionId) : undefined;
@@ -338,6 +347,20 @@ export class LiveVoiceSession {
         : "none",
       recent_projects: recent,
     };
+  }
+
+  /** An agent's projects, or none if it has not answered within `ms` or fails. */
+  private async projectsWithin(providerId: string, ms: number) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<{ name: string; path: string }[]>((resolve) => {
+      // Cancelled below, so it is not left to keep the process alive or to fire late.
+      timer = setTimeout(() => resolve([]), ms);
+    });
+    try {
+      return await Promise.race([this.host.projects(providerId).catch(() => []), late]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private matchAgent(query: string) {

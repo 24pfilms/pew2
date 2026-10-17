@@ -457,3 +457,26 @@ test("a call ends when the month's budget runs out, even inside the per-call lim
   await new Promise((resolve) => setTimeout(resolve, 1200));
   expect(socket!.of("session.close")).toHaveLength(1);
 });
+
+test("coding_status does not wait on a slow agent: it is listed without projects and the rest answer", async () => {
+  const { LiveVoiceSession } = await import("./session.js");
+  const saved = LiveVoiceSession.STATUS_AGENT_MS;
+  LiveVoiceSession.STATUS_AGENT_MS = 30;
+  try {
+    const { host, manager, socket } = await started();
+    socket!.open();
+    // One agent never answers (starting up, or broken); the other answers at once.
+    host.projects = async (providerId) =>
+      providerId === "codex" ? new Promise(() => {}) : [{ name: "pew2", path: "/src/pew2" }];
+    const session = manager.sessions()[0]!;
+    const startedAt = Date.now();
+    const status = (await session.runTool("coding_status", {})) as {
+      recent_projects: { agent: string; projects: string[] }[];
+    };
+    expect(Date.now() - startedAt).toBeLessThan(1000);
+    expect(status.recent_projects.find((entry) => entry.agent === "Codex")?.projects).toEqual([]);
+    expect(status.recent_projects.find((entry) => entry.agent === "Claude Code")?.projects).toEqual(["pew2"]);
+  } finally {
+    LiveVoiceSession.STATUS_AGENT_MS = saved;
+  }
+});
