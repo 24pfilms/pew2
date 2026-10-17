@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { stat, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -195,6 +195,22 @@ test("create failures are sentences, and the key never appears in them", async (
 });
 
 test("function calls are collected per response, run, answered, then continued", async () => {
+  // What the log says about the call: the tool and how it turned out, never the user's words.
+  const logged: string[] = [];
+  const spy = spyOn(console, "log").mockImplementation((...parts: unknown[]) => {
+    logged.push(parts.join(" "));
+  });
+  try {
+    await collectedRunAnsweredContinued();
+  } finally {
+    spy.mockRestore();
+  }
+  const line = logged.find((entry) => entry.includes("tool send_to_agent"));
+  expect(line).toMatch(/tool send_to_agent\(message,agent,project\): started agent=Claude Code project=website/);
+  expect(line).not.toContain("Fix the login test");
+});
+
+async function collectedRunAnsweredContinued() {
   const { socket, dispatched, broadcasts } = await started();
   socket!.open();
   expect(broadcasts.at(-1)).toMatchObject({ t: "voice.status", state: "ready", liveSessionId: "live_1" });
@@ -228,7 +244,7 @@ test("function calls are collected per response, run, answered, then continued",
     text: "Fix the login test",
     origin: "voice",
   });
-});
+}
 
 test("a function call still runs, once, when no completion event arrives", async () => {
   const { LiveVoiceSession } = await import("./session.js");

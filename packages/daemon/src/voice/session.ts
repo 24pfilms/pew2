@@ -256,11 +256,20 @@ export class LiveVoiceSession {
     this.pending.delete(key);
     for (const call of calls) {
       let output: unknown;
+      const started = Date.now();
+      let given = "";
       try {
-        output = await this.runTool(call.name, JSON.parse(call.arguments || "{}") as Record<string, unknown>);
+        const args = JSON.parse(call.arguments || "{}") as Record<string, unknown>;
+        given = Object.keys(args).join(",");
+        output = await this.runTool(call.name, args);
       } catch (error) {
         output = { status: "error", error: error instanceof Error ? error.message : String(error) };
       }
+      // What Orca did, never what was said: so a call that "did nothing" can be told apart from one
+      // that sent to the wrong place or failed.
+      console.log(
+        `[voice] ${this.liveSessionId} tool ${call.name}(${given}): ${toolOutcome(output)} (${Date.now() - started}ms)`,
+      );
       this.sendFrame({
         type: "response.item.create",
         event_id: this.eventId("tool"),
@@ -617,4 +626,15 @@ function replyError(replies: unknown[]): string | undefined {
     if (m?.t === "error" && typeof m.message === "string") return m.message;
   }
   return undefined;
+}
+
+/** One line saying how a tool call turned out. Names and results, never the words the user spoke. */
+function toolOutcome(output: unknown): string {
+  const result = output as { status?: unknown; error?: unknown; agent?: unknown; project?: unknown; conversation?: unknown } | null;
+  const parts = [typeof result?.status === "string" ? result.status : "ok"];
+  if (typeof result?.agent === "string") parts.push(`agent=${result.agent}`);
+  if (typeof result?.project === "string") parts.push(`project=${result.project}`);
+  if (typeof result?.conversation === "string") parts.push(`conversation=${result.conversation}`);
+  if (typeof result?.error === "string") parts.push(`error=${result.error.slice(0, 160)}`);
+  return parts.join(" ");
 }
