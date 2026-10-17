@@ -51,6 +51,8 @@ export interface RunningDaemon {
   readonly token: string;
   /** The root key, hex, as the pairing QR carries it. */
   readonly key: string;
+  /** The `HOME` it runs under, so a test can start a second daemon on the same one. */
+  readonly home: string;
   /** Everything the daemon has written to stdout and stderr so far. */
   output(): string;
   /**
@@ -62,7 +64,7 @@ export interface RunningDaemon {
    * regression found with this harness was read that way for several minutes.
    */
   died(): string | undefined;
-  /** Stop the daemon and remove its temporary home. */
+  /** Stop the daemon and remove its temporary home, if this harness made it. */
   stop(): Promise<void>;
 }
 
@@ -78,6 +80,12 @@ export interface DaemonOptions {
   secret?: string;
   /** Extra environment, for tests that need to vary the daemon's behaviour. */
   env?: Record<string, string>;
+  /**
+   * Run under an existing home instead of a fresh one — another daemon's, to
+   * prove two cannot share it. Left in place on stop: it belongs to whoever
+   * made it.
+   */
+  home?: string;
 }
 
 /**
@@ -97,7 +105,8 @@ const DEFAULT_SECRET = "pew2-test-pairing-secret-0123456789abcdef";
 export async function startDaemon(options: DaemonOptions = {}): Promise<RunningDaemon> {
   const secret = options.secret ?? DEFAULT_SECRET;
   const { token, key } = pairingFromToken(secret);
-  const home = await mkdtemp(join(tmpdir(), "pew2-e2e-"));
+  const ownsHome = options.home === undefined;
+  const home = options.home ?? (await mkdtemp(join(tmpdir(), "pew2-e2e-")));
 
   // Rebuilt rather than spread over: a developer's `PEW2_RELAY` would make the
   // test daemon dial a real relay, and `PEW2_EXPERIMENTAL` unset would hide the
@@ -198,7 +207,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<RunningD
     stopping = true;
     proc.kill();
     await proc.exited;
-    await rm(home, { recursive: true, force: true }).catch(() => {});
+    if (ownsHome) await rm(home, { recursive: true, force: true }).catch(() => {});
     throw error;
   }
 
@@ -207,6 +216,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<RunningD
       port,
       token,
       key,
+      home,
       output: () => output,
       died: () =>
         exited && !stopping
@@ -221,7 +231,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<RunningD
         // 33 of them holding 2.3GB on a developer's machine.
         proc.kill();
         await proc.exited;
-        await rm(home, { recursive: true, force: true }).catch(() => {});
+        if (ownsHome) await rm(home, { recursive: true, force: true }).catch(() => {});
       },
     };
   }

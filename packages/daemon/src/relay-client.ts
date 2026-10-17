@@ -57,9 +57,39 @@ export interface RelayClientOptions {
   heartbeatMs?: number;
   /** Injectable for tests. Defaults to {@link CONNECT_TIMEOUT_MS}. */
   connectTimeoutMs?: number;
+  /** Injectable for tests. Defaults to {@link probeRefusal}. */
+  probeRefusal?: (endpoint: string) => Promise<RelayRefusal>;
 }
 
 export type RelayStatus = "connecting" | "online" | "offline";
+
+/**
+ * What a second look at a refused upgrade found.
+ *
+ * `refused` is the relay's own answer — the status and the reason it gave.
+ * `admitted` means the refusal had already passed by the time of the second
+ * look. `error` means the second look could not get an answer at all.
+ */
+export type RelayRefusal =
+  | { kind: "refused"; status: number; reason: string }
+  | { kind: "admitted" }
+  | { kind: "error"; error: string };
+
+/**
+ * The close code a WebSocket client reports when the server answered the
+ * upgrade with something other than 101.
+ *
+ * All Bun's client says is `1002: Expected 101 status code`. The status and the
+ * body the relay sent with it — `409 a live daemon is already connected` — are
+ * read and thrown away, and they are the only part that explains anything.
+ */
+const UPGRADE_REFUSED = 1002;
+
+/** How long the second look at a refused upgrade may take. */
+const PROBE_TIMEOUT_MS = 5_000;
+
+/** Longest stretch of a refusal body that goes into the log. */
+const MAX_REASON_LENGTH = 200;
 
 /** Backoff bounds. One second is fast enough to feel instant after a blip. */
 const MIN_BACKOFF_MS = 1_000;
@@ -126,6 +156,11 @@ export class RelayClient {
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
   /** When the relay last sent anything at all — a pong counts. */
   private lastHeardAt = 0;
+  /**
+   * Bumped by every connection attempt, so a refusal probe that comes back after
+   * `stop`, `rekey` or a newer attempt knows it has nothing left to report to.
+   */
+  private generation = 0;
 
   constructor(private readonly options: RelayClientOptions) {}
 
@@ -200,6 +235,7 @@ export class RelayClient {
 
   private connect(): void {
     if (this.stopped) return;
+    this.generation++;
     this.status("connecting");
 
     let socket: WebSocket;
@@ -212,6 +248,7 @@ export class RelayClient {
       return;
     }
     this.socket = socket;
+    let opened = false;
 
     this.connectTimer = setTimeout(() => {
       if (this.socket === socket && socket.readyState !== WebSocket.OPEN) {
@@ -221,6 +258,7 @@ export class RelayClient {
     this.connectTimer.unref?.();
 
     socket.onopen = () => {
+      opened = true;
       if (this.connectTimer) clearTimeout(this.connectTimer);
       this.connectTimer = null;
       this.lastHeardAt = Date.now();
@@ -419,10 +457,30 @@ export class RelayClient {
       // daemon, a deploy, a network drop \u2014 which is what the log needs to
       // explain a disconnect after the fact.
       const code = event?.code;
-      this.scheduleRetry(
-        code ? `closed ${code}${event?.reason ? `: ${event.reason}` : ""}` : undefined,
-      );
+      const detail = code ? `closed ${code}${event?.reason ? `: ${event.reason}` : ""}` : undefined;
+      // Refused before it ever opened. The close code cannot say why, so ask
+      // the relay again and log its answer instead.
+      if (!opened && code === UPGRADE_REFUSED) {
+        void this.explainRefusal(detail);
+        return;
+      }
+      this.scheduleRetry(detail);
     };
+  }
+
+  /**
+   * Find out why the relay refused the upgrade, then retry as usual.
+   *
+   * This is what turns "closed 1002: Expected 101 status code" into "refused
+   * 409: a live daemon is already connected" — the difference between a log
+   * that says something broke and one that says another daemon has this room.
+   */
+  private async explainRefusal(fallback?: string): Promise<void> {
+    const generation = this.generation;
+    const refusal = await (this.options.probeRefusal ?? probeRefusal)(this.endpoint);
+    // Stopped, rekeyed, or already dialling again while the probe was out.
+    if (this.stopped || generation !== this.generation) return;
+    this.scheduleRetry(describeRefusal(refusal, fallback, this.options.token));
   }
 
   /**
@@ -494,6 +552,86 @@ export class RelayClient {
 
     this.retryTimer = setTimeout(() => this.connect(), delay);
     this.retryTimer.unref?.();
+  }
+}
+
+/**
+ * Ask the relay why it refused a WebSocket upgrade.
+ *
+ * The same request the WebSocket client made — same URL, same upgrade headers —
+ * sent through `fetch`, which hands back the status and body the client threw
+ * away. The relay decides admission before it looks at anything else, so a
+ * refusal it repeats here is the refusal it gave a moment ago.
+ *
+ * If the room has freed up in between, the relay admits this one instead and
+ * answers 101. That socket is dropped straight away: it is not the connection,
+ * and holding it would make the real retry the one refused as a second daemon.
+ */
+export async function probeRefusal(
+  endpoint: string,
+  timeoutMs = PROBE_TIMEOUT_MS,
+): Promise<RelayRefusal> {
+  const url = endpoint.replace(/^ws(s?):/i, "http$1:");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Connection: "Upgrade",
+        Upgrade: "websocket",
+        "Sec-WebSocket-Version": "13",
+        "Sec-WebSocket-Key": Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString(
+          "base64",
+        ),
+      },
+      signal: controller.signal,
+    });
+    if (response.status === 101) {
+      controller.abort();
+      return { kind: "admitted" };
+    }
+    const reason = (await response.text()).replace(/\s+/g, " ").trim();
+    return { kind: "refused", status: response.status, reason };
+  } catch (error) {
+    // The code or name only. A fetch error's message and `path` can carry the
+    // URL, and the URL carries the pairing token.
+    const { code, name } = error as { code?: unknown; name?: unknown };
+    const label = typeof code === "string" ? code : typeof name === "string" ? name : "unknown";
+    return { kind: "error", error: label };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * The log line for a refused upgrade.
+ *
+ * Scrubbed of the pairing token whatever the relay sent back. Nothing the relay
+ * says today contains it, but this line goes to a file on disk, and the token is
+ * the one thing that must never end up there.
+ */
+export function describeRefusal(
+  refusal: RelayRefusal,
+  fallback: string | undefined,
+  token: string,
+): string {
+  const scrub = (text: string) => (token ? text.replaceAll(token, "[pairing]") : text);
+  const closed = fallback ?? `closed ${UPGRADE_REFUSED}`;
+  switch (refusal.kind) {
+    case "refused": {
+      const reason = refusal.reason.slice(0, MAX_REASON_LENGTH);
+      // A 409 to the daemon role means one thing: another daemon is attached to
+      // this pairing and still answering, which is worth saying in so many words.
+      const hint =
+        refusal.status === 409 ? " (is another pew2 daemon running with this pairing?)" : "";
+      return scrub(
+        `relay refused the connection: ${refusal.status}${reason ? ` ${reason}` : ""}${hint}`,
+      );
+    }
+    case "admitted":
+      return scrub(`${closed} (the relay let a second attempt in, so the refusal has passed)`);
+    case "error":
+      return scrub(`${closed} (could not ask the relay why: ${refusal.error})`);
   }
 }
 
