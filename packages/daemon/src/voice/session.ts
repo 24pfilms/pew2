@@ -125,6 +125,8 @@ export class LiveVoiceSession {
   private closeFallback?: ReturnType<typeof setTimeout>;
   private finished = false;
   private sequence = 0;
+  /** How many of each kind of message OpenAI sent this call: kinds only, never content. */
+  private readonly seenKinds = new Map<string, number>();
   usageSeconds = 0;
 
   constructor(
@@ -199,6 +201,7 @@ export class LiveVoiceSession {
   }
 
   private async onEvent(event: Record<string, unknown>) {
+    this.noteKind(event);
     switch (event.type) {
       case "response.event": {
         const inner = event.event as
@@ -208,6 +211,7 @@ export class LiveVoiceSession {
         if (inner?.type === "response.output_item.done" && inner.item?.type === "function_call") {
           const { call_id, name } = inner.item;
           if (typeof call_id !== "string" || typeof name !== "string") return;
+          console.log(`[voice] ${this.liveSessionId} tool call received: ${name}`);
           const args = typeof inner.item.arguments === "string" ? inner.item.arguments : "{}";
           const list = this.pending.get(key) ?? [];
           list.push({ call_id, name, arguments: args });
@@ -583,10 +587,21 @@ export class LiveVoiceSession {
     return this.finished;
   }
 
+  /** Count a message by kind (`response.event` by what it carries), for the summary logged at the end. */
+  private noteKind(event: Record<string, unknown>) {
+    const kind = typeof event.type === "string" ? event.type : "unknown";
+    const inner =
+      kind === "response.event" ? (event.event as { type?: unknown } | undefined)?.type : undefined;
+    const label = typeof inner === "string" ? `${kind}>${inner}` : kind;
+    this.seenKinds.set(label, (this.seenKinds.get(label) ?? 0) + 1);
+  }
+
   /** Tear down once, whatever ended it. */
   finish() {
     if (this.finished) return;
     this.finished = true;
+    const kinds = [...this.seenKinds].map(([kind, count]) => `${kind}x${count}`).join(" ") || "none";
+    console.log(`[voice] ${this.liveSessionId} messages from OpenAI: ${kinds}`);
     if (this.timer) clearTimeout(this.timer);
     if (this.closeFallback) clearTimeout(this.closeFallback);
     for (const timer of this.pendingTimers.values()) clearTimeout(timer);

@@ -205,7 +205,12 @@ test("function calls are collected per response, run, answered, then continued",
   } finally {
     spy.mockRestore();
   }
-  const line = logged.find((entry) => entry.includes("tool send_to_agent"));
+  // At the end of the call: how many of each kind of message OpenAI sent, never what they said.
+  const summary = logged.find((entry) => entry.includes("messages from OpenAI"));
+  expect(summary).toContain("response.event>response.output_item.done");
+  expect(summary).not.toContain("Fix the login test");
+  expect(logged.some((entry) => entry.includes("tool call received: send_to_agent"))).toBe(true);
+  const line = logged.find((entry) => entry.includes("tool send_to_agent("));
   expect(line).toMatch(/tool send_to_agent\(message,agent,project\): started agent=Claude Code project=website/);
   expect(line).not.toContain("Fix the login test");
 });
@@ -244,6 +249,9 @@ async function collectedRunAnsweredContinued() {
     text: "Fix the login test",
     origin: "voice",
   });
+  // The call ends: the summary of what OpenAI sent is logged then.
+  socket!.emit({ type: "session.closed" });
+  await tick();
 }
 
 test("a function call still runs, once, when no completion event arrives", async () => {
