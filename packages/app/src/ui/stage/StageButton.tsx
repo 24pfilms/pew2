@@ -171,8 +171,10 @@ function StageButtonView({
           style={[
             styles.label,
             { color: kind === "danger" ? ink : disabled ? theme.color.textDim : theme.color.text },
-            lit && styles.litText,
-            lit && liveText,
+            // The glow and the colour fade belong to the dotted look; plain white text needs neither.
+            lit && !theme.stage.clearLabels && styles.litText,
+            lit && !theme.stage.clearLabels && liveText,
+            theme.stage.clearLabels && styles.clearLabel,
           ]}
         >
           {label}
@@ -209,4 +211,6 @@ const styles = StyleSheet.create({
     letterSpacing: 1.4,
     textTransform: "uppercase",
   },
+  // Same size, plain white system type (see `theme.stage.clearLabels`).
+  clearLabel: { fontFamily: undefined, fontWeight: "600", letterSpacing: theme.stage.clearSpacing },
 });

@@ -12,6 +12,7 @@ import { Text, type StyleProp, type TextStyle } from "react-native";
 import { theme } from "../../theme";
 import { withAlpha } from "../../motion";
 import { useAgentColor } from "./agentColor";
+import { ledLook } from "./ledLook";
 
 export type LedTone = "agent" | "dim" | "attention" | "plus" | "minus" | "danger" | "text";
 
@@ -38,17 +39,26 @@ const TONE: Record<Exclude<LedTone, "agent">, string> = {
 
 function LedView({ children, tone = "agent", color, size = theme.stage.ledSize, unlit = false, style, numberOfLines = 1 }: LedProps) {
   const agent = useAgentColor();
-  const ink = color ?? (tone === "agent" ? agent : TONE[tone]);
-  const lit = !unlit && tone !== "dim";
+  const clear = theme.stage.clearLabels;
+  const { ink, lit, font } = ledLook({
+    tone,
+    color,
+    agent,
+    palette: TONE,
+    text: theme.color.text,
+    unlit,
+    clear,
+  });
   return (
     <Text
       numberOfLines={numberOfLines}
       style={[
         {
-          fontFamily: theme.display.regular,
+          // The system font in the clear look; semibold, because thin small type is no better than dots.
+          ...(font === "dots" ? { fontFamily: theme.display.regular } : { fontWeight: "600" as const }),
           fontSize: size,
           lineHeight: Math.round(size * 1.3),
-          letterSpacing: theme.stage.ledSpacing,
+          letterSpacing: clear ? theme.stage.clearSpacing : theme.stage.ledSpacing,
           textTransform: "uppercase",
           color: ink,
         },

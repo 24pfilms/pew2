@@ -95,6 +95,15 @@ export const theme = {
     /** LED label type. */
     ledSize: 11,
     ledSpacing: 1.6,
+    /**
+     * Draw the small labels and button text as plain white system type at the same
+     * size, instead of glowing dot-matrix: the dots are hard to read at 11-15 px.
+     * One switch: false puts the dotted look back exactly as it was. Titles are
+     * large enough to read as dots and are not affected.
+     */
+    clearLabels: true,
+    /** Letter spacing of the clear labels: the dots needed room, plain type needs less. */
+    clearSpacing: 0.8,
     /** Glow radius on lit LED text. */
     glow: 8,
   },
