@@ -7,6 +7,7 @@ import {
   voiceOrb,
   voiceReducer,
   voiceSessionToOpen,
+  ORCA_VOICE_GAIN,
   voiceStatusLine,
   voiceUsageLine,
   type VoiceEvent,
@@ -192,5 +193,12 @@ describe("data channel events", () => {
     expect(readDataChannelEvent('{"type":"session.closed"}')).toEqual({ kind: "closed" });
     expect(readDataChannelEvent("not json")).toBeUndefined();
     expect(readDataChannelEvent('{"type":"something.else"}')).toBeUndefined();
+  });
+});
+
+describe("Orca's volume", () => {
+  test("is turned down but never silent, and never amplified past the call's own level", () => {
+    expect(ORCA_VOICE_GAIN).toBeGreaterThan(0.1);
+    expect(ORCA_VOICE_GAIN).toBeLessThan(1);
   });
 });

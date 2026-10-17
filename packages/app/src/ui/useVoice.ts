@@ -22,6 +22,7 @@ import * as PewLink from "../../modules/pew-link";
 import { PermissionsAndroid, Platform } from "react-native";
 import {
   initialVoiceState,
+  ORCA_VOICE_GAIN,
   readDataChannelEvent,
   shouldRingForTurn,
   voiceOrb,
@@ -320,6 +321,8 @@ export function useVoice(options: UseVoiceOptions): Voice {
             InCallManager.start({ media: "video", auto: true });
             current.audioStarted = true;
           }
+          // Again now that audio is flowing, in case the track existed before the gain could apply.
+          turnDownReply(pc);
           dispatch({ type: "started", now: Date.now() });
           haptics.finished();
         } else if (parsed.kind === "transcript") {
@@ -333,6 +336,8 @@ export function useVoice(options: UseVoiceOptions): Voice {
       pc.onconnectionstatechange = () => {
         if (pc.connectionState === "failed") fail(current, "The voice connection dropped.");
       };
+      // Her voice arrives as a remote track; turn it down as soon as it does.
+      pc.ontrack = () => turnDownReply(pc);
 
       try {
         const offer = await pc.createOffer({});
@@ -481,6 +486,18 @@ function stopRinger(target: Call) {
 }
 
 /** Resolve once ICE gathering completes, or after `timeoutMs` with what was gathered. */
+/** Set Orca's incoming voice to `ORCA_VOICE_GAIN`. A call with no audio yet is left alone. */
+function turnDownReply(pc: RTCPeerConnection): void {
+  try {
+    for (const receiver of pc.getReceivers()) {
+      if (receiver.track?.kind === "audio") receiver.track._setVolume(ORCA_VOICE_GAIN);
+    }
+  } catch (error) {
+    // The call goes on at its normal level; the volume buttons still work.
+    console.warn("[voice] could not turn Orca down", error);
+  }
+}
+
 function iceGathered(pc: RTCPeerConnection, timeoutMs: number): Promise<void> {
   if (pc.iceGatheringState === "complete") return Promise.resolve();
   return new Promise((resolve) => {

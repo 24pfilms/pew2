@@ -77,6 +77,14 @@ export const CAPTION_GAP_MS = 2500;
 export const MAX_CAPTIONS = 6;
 /** How long after the last assistant fragment it still counts as speaking. */
 export const SPEAKING_WINDOW_MS = 1200;
+/**
+ * How loud Orca is on the phone, as a gain on her incoming voice (1 is how the
+ * call arrives, 0 is silent). She came through too loud at 1. Loudness is heard
+ * on a log scale: halving the gain only takes off about a third of what is
+ * heard, and about 0.35 (9 dB down) is what sounds half as loud. The phone's
+ * own volume buttons still work on top of this.
+ */
+export const ORCA_VOICE_GAIN = 0.35;
 
 export const initialVoiceState: VoiceState = {
   phase: "idle",
