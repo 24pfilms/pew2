@@ -251,7 +251,11 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
         // Deliberately not awaited: a turn can run for minutes, and the client
         // is driven by streamed events rather than this reply.
         const sessionId = message.sessionId;
-        runTurn(ctx, sessionId, daemon.prompt(sessionId, message.text, attachments));
+        runTurn(
+          ctx,
+          sessionId,
+          daemon.prompt(sessionId, message.text, attachments, message.origin ? { origin: message.origin } : {}),
+        );
         break;
       }
 

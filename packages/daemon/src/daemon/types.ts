@@ -126,6 +126,8 @@ export interface QueueEntry {
   text: string;
   attachments: number;
   storing: Promise<StoredAttachment[]>;
+  /** Spoken to Orca rather than typed; kept so a queued message is still labelled when it is sent. */
+  origin?: "voice";
   /** Handed to a GG-capable agent's own queue (`_gg/queue`). */
   forwarded?: boolean;
   /** The agent's id for it, once `_gg/queue` answered. */

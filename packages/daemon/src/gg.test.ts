@@ -36,13 +36,13 @@ function daemonWithCollector() {
 
 /** An agent whose turns end only when the test says so. */
 function plantControlledSession(daemon: Daemon, sessionId: string) {
-  const turns: { text: string; attachments: any[]; finish: (error?: Error) => void }[] = [];
+  const turns: { text: string; attachments: any[]; options: any; finish: (error?: Error) => void }[] = [];
   const cancels: number[] = [];
   const handle = {
     sessionId: "agent-1",
-    prompt: (text: string, attachments: any[] = []) =>
+    prompt: (text: string, attachments: any[] = [], options: any = {}) =>
       new Promise<void>((resolve, reject) => {
-        turns.push({ text, attachments, finish: (error) => (error ? reject(error) : resolve()) });
+        turns.push({ text, attachments, options, finish: (error) => (error ? reject(error) : resolve()) });
       }),
     cancel: async () => {
       cancels.push(Date.now());
@@ -551,4 +551,55 @@ test("OrcaGoals' engine refreshing in the background updates Goals, never an age
   await send({ t: "session.resume", requestId: "r", providerId: "orcagoals", agentSessionId: "goal_1", cwd: root });
   expect(sent.filter((m) => m.t === "error" && m.code === "unsupported")).toHaveLength(2);
   expect(sent.some((m) => m.t === "session.started")).toBe(false);
+});
+
+// -- Orca's voice: words spoken to Orca are sent to the agent marked as such ----
+
+test("a prompt Orca sends carries its origin to the agent; a typed one carries none", async () => {
+  const { daemon } = daemonWithCollector();
+  const { turns } = plantControlledSession(daemon, "s1");
+
+  const spoken = daemon.prompt("s1", "go ahead and publish", [], { origin: "voice" });
+  await until(() => turns.length === 1, "spoken turn");
+  expect(turns[0]!.options).toEqual({ origin: "voice" });
+  turns[0]!.finish();
+  await spoken;
+
+  const typed = daemon.prompt("s1", "thanks");
+  await until(() => turns.length === 2, "typed turn");
+  expect(turns[1]!.options).toEqual({});
+  turns[1]!.finish();
+  await typed;
+});
+
+test("queued messages are marked voice only when every one of them was spoken", async () => {
+  const { daemon } = daemonWithCollector();
+  const { turns } = plantControlledSession(daemon, "s1");
+
+  // Busy with a first turn; two spoken messages queue behind it and go out as one turn.
+  const first = daemon.prompt("s1", "start");
+  await until(() => turns.length === 1, "first turn");
+  expect(await daemon.prompt("s1", "yes", [], { origin: "voice" })).toBe("queued");
+  expect(await daemon.prompt("s1", "publish it", [], { origin: "voice" })).toBe("queued");
+  turns[0]!.finish();
+  await until(() => turns.length === 2, "queued turn");
+  expect(turns[1]!.text).toBe("yes\n\npublish it");
+  expect(turns[1]!.options).toEqual({ origin: "voice" });
+  turns[1]!.finish();
+  await first;
+});
+
+test("a queued turn that mixes typed and spoken words is sent unmarked", async () => {
+  const { daemon } = daemonWithCollector();
+  const { turns } = plantControlledSession(daemon, "s1");
+
+  const first = daemon.prompt("s1", "start");
+  await until(() => turns.length === 1, "first turn");
+  await daemon.prompt("s1", "typed", []);
+  await daemon.prompt("s1", "spoken", [], { origin: "voice" });
+  turns[0]!.finish();
+  await until(() => turns.length === 2, "queued turn");
+  expect(turns[1]!.options).toEqual({});
+  turns[1]!.finish();
+  await first;
 });

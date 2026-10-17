@@ -764,6 +764,8 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
         : connection.agent.request("session/prompt", {
             sessionId: current.sessionId,
             prompt: promptBlocks(text, attachments, promptCapabilities),
+            // `_meta` is ACP's extension slot: an agent that does not know it ignores it.
+            ...(promptOptions.origin ? { _meta: { gg: { origin: promptOptions.origin } } } : {}),
           }),
     extRequest: <T,>(method: string, params: Record<string, unknown>) =>
       connection.agent.request<T>(method, params),

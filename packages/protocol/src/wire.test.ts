@@ -119,6 +119,7 @@ test("every message the app actually sends is accepted", () => {
     { t: "image.fetch", requestId: "u", uri: "u", sessionId: "s1" },
     { t: "video.fetch", requestId: "v", uri: "L:/renders/clip.mp4", sessionId: "s1" },
     { t: "video.fetch", requestId: "v", uri: "L:/renders/clip.mp4" },
+    { t: "session.prompt", sessionId: "s1", text: "go ahead", attachments: [], origin: "voice" },
     { t: "workspaces", requestId: "r1" },
     { t: "workspaces", requestId: "r1", path: "/Users/someone" },
     { t: "workspace.status", sessionId: "s1", providerId: "claude-code" },
@@ -189,6 +190,8 @@ test("a message missing what the daemon will use is refused", () => {
     { t: "session.permission", sessionId: "s1", requestId: "r1" },
     { t: "image.fetch", requestId: "r1" },
     { t: "video.fetch", requestId: "r1" },
+    // Only the voice assistant marks its words; a client cannot invent another origin.
+    { t: "session.prompt", sessionId: "s1", text: "hi", origin: "phone" },
     { t: "video.fetch", uri: "L:/renders/clip.mp4" },
     { t: "session.config", sessionId: "s1", configId: "model" },
   ]) {

@@ -479,6 +479,12 @@ export const Prompt = z.object({
   text: z.string(),
   /** Defaulted, so a client older than attachments still validates. */
   attachments: z.array(PromptAttachment).default([]),
+  /**
+   * Set when the words are Orca's, the voice assistant speaking for the user,
+   * rather than typed. Passed to the agent, which can then say so when it
+   * shows the chat.
+   */
+  origin: z.literal("voice").optional(),
 });
 
 /** App -> daemon. Interrupt the current turn. */

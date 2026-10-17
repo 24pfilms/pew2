@@ -218,6 +218,8 @@ export type AskAnswer =
 
 /** A GG Goals turn: a `session/prompt` with an empty prompt and `_meta.gg.goalTurn`. */
 export interface PromptOptions {
+  /** The words were spoken to Orca and sent on the user's behalf: rides in `_meta.gg.origin`. */
+  origin?: "voice";
   goalTurn?: "kickoff" | "resume";
   /** Decide a pending plan: an empty prompt with `_meta.gg.planDecision`. */
   planDecision?: {

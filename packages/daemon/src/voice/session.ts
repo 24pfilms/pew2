@@ -450,7 +450,8 @@ export class LiveVoiceSession {
       lastReply: this.watched.get(sessionId)?.lastReply,
     });
     const id = sessionId;
-    await this.host.dispatch({ t: "session.prompt", sessionId: id, text: message }, (reply) => {
+    // `origin: "voice"`: these are Orca's words for the user, and the chat says so.
+    await this.host.dispatch({ t: "session.prompt", sessionId: id, text: message, origin: "voice" }, (reply) => {
       const error = replyError([reply]);
       if (error) this.commentary(`${this.agentName(providerId)} could not take that message: ${error}`);
     });

@@ -221,7 +221,13 @@ test("function calls are collected per response, run, answered, then continued",
   expect(socket!.sent.at(-1)!.type).toBe("response.create");
   // Started a session in the matched project, then prompted it.
   expect(dispatched[0]).toMatchObject({ t: "session.start", providerId: "claude-code", cwd: "/src/website" });
-  expect(dispatched[1]).toMatchObject({ t: "session.prompt", sessionId: "s1", text: "Fix the login test" });
+  // Orca's words for the user, marked as such so the chat can say so.
+  expect(dispatched[1]).toMatchObject({
+    t: "session.prompt",
+    sessionId: "s1",
+    text: "Fix the login test",
+    origin: "voice",
+  });
 });
 
 test("a function call still runs, once, when no completion event arrives", async () => {

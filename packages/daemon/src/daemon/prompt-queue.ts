@@ -35,7 +35,7 @@ export abstract class DaemonPromptQueue extends DaemonGg {
     if (session.working) {
       if (options.goalTurn) throw new Error("GG Goals is already working on this goal.");
       if (options.planDecision) throw new Error("The agent is still working; decide the plan when it stops.");
-      this.enqueue(session, text, attachments);
+      this.enqueue(session, text, attachments, options.origin);
       return "queued";
     }
     // Use, and the start of a turn. `working` is cleared in the `finally` below
@@ -54,7 +54,7 @@ export abstract class DaemonPromptQueue extends DaemonGg {
       // every screen referring to a file the agent never got.
       let next:
         | {
-            texts: { text: string; stored: StoredAttachment[] }[];
+            texts: { text: string; stored: StoredAttachment[]; origin?: "voice" }[];
             goalTurn?: PromptOptions["goalTurn"];
             planDecision?: PromptOptions["planDecision"];
           }
@@ -62,7 +62,11 @@ export abstract class DaemonPromptQueue extends DaemonGg {
           ? { texts: [], goalTurn: options.goalTurn }
           : options.planDecision
           ? { texts: [], planDecision: options.planDecision }
-          : { texts: [{ text, stored: await storeAttachments(sessionId, attachments) }] };
+          : {
+              texts: [
+                { text, stored: await storeAttachments(sessionId, attachments), origin: options.origin },
+              ],
+            };
       try {
         while (next) {
           // A new turn, so the previous turn's closing words must not be what
@@ -88,9 +92,13 @@ export abstract class DaemonPromptQueue extends DaemonGg {
           } else if (next.planDecision) {
             await session.handle!.prompt("", [], { planDecision: next.planDecision });
           } else {
+            // Labelled as voice only when every message in the turn was; a turn that
+            // mixes typed and spoken words is sent unmarked.
+            const origin = next.texts.every((entry) => entry.origin === "voice") ? "voice" : undefined;
             await session.handle!.prompt(
               next.texts.map((entry) => entry.text).join("\n\n"),
               next.texts.flatMap((entry) => entry.stored),
+              origin ? { origin } : {},
             );
           }
           // The turn is over: whatever it was blocked on died with it.
@@ -152,14 +160,19 @@ export abstract class DaemonPromptQueue extends DaemonGg {
    * check and the queue and strand a message on an idle session. The files are
    * written behind it and awaited when the message is sent.
    */
-  protected enqueue(session: ActiveSession, text: string, attachments: wire.PromptAttachment[]) {
+  protected enqueue(
+    session: ActiveSession,
+    text: string,
+    attachments: wire.PromptAttachment[],
+    origin?: "voice",
+  ) {
     const limit = attachmentLimitError(attachments);
     if (limit) throw new Error(limit);
     const id = `q_${++this.queueCounter}`;
     const storing = storeAttachments(session.log.sessionId, attachments, undefined, `${id}-`);
     // Awaited when sent; this only stops an early failure being "unhandled".
     storing.catch(() => {});
-    const entry: QueueEntry = { id, text, attachments: attachments.length, storing };
+    const entry: QueueEntry = { id, text, attachments: attachments.length, storing, ...(origin ? { origin } : {}) };
     (session.queue ??= []).push(entry);
     session.lastUsedAt = Date.now();
     this.broadcastQueue(session);
@@ -272,8 +285,10 @@ export abstract class DaemonPromptQueue extends DaemonGg {
     // Bounded: only the latest turn-end notification can still name these.
     session.sentForwarded = entries.filter((entry) => entry.forwarded);
     this.broadcastQueue(session);
-    const texts: { text: string; stored: StoredAttachment[] }[] = [];
-    for (const entry of entries) texts.push({ text: entry.text, stored: await entry.storing });
+    const texts: { text: string; stored: StoredAttachment[]; origin?: "voice" }[] = [];
+    for (const entry of entries) {
+      texts.push({ text: entry.text, stored: await entry.storing, origin: entry.origin });
+    }
     return { texts };
   }
 
