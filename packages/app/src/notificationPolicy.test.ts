@@ -1,5 +1,5 @@
 import { describe, expect, it, test } from "bun:test";
-import { duplicatePush, finishedNotice, summarise } from "./notificationPolicy";
+import { callbackNotice, duplicatePush, finishedNotice, summarise } from "./notificationPolicy";
 
 const base = {
   sessionId: "s1",
@@ -8,7 +8,25 @@ const base = {
   foreground: true,
 };
 
+describe("callbackNotice", () => {
+  const call = { sessionId: "s1", title: "Voiceprompter · OrcaCoder", body: "Launcher tested." };
+
+  it("is quiet only when that conversation is open on screen", () => {
+    expect(callbackNotice(call, true, "s1")).toBeNull();
+  });
+
+  it("shows for another conversation on screen, and always off screen", () => {
+    expect(callbackNotice(call, true, "other")).toEqual({ ...call });
+    expect(callbackNotice(call, false, "s1")).toEqual({ ...call });
+    expect(callbackNotice(call, false, undefined)).toEqual({ ...call });
+  });
+});
+
 describe("finishedNotice", () => {
+  it("leaves a turn that kept a promised call to that call, so it rings once", () => {
+    expect(finishedNotice({ ...base, foreground: false, callbackId: "cb_1" })).toBeNull();
+  });
+
   it("stays quiet for the conversation already on screen", () => {
     expect(finishedNotice({ ...base, activeSessionId: "s1" })).toBeNull();
   });

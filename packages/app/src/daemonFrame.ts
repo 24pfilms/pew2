@@ -145,6 +145,16 @@ export function handleSealedFrame(refs: FrameRefs, connection: FrameConnection, 
     update.content?.type === "text" && typeof update.content.text === "string";
   if (!batchable) resetStream();
 
+  // A call the daemon owes the user, resent until this phone confirms it. Rung
+  // here as the frame arrives (effects wait for the screen), then confirmed so
+  // the daemon stops resending. The receiver rings each id once.
+  if (message.t === "callback.due" && typeof message.id === "string") {
+    console.log(`[pew2] call owed: ${message.id} (${message.outcome})`);
+    optionsRef.current.onCallbackDue?.(message, sessionRef.current);
+    ws.send(JSON.stringify(secure.seal({ t: "callback.ack", id: message.id })));
+    return;
+  }
+
   // GG extension frames: state beside the transcript, never in it.
   if (message.t === "session.queue" && typeof message.sessionId === "string") {
     setGg((g) => applyQueue(g, message));
@@ -461,6 +471,7 @@ export function handleSealedFrame(refs: FrameRefs, connection: FrameConnection, 
       agentName: providersRef.current.find((p) => p.id === providerId)?.name,
       lastText,
       activeSessionId: sessionRef.current,
+      ...(typeof message.callbackId === "string" ? { callbackId: message.callbackId } : {}),
     };
     // Announced from here, not from the effect that drains `completedTurns`:
     // with the screen off React defers effects until the app comes back, so a

@@ -33,6 +33,12 @@ export interface FinishedTurn {
    * the only route, so it must still be raised.
    */
   pushExpected?: boolean;
+  /**
+   * The turn kept a promised call-back. That call is announced by its own
+   * message (`callback.due`, resent until confirmed), so announcing the turn
+   * here as well would ring the phone twice for one job.
+   */
+  callbackId?: string;
 }
 
 export interface Notice {
@@ -81,6 +87,7 @@ export { summarise };
  * token at all — gets the local banner, which is exactly what it is for.
  */
 export function finishedNotice(turn: FinishedTurn): Notice | null {
+  if (turn.callbackId) return null;
   const watching = turn.foreground && turn.activeSessionId === turn.sessionId;
   if (watching) return null;
   if (!turn.foreground && turn.pushExpected) return null;
@@ -95,6 +102,26 @@ export function finishedNotice(turn: FinishedTurn): Notice | null {
     body: noticeBody(turn.lastText),
     sessionId: turn.sessionId,
   };
+}
+
+/** A call the daemon owes the user (`callback.due`), as far as the banner needs it. */
+export interface OwedCall {
+  sessionId: string;
+  title: string;
+  body: string;
+}
+
+/**
+ * The notice for a promised call-back, or null when nothing needs showing.
+ *
+ * Stricter than `finishedNotice` about staying quiet in only one case: the
+ * conversation is open on screen, so its ending is right there. A push never
+ * stands in for it: the daemon resends this until the phone confirms, and that
+ * guarantee is the whole point.
+ */
+export function callbackNotice(call: OwedCall, foreground: boolean, activeSessionId: string | undefined): Notice | null {
+  if (foreground && activeSessionId === call.sessionId) return null;
+  return { title: call.title, body: call.body, sessionId: call.sessionId };
 }
 
 /** One notification that has arrived while the app is awake. */

@@ -110,7 +110,7 @@ export function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => 
   const [pendingVoice, setPendingVoice] = useState<string | undefined>(undefined);
   const offerIncomingRef = useRef<((turn: IncomingCall) => void) | undefined>(undefined);
 
-  const { choice, setChoice, pushExpected, announceTurn, announceApproval } = useTurnBanners(
+  const { choice, setChoice, pushExpected, announceTurn, announceApproval, announceCallback } = useTurnBanners(
     linkSettingsRef,
     voiceOfferRef,
   );
@@ -132,6 +132,7 @@ export function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => 
       }
     },
     onApprovalNeeded: announceApproval,
+    onCallbackDue: announceCallback,
     // Supplied from here because obtaining it calls into the Expo SDK, which
     // `useDaemon` deliberately stays clear of. What it buys: the daemon can
     // announce a finished turn even after iOS has suspended this app and taken

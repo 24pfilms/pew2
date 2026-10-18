@@ -38,7 +38,7 @@ export function parseLinkSettings(raw: string | null): LinkSettings {
   }
 }
 
-export type RingReason = "approval" | "finished";
+export type RingReason = "approval" | "finished" | "callback";
 
 /**
  * Ring, or leave it to the ordinary notification?
@@ -46,9 +46,14 @@ export type RingReason = "approval" | "finished";
  * Only when pew2 is not the thing on screen: someone looking at the app needs
  * no ringtone to know an agent is done, and a phone that rings while you hold it
  * would be the fastest way to get the feature switched off.
+ *
+ * A promised call-back ignores the switches: the user asked for that call in so
+ * many words ("call me when it's done"), and a setting chosen weeks ago for
+ * every finished turn is not a reason to break that promise.
  */
 export function shouldRing(reason: RingReason, foreground: boolean, settings: LinkSettings): boolean {
   if (foreground) return false;
+  if (reason === "callback") return true;
   return reason === "approval" ? settings.ringApprovals : settings.ringFinished;
 }
 

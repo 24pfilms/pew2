@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { AppState } from "react-native";
 import type { TurnFinished } from "../useDaemon";
-import { finishedNotice } from "../notificationPolicy";
+import { callbackNotice, finishedNotice, type OwedCall } from "../notificationPolicy";
 import { notify, onNotificationChoice, type NotificationChoice } from "./notifier";
 import { firstSighting, shouldRing, type LinkSettings } from "../linkSettings";
 import * as PewLink from "../../modules/pew-link";
@@ -104,5 +104,32 @@ export function useTurnBanners(linkSettings: RefObject<LinkSettings>, voiceOffer
     [linkSettings, voiceOffered],
   );
 
-  return { choice, setChoice, pushExpected, announceTurn, announceApproval };
+  /**
+   * A call the user asked for ("call me when it's done"), owed by the daemon.
+   * Rings with the app off screen whatever the ring switches say; each call
+   * rings once however often the daemon resends it.
+   */
+  const seenCallbacks = useRef(new Set<string>());
+  const announceCallback = useCallback(
+    (call: OwedCall & { id: string }, activeSessionId: string | undefined) => {
+      if (!firstSighting(seenCallbacks.current, call.id)) return;
+      const notice = callbackNotice(call, foreground.current, activeSessionId);
+      if (!notice) return;
+      if (shouldRing("callback", foreground.current, linkSettings.current)) {
+        const rang = PewLink.ring(
+          `callback:${call.id}`,
+          notice.title,
+          notice.body,
+          notice.sessionId,
+          voiceOffered.current,
+        );
+        if (rang) return;
+        console.warn("[pew2] could not ring for a promised call; notifying instead");
+      }
+      void notify(notice);
+    },
+    [linkSettings, voiceOffered],
+  );
+
+  return { choice, setChoice, pushExpected, announceTurn, announceApproval, announceCallback };
 }

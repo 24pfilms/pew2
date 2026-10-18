@@ -33,6 +33,12 @@ test("off screen, each reason follows its own switch", () => {
   expect(shouldRing("finished", false, settings)).toBe(false);
 });
 
+test("a call the user asked for rings off screen whatever the switches say, never on screen", () => {
+  const allOff = { background: true, ringApprovals: false, ringFinished: false };
+  expect(shouldRing("callback", false, allOff)).toBe(true);
+  expect(shouldRing("callback", true, DEFAULT_LINK_SETTINGS)).toBe(false);
+});
+
 test("an approval rings once, not again when a reconnect restates it", () => {
   const seen = new Set<string>();
   expect(firstSighting(seen, "r1")).toBe(true);

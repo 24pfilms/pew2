@@ -306,6 +306,8 @@ export interface TurnFinished {
   lastText?: string;
   /** The conversation on screen when this landed, if any. */
   activeSessionId?: string;
+  /** The turn kept a promised call-back: `callback.due` announces it, not this. */
+  callbackId?: string;
 }
 
 /**
@@ -334,6 +336,15 @@ export interface DaemonOptions {
    * handler rather than an effect so it still fires with the screen off.
    */
   onApprovalNeeded?: (approval: { requestId: string; sessionId: string; title: string }) => void;
+  /**
+   * The daemon owes the user a call: a job they asked (by voice) to be called
+   * about has ended, stopped, or gone quiet.
+   *
+   * The daemon resends it until this phone confirms, so the receiver dedupes by
+   * `id`. Called from the message handler, like the two above, so it still
+   * rings with the screen off; the confirmation is sent right after it returns.
+   */
+  onCallbackDue?: (call: VoiceWire.CallbackDue, activeSessionId: string | undefined) => void;
   /**
    * This device's push address, asked for once the channel is up.
    *
