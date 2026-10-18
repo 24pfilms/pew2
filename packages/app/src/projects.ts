@@ -156,13 +156,30 @@ export interface ProjectTabItem {
 }
 
 /**
- * The project strip's data, "All" first. Built once per project list so the
- * windowed strip gets stable items, and only the chips on screen mount: an
- * agent with hundreds of projects (GG Coder) mounted every one on switch.
+ * Which project chips the drawer shows: "All", then the newest `limit`
+ * projects, plus how many more are folded behind "+N more".
+ *
+ * The chips wrap onto lines rather than scrolling sideways: a sideways strip
+ * lived under the drawer's swipe-to-close, which took the swipe, so most
+ * projects could not be reached at all. Wrapping means a cap, and the cap is on
+ * the newest, since those are the ones in use. The chosen project is always
+ * shown — a filter whose chip is hidden reads as no filter — taking the place
+ * of the oldest shown. `expanded` shows every one.
  */
-export function projectTabItems(projects: readonly Project[]): ProjectTabItem[] {
-  return [
-    { label: "All", a11y: "All projects" },
-    ...projects.map((project) => ({ path: project.path, label: project.name, a11y: `Project ${project.name}` })),
-  ];
+export function projectChips(
+  projects: readonly Project[],
+  selectedPath: string | undefined,
+  limit: number,
+  expanded = false,
+): { items: ProjectTabItem[]; hidden: number } {
+  let shown = expanded ? [...projects] : projects.slice(0, limit);
+  const selected = selectedPath ? projects.find((project) => project.path === selectedPath) : undefined;
+  if (selected && !shown.includes(selected)) shown = [...shown.slice(0, Math.max(0, limit - 1)), selected];
+  return {
+    items: [
+      { label: "All", a11y: "All projects" },
+      ...shown.map((project) => ({ path: project.path, label: project.name, a11y: `Project ${project.name}` })),
+    ],
+    hidden: projects.length - shown.length,
+  };
 }

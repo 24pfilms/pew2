@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-  projectTabItems,
+  projectChips,
   projectLabel,
   projectsForProvider,
   projectSourceKey,
@@ -150,23 +150,43 @@ test("the memo key separates fields so neighbouring values cannot merge", () => 
   expect(projectSourceKey(a, "claude-code")).not.toBe(projectSourceKey(b, "claude-code"));
 });
 
-describe("projectTabItems", () => {
-  test("All first, then one chip per project in order", () => {
-    const items = projectTabItems([
-      { path: "/a/one", name: "one" },
-      { path: "/b/two", name: "two" },
-    ]);
+describe("projectChips", () => {
+  const many = Array.from({ length: 30 }, (_, i) => ({ path: `/p/${i}`, name: `p${i}` }));
+
+  test("All first, then one chip per project in order, nothing hidden when they fit", () => {
+    const { items, hidden } = projectChips(
+      [
+        { path: "/a/one", name: "one" },
+        { path: "/b/two", name: "two" },
+      ],
+      undefined,
+      9,
+    );
     expect(items).toEqual([
       { label: "All", a11y: "All projects" },
       { path: "/a/one", label: "one", a11y: "Project one" },
       { path: "/b/two", label: "two", a11y: "Project two" },
     ]);
+    expect(hidden).toBe(0);
   });
 
-  test("scales linearly to a GG Coder-sized list", () => {
-    const projects = Array.from({ length: 1000 }, (_, i) => ({ path: `/p/${i}`, name: `p${i}` }));
-    const items = projectTabItems(projects);
-    expect(items).toHaveLength(1001);
-    expect(items[1000]?.path).toBe("/p/999");
+  test("the newest up to the limit, and the rest counted behind '+N more'", () => {
+    const { items, hidden } = projectChips(many, undefined, 9);
+    expect(items.map((item) => item.label)).toEqual(["All", "p0", "p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8"]);
+    expect(hidden).toBe(21);
+  });
+
+  test("the chosen project is always on show, even when it is an old one", () => {
+    const { items, hidden } = projectChips(many, "/p/25", 9);
+    expect(items).toHaveLength(10);
+    expect(items.at(-1)?.path).toBe("/p/25");
+    expect(items.some((item) => item.path === "/p/8")).toBe(false);
+    expect(hidden).toBe(21);
+  });
+
+  test("expanded shows every project", () => {
+    const { items, hidden } = projectChips(many, "/p/25", 9, true);
+    expect(items).toHaveLength(31);
+    expect(hidden).toBe(0);
   });
 });

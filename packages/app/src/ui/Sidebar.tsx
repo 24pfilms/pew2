@@ -21,7 +21,7 @@ import { orderProvidersByRecency } from "../providerRecency";
 import type { DrawerRow } from "../historyMetadata";
 import { recentSessionsForProvider } from "../sessionHistory";
 import { useAppActive } from "./useAppActive";
-import { projectTabItems, sessionsInProject, type Project } from "../projects";
+import { projectChips, sessionsInProject, type Project } from "../projects";
 import type { Provider, Status } from "../useDaemon";
 import { lastActiveLabel, sortGoals, type GoalSummary } from "../ggState";
 import { goalDrawerRow } from "../goalsAgent";
@@ -130,6 +130,8 @@ const RAIL_BUTTON = 52;
 const COLUMN_PAD = theme.space(4);
 /** Fixed status column so every row's title starts at the same x. */
 const STATUS_COL = 16;
+/** Project chips: below the touch size, with hit slop making up the rest. */
+const CHIP_HEIGHT = 32;
 
 type Mark = "live" | "attention" | "unread" | undefined;
 
@@ -140,7 +142,12 @@ function rowMark(row: Pick<DrawerRow, "busy" | "unread"> & { permission?: unknow
   return undefined;
 }
 
-/** "4m", "2h", "3d": the right-hand time, short so the title keeps the room. */
+/** A chat's project as people say it: the daemon's stamp, else its folder's name. */
+function rowProject(row: Pick<DrawerRow, "folder" | "cwd">): string | undefined {
+  return row.folder ?? row.cwd?.split(/[\\/]/).filter(Boolean).pop();
+}
+
+/** "4m", "2h", "3d": the time under the title, short so the project keeps the room. */
 function shortWhen(ms?: number): string {
   if (!ms) return "";
   const label = lastActiveLabel(ms);
@@ -151,6 +158,11 @@ interface SessionRowProps {
   session: Pick<DrawerRow, "id" | "title" | "busy" | "unread"> & Partial<DrawerRow>;
   /** Spoken detail when the row is not a chat (a goal's status · when). */
   meta?: string;
+  /**
+   * The project, under the title, when the list mixes projects ("All"). With
+   * one project chosen the heading names it and every row would repeat it.
+   */
+  project?: string;
   onLongPress?: (id: string) => void;
   index: number;
   active: boolean;
@@ -167,7 +179,7 @@ interface SessionRowProps {
  */
 const RAIL_SLEEP = [0, 5, 8, 3, 7, 2, 9, 4, 6, 1] as const;
 
-const SessionRow = memo(function SessionRow({ session, index, active, reduceMotion, paused, onOpen, meta, onLongPress }: SessionRowProps) {
+const SessionRow = memo(function SessionRow({ session, index, active, reduceMotion, paused, onOpen, meta, project, onLongPress }: SessionRowProps) {
   // Only rows that mount while the drawer is open cascade, captured at mount:
   // the list remounts behind a shut drawer when the daemon answers late, and a
   // cascade replayed on every open is the glitch this avoids.
@@ -181,20 +193,27 @@ const SessionRow = memo(function SessionRow({ session, index, active, reduceMoti
       {index > 0 && <DashedRule />}
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={[session.title, status, meta ?? (when ? `${when} ago` : undefined)].filter(Boolean).join(", ")}
+        accessibilityLabel={[session.title, project, status, meta ?? (when ? `${when} ago` : undefined)].filter(Boolean).join(", ")}
         accessibilityState={{ selected: active }}
         onPress={() => onOpen(session.id)}
         onLongPress={onLongPress ? () => onLongPress(session.id) : undefined}
         style={({ pressed }) => [styles.row, active && { backgroundColor: withAlpha(agent, 0.1) }, pressed && styles.pressed]}
       >
-        {/* The title starts on the column's rail, under "Latest chats"; the
-            status marker sits at the right edge beside the time, so a marked
-            row never indents. */}
-        <Text style={[styles.rowTitle, active && { color: agent }]} numberOfLines={1}>
-          {session.title}
-        </Text>
+        {/* Title on two lines, then where and when on a small line under it:
+            one line cut a title to "As we had done with Orc…", and nothing
+            said which project a row belonged to. The status marker sits at
+            the right edge, so a marked row never indents. */}
+        <View style={styles.rowText}>
+          <Text style={[styles.rowTitle, active && { color: agent }]} numberOfLines={2}>
+            {session.title}
+          </Text>
+          {project || when ? (
+            <Text style={styles.rowMeta} numberOfLines={1}>
+              {[project, when].filter(Boolean).join(" · ")}
+            </Text>
+          ) : null}
+        </View>
         {mark ? <View style={styles.statusCol}><Pixel kind={mark} paused={paused} /></View> : null}
-        {when ? <Text style={styles.rowWhen} numberOfLines={1}>{when}</Text> : null}
       </Pressable>
     </Dissolve>
   );
@@ -349,6 +368,7 @@ const ProjectTab = memo(function ProjectTab({ path, label, a11y, selected, onSel
       accessibilityRole="button"
       accessibilityLabel={a11y}
       accessibilityState={{ selected }}
+      hitSlop={touchSlop(theme.space(1))}
       onPress={() => {
         if (selected) return;
         haptics.select();
@@ -360,6 +380,27 @@ const ProjectTab = memo(function ProjectTab({ path, label, a11y, selected, onSel
     </Pressable>
   );
 });
+
+/** "+12 more" / "Show fewer": a chip that changes how many projects show, not which. */
+function MoreChip({ label, a11y, onPress }: { label: string; a11y: string; onPress: () => void }) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={a11y}
+      hitSlop={touchSlop(theme.space(1))}
+      onPress={() => {
+        haptics.tap();
+        onPress();
+      }}
+      style={({ pressed }) => [styles.tab, styles.moreTab, pressed && styles.pressed]}
+    >
+      <Text style={[styles.tabText, styles.moreText]} numberOfLines={1}>{label}</Text>
+    </Pressable>
+  );
+}
+
+/** Projects shown before "+N more": the newest, on two or three wrapped lines. */
+const VISIBLE_PROJECTS = 9;
 
 function SidebarView({
   open,
@@ -410,7 +451,20 @@ function SidebarView({
   }, [sessions]);
 
   const selectedProject = useMemo(() => projects.find((project) => project.path === selectedProjectPath), [projects, selectedProjectPath]);
-  const tabItems = useMemo(() => projectTabItems(projects), [projects]);
+  // Every project, opened from "+N more"; folded again on another agent or a pick.
+  const [allProjects, setAllProjects] = useState(false);
+  useEffect(() => setAllProjects(false), [activeProviderId]);
+  const chips = useMemo(
+    () => projectChips(projects, selectedProjectPath, VISIBLE_PROJECTS, allProjects),
+    [projects, selectedProjectPath, allProjects],
+  );
+  const pickProject = useCallback(
+    (path?: string) => {
+      setAllProjects(false);
+      onSelectProject(path);
+    },
+    [onSelectProject, setAllProjects],
+  );
   // Narrowed before the recent-work cap, or a project's older conversations
   // would be cut away by a window they were never in.
   const visible = useMemo(
@@ -517,37 +571,44 @@ function SidebarView({
             <GoalsSection goals={goals} activeSessionId={activeSessionId} reduceMotion={reduceMotion} paused={rowsStill} />
           ) : (
             <>
-              {/* Horizontal tabs instead of a dropdown: the row scrolls, so many
-                  projects still fit, and the choice is visible without a tap. */}
+              {/* Wrapped chips, never a sideways strip: a strip lives under the
+                  drawer's swipe-to-close, which took the swipe, so projects past
+                  the edge could not be reached. The newest show; "+N more"
+                  opens the rest in a capped area that scrolls up and down. */}
               {projects.length > 0 && (
-<FlatList
-                  // Windowed: GG Coder can hold hundreds of projects, and
-                  // mounting every dashed pill at once made switching to it
-                  // visibly slower than to any other agent.
+                <ScrollView
                   key={activeProviderId ?? "all-providers"}
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  style={styles.tabScroller}
-                  contentContainerStyle={styles.tabs}
-                  data={tabItems}
-                  extraData={selectedProject?.path}
-                  keyExtractor={(item) => item.path ?? ALL_TAB}
-                  initialNumToRender={8}
-                  maxToRenderPerBatch={8}
-                  windowSize={5}
-                  renderItem={({ item }) => (
+                  style={[styles.chipArea, allProjects && styles.chipAreaOpen]}
+                  contentContainerStyle={styles.chips}
+                  scrollEnabled={allProjects}
+                  showsVerticalScrollIndicator={allProjects}
+                >
+                  {chips.items.map((item) => (
                     <ProjectTab
+                      key={item.path ?? ALL_TAB}
                       path={item.path}
                       label={item.label}
                       a11y={item.a11y}
                       selected={item.path === selectedProject?.path}
-                      onSelect={onSelectProject}
+                      onSelect={pickProject}
+                    />
+                  ))}
+                  {chips.hidden > 0 && (
+                    <MoreChip
+                      label={`+${chips.hidden} more`}
+                      a11y={`Show all ${projects.length} projects`}
+                      onPress={() => setAllProjects(true)}
                     />
                   )}
-                />
+                  {allProjects && (
+                    <MoreChip label="Show fewer" a11y="Show only recent projects" onPress={() => setAllProjects(false)} />
+                  )}
+                </ScrollView>
               )}
 
-              <ListHead label="Latest chats">
+              {/* Names the project when one is chosen, so "am I in the right
+                  place?" is answered before reading a single row. */}
+              <ListHead label={selectedProject ? `${selectedProject.name} chats` : "Latest chats"}>
                 {/* Always here, like New goal for GG Goals. With a project tab
                     chosen it opens there; on All it opens where this agent
                     last worked (the composer names the project, and it can be
@@ -600,6 +661,7 @@ function SidebarView({
                 renderItem={({ item: session, index }) => (
                   <SessionRow
                     session={session}
+                    project={selectedProject ? undefined : rowProject(session)}
                     index={index}
                     active={session.id === activeSessionId}
                     reduceMotion={reduceMotion}
@@ -673,16 +735,28 @@ const styles = StyleSheet.create({
   headTop: { flexDirection: "row", alignItems: "center", gap: theme.space(2) },
   agentName: { flex: 1, minWidth: 0, fontFamily: theme.display.regular, fontSize: theme.font.title, letterSpacing: 0.5 },
 
-  tabScroller: { flexGrow: 0, marginTop: theme.space(4) },
-  tabs: { paddingHorizontal: COLUMN_PAD, gap: theme.space(2), alignItems: "center" },
+  chipArea: { flexGrow: 0, marginTop: theme.space(3) },
+  // Every project open: capped so the chat list keeps most of the screen, and
+  // scrolled up and down — the one direction the drawer's swipe leaves alone.
+  chipAreaOpen: { maxHeight: Dimensions.get("window").height * 0.4 },
+  chips: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    paddingHorizontal: COLUMN_PAD,
+    gap: theme.space(1.5),
+    alignItems: "center",
+  },
+  // Compact so two or three lines hold the projects in use, at large text sizes too.
   tab: {
     ...dashedOutline,
     borderRadius: theme.radius.pill,
-    minHeight: theme.size.chip,
-    paddingHorizontal: theme.space(3),
+    minHeight: CHIP_HEIGHT,
+    paddingHorizontal: theme.space(2.5),
     justifyContent: "center",
   },
   tabText: { color: theme.color.textDim, fontSize: theme.font.small },
+  moreTab: { borderStyle: "solid", borderColor: theme.color.textDim },
+  moreText: { color: theme.color.text },
 
   listHead: {
     flexDirection: "row",
@@ -711,8 +785,9 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.sm,
   },
   statusCol: { width: STATUS_COL, alignItems: "center", justifyContent: "center" },
-  rowTitle: { flex: 1, color: theme.color.text, fontSize: theme.font.body, lineHeight: theme.line.body },
-  rowWhen: { color: theme.color.textDim, fontSize: theme.font.tiny },
+  rowText: { flex: 1, minWidth: 0, gap: 2 },
+  rowTitle: { color: theme.color.text, fontSize: theme.font.body, lineHeight: theme.line.body },
+  rowMeta: { color: theme.color.textDim, fontSize: theme.font.tiny },
   empty: {
     color: theme.color.textDim,
     fontSize: theme.font.small,
