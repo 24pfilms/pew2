@@ -39,6 +39,14 @@ export interface VoiceHost {
    * a call started about it is the user answering that ring.
    */
   answeredCallback(sessionId: string): { outcome: string; title: string; body: string } | undefined;
+  /**
+   * The project's most recently active stored conversation, if it has one: where
+   * work named for a project goes, so it lands in the chat the user has open on
+   * the desktop rather than in a new one beside it.
+   */
+  latestConversation(providerId: string, cwd: string): Promise<{ agentSessionId: string; title?: string } | undefined>;
+  /** A conversation already open here for that agent conversation, so it is not opened twice. */
+  openConversation(providerId: string, agentSessionId: string): string | undefined;
   /** Run a client frame through the shared handler, collecting what it sent. */
   dispatch(
     frame: Record<string, unknown>,
@@ -63,6 +71,13 @@ export function daemonHost(daemon: Daemon, env: NodeJS.ProcessEnv): VoiceHost {
     session: (sessionId) => daemon.sessionView(sessionId),
     lastExchange: (sessionId) => daemon.lastExchange(sessionId),
     answeredCallback: (sessionId) => daemon.callbacks.takeRung(sessionId),
+    latestConversation: async (providerId, cwd) => {
+      const newest = (await daemon.sessionsForProject(providerId, cwd))
+        .slice()
+        .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))[0];
+      return newest ? { agentSessionId: newest.sessionId, ...(newest.title ? { title: newest.title } : {}) } : undefined;
+    },
+    openConversation: (providerId, agentSessionId) => daemon.openSessionFor(providerId, agentSessionId),
     dispatch: async (frame, onReply) => {
       const broadcasts: unknown[] = [];
       const replies: unknown[] = [];

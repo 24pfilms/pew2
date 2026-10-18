@@ -153,6 +153,14 @@ export class Daemon extends DaemonConnectSession {
     }
   }
 
+  /** The live session already holding this agent conversation, if one is open. */
+  openSessionFor(providerId: string, agentSessionId: string): string | undefined {
+    for (const [sessionId, session] of this.sessions) {
+      if (session.providerId === providerId && session.agentSessionId === agentSessionId) return sessionId;
+    }
+    return undefined;
+  }
+
   /** Whether a conversation is mid-turn and when its agent last did anything. */
   jobState(sessionId: string): JobState | undefined {
     const session = this.sessions.get(sessionId);

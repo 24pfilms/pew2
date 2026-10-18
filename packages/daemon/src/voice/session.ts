@@ -463,17 +463,22 @@ export class LiveVoiceSession {
     }
     cwd ??= await this.host.lastWorkspace(providerId);
 
-    const continuing =
-      args.new_conversation !== true &&
-      !agentChanged &&
-      !projectChanged &&
-      this.target.sessionId !== undefined;
+    const fresh = args.new_conversation === true;
+    const continuing = !fresh && !agentChanged && !projectChanged && this.target.sessionId !== undefined;
+    // Another project (or no conversation yet): that project's latest chat, not
+    // a new one beside it. A new chat every time scattered voice work across
+    // half a dozen stubs the desktop was not showing (2026-10-18: five in an
+    // hour), so the chat open there never saw any of it.
+    const latest =
+      !continuing && !fresh && cwd
+        ? await this.host.latestConversation(providerId, cwd).catch(() => undefined)
+        : undefined;
     const agent = this.agentName(providerId);
     const project = cwd ? basename(cwd) : undefined;
 
     // Not awaited: opening an agent takes seconds and its turn minutes. The
     // voice model is told the outcome by commentary when there is one.
-    void this.deliver(message, providerId, cwd, continuing).catch((error) => {
+    void this.deliver(message, providerId, cwd, continuing, latest?.agentSessionId).catch((error) => {
       const reason = error instanceof Error ? error.message : String(error);
       this.status("error", { providerId, folder: project, detail: reason });
       this.commentary(`The message to ${agent} could not be sent: ${reason}`);
@@ -482,27 +487,36 @@ export class LiveVoiceSession {
       status: "started",
       agent,
       project,
-      conversation: continuing ? "continuing the current conversation" : "new conversation",
+      conversation: continuing
+        ? "continuing the current conversation"
+        : latest
+          ? `continuing the latest conversation in ${project ?? "that project"}${latest.title ? ` ("${latest.title}")` : ""}`
+          : "new conversation",
       note: "The agent is working in the background. You will be told when it finishes or needs approval.",
     };
   }
 
-  private async deliver(message: string, providerId: string, cwd: string | undefined, continuing: boolean) {
+  /**
+   * @param latest The project's latest stored conversation, to continue when
+   *   not continuing the current one: reused if it is already open here (one
+   *   conversation must not be opened twice), reopened otherwise.
+   */
+  private async deliver(
+    message: string,
+    providerId: string,
+    cwd: string | undefined,
+    continuing: boolean,
+    latest?: string,
+  ) {
     let sessionId: string | undefined;
     if (continuing && this.target.sessionId && this.host.session(this.target.sessionId)) {
       sessionId = this.target.sessionId;
     } else if (continuing && this.target.agentSessionId) {
       // The conversation's agent was reaped or the daemon restarted: reopen it
       // rather than silently starting a fresh one.
-      const agentSessionId = this.target.agentSessionId;
-      const { broadcasts, replies } = await this.host.dispatch({
-        t: "session.resume",
-        providerId,
-        agentSessionId,
-        ...(cwd && { cwd }),
-      });
-      sessionId = startedId(broadcasts, (m) => m.agentSessionId === agentSessionId);
-      if (!sessionId) throw new Error(replyError(replies) ?? "the conversation could not be reopened");
+      sessionId = await this.reopen(providerId, this.target.agentSessionId, cwd);
+    } else if (latest) {
+      sessionId = this.host.openConversation(providerId, latest) ?? (await this.reopen(providerId, latest, cwd));
     }
     if (!sessionId) {
       const requestId = `voice:${this.liveSessionId}:${++this.sequence}`;
@@ -535,6 +549,19 @@ export class LiveVoiceSession {
       const error = replyError([reply]);
       if (error) this.commentary(`${this.agentName(providerId)} could not take that message: ${error}`);
     });
+  }
+
+  /** Open a stored conversation through the shared handler; its live session id. */
+  private async reopen(providerId: string, agentSessionId: string, cwd: string | undefined) {
+    const { broadcasts, replies } = await this.host.dispatch({
+      t: "session.resume",
+      providerId,
+      agentSessionId,
+      ...(cwd && { cwd }),
+    });
+    const sessionId = startedId(broadcasts, (m) => m.agentSessionId === agentSessionId);
+    if (!sessionId) throw new Error(replyError(replies) ?? "the conversation could not be reopened");
+    return sessionId;
   }
 
   private toolRead() {

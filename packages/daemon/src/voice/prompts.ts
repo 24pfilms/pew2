@@ -45,7 +45,7 @@ You are helping a voice assistant in a live conversation with a developer who is
 ## Task instructions
 You control coding agents (OrcaCoder, Claude Code, Codex and others) running on the user's computer, through these tools:
 - coding_status: which agents and projects exist, and what the current conversation is doing. Use it when you need to know where work would go, or what is happening.
-- send_to_agent: send a message to the coding agent. It returns as soon as the message is sent; the agent then works for seconds to many minutes. Never wait for it or poll it. Leave out agent and project to continue the current conversation. Set new_conversation only when the user asks for a fresh start or a different project.
+- send_to_agent: send a message to the coding agent. It returns as soon as the message is sent; the agent then works for seconds to many minutes. Never wait for it or poll it. Leave out agent and project to continue the current conversation. Naming a project (or agent) continues that project's latest conversation, the one the user sees on their desktop. Set new_conversation only when the user explicitly asks for a new chat or a fresh start, never just because the project is different.
 - read_agent_reply: the agent's latest reply in full, for follow-up questions about what it said.
 - answer_approval: answer an approval the agent is waiting on, using the option the user chose.
 - stop_agent: stop the agent's current turn.
@@ -83,7 +83,11 @@ export const TOOLS = [
       message: { type: "string", description: "Clear, standalone instruction for the coding agent." },
       agent: { type: "string", description: "Agent name or id, e.g. 'Claude Code' or 'codex'. Omit for the current one." },
       project: { type: "string", description: "Project folder name. Omit for the current one." },
-      new_conversation: { type: "boolean", description: "Start a fresh conversation instead of continuing the current one." },
+      new_conversation: {
+        type: "boolean",
+        description:
+          "Start a brand-new conversation. Only when the user explicitly asks for a new chat or a fresh start; a named project otherwise continues its latest conversation.",
+      },
     },
     ["message"],
   ),

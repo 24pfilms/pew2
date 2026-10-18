@@ -57,6 +57,8 @@ function fakeHost(env: NodeJS.ProcessEnv) {
   const answered: string[] = [];
   /** Call-backs that just rang, by conversation; taken once, like the ledger. */
   const rung = new Map<string, { outcome: string; title: string; body: string }>();
+  /** Each project's latest stored conversation, by project path. */
+  const stored = new Map<string, { agentSessionId: string; title?: string }>();
   let n = 0;
   const host: VoiceHost = {
     env,
@@ -77,6 +79,10 @@ function fakeHost(env: NodeJS.ProcessEnv) {
       rung.delete(id);
       return call;
     },
+    latestConversation: async (_providerId, cwd) => stored.get(cwd),
+    openConversation: (providerId, agentSessionId) =>
+      [...sessions.values()].find((s) => s.providerId === providerId && s.agentSessionId === agentSessionId)
+        ?.sessionId,
     dispatch: async (frame) => {
       dispatched.push(frame);
       const out: unknown[] = [];
@@ -91,6 +97,19 @@ function fakeHost(env: NodeJS.ProcessEnv) {
         });
         out.push({ t: "session.started", sessionId, requestId: frame.requestId });
       }
+      if (frame.t === "session.resume") {
+        const sessionId = `s${++n}`;
+        const agentSessionId = String(frame.agentSessionId);
+        sessions.set(sessionId, {
+          sessionId,
+          providerId: String(frame.providerId),
+          cwd: String(frame.cwd),
+          agentSessionId,
+          working: false,
+          permissions: [],
+        });
+        out.push({ t: "session.started", sessionId, agentSessionId });
+      }
       return { broadcasts: out, replies: [] };
     },
     answerPermission: (_s, requestId, optionId) => {
@@ -99,7 +118,7 @@ function fakeHost(env: NodeJS.ProcessEnv) {
     },
     broadcast: (message) => broadcasts.push(message as Record<string, unknown>),
   };
-  return { host, sessions, dispatched, broadcasts, answered, rung };
+  return { host, sessions, dispatched, broadcasts, answered, rung, stored };
 }
 
 async function started(
@@ -268,6 +287,59 @@ async function collectedRunAnsweredContinued() {
   socket!.emit({ type: "session.closed" });
   await tick();
 }
+
+test("naming a project continues its latest chat, the one on the desktop, not a new one", async () => {
+  const { manager, socket, dispatched, stored } = await started();
+  stored.set("/src/website", { agentSessionId: "agent-web-7", title: "Login fixes" });
+  socket!.open();
+  const session = manager.sessions()[0]!;
+  const result = (await session.runTool("send_to_agent", { message: "Fix the login test", project: "website" })) as {
+    conversation: string;
+  };
+  await tick();
+  expect(result.conversation).toBe('continuing the latest conversation in website ("Login fixes")');
+  expect(dispatched[0]).toMatchObject({ t: "session.resume", agentSessionId: "agent-web-7", cwd: "/src/website" });
+  expect(dispatched.some((frame) => frame.t === "session.start")).toBe(false);
+  expect(dispatched.at(-1)).toMatchObject({ t: "session.prompt", text: "Fix the login test", origin: "voice" });
+
+  // Again, in the same call: the same chat, now continued, and not reopened.
+  await session.runTool("send_to_agent", { message: "And the signup test", project: "website" });
+  await tick();
+  expect(dispatched.filter((frame) => frame.t === "session.resume")).toHaveLength(1);
+  const prompts = dispatched.filter((frame) => frame.t === "session.prompt");
+  expect(prompts.map((frame) => frame.sessionId)).toEqual(["s1", "s1"]);
+});
+
+test("a chat already open here is used as it is, never opened a second time", async () => {
+  const { manager, socket, dispatched, stored, sessions } = await started();
+  stored.set("/src/website", { agentSessionId: "agent-web-7" });
+  sessions.set("live-web", {
+    sessionId: "live-web",
+    providerId: "claude-code",
+    cwd: "/src/website",
+    agentSessionId: "agent-web-7",
+    working: false,
+    permissions: [],
+  });
+  socket!.open();
+  await manager.sessions()[0]!.runTool("send_to_agent", { message: "Fix it", project: "website" });
+  await tick();
+  expect(dispatched.map((frame) => frame.t)).toEqual(["session.prompt"]);
+  expect(dispatched[0]).toMatchObject({ sessionId: "live-web" });
+});
+
+test("a new chat only when asked for one", async () => {
+  const { manager, socket, dispatched, stored } = await started();
+  stored.set("/src/website", { agentSessionId: "agent-web-7" });
+  socket!.open();
+  await manager.sessions()[0]!.runTool("send_to_agent", {
+    message: "Start over",
+    project: "website",
+    new_conversation: true,
+  });
+  await tick();
+  expect(dispatched[0]).toMatchObject({ t: "session.start", cwd: "/src/website" });
+});
 
 test("a function call still runs, once, when no completion event arrives", async () => {
   const { LiveVoiceSession } = await import("./session.js");
