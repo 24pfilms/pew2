@@ -119,20 +119,17 @@ export function useTurnBanners(
   const announceCallback = useCallback(
     (call: OwedCall & { id: string }, activeSessionId: string | undefined) => {
       if (!firstSighting(seenCallbacks.current, call.id)) return;
-      const notice = callbackNotice(call, foreground.current, activeSessionId);
-      if (!notice) return;
+      // Rung whether or not pew2 is on screen: it was promised. Only a call
+      // with Orca stands in for it, and then a banner is left behind instead.
       if (shouldRing("callback", foreground.current, linkSettings.current, onCall.current())) {
-        const rang = PewLink.ring(
-          `callback:${call.id}`,
-          notice.title,
-          notice.body,
-          notice.sessionId,
-          voiceOffered.current,
-        );
+        const rang = PewLink.ring(`callback:${call.id}`, call.title, call.body, call.sessionId, voiceOffered.current);
         if (rang) return;
         console.warn("[pew2] could not ring for a promised call; notifying instead");
+        void notify({ title: call.title, body: call.body, sessionId: call.sessionId });
+        return;
       }
-      void notify(notice);
+      const notice = callbackNotice(call, foreground.current, activeSessionId);
+      if (notice) void notify(notice);
     },
     [linkSettings, voiceOffered, onCall],
   );

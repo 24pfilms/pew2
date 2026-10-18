@@ -47,9 +47,10 @@ export type RingReason = "approval" | "finished" | "callback";
  * no ringtone to know an agent is done, and a phone that rings while you hold it
  * would be the fastest way to get the feature switched off.
  *
- * A promised call-back ignores the switches: the user asked for that call in so
- * many words ("call me when it's done"), and a setting chosen weeks ago for
- * every finished turn is not a reason to break that promise.
+ * A promised call-back ignores both: the user asked for that call in so many
+ * words ("call me when it's done"), so it rings with pew2 on screen too — a job
+ * that ends seconds after the hang-up finds the app still open in their hand —
+ * and a switch chosen weeks ago for every finished turn does not cancel it.
  *
  * Never during a call with Orca, screen locked or not: she tells the user
  * herself, and a ring screen over the call is silent anyway (the call holds
@@ -61,8 +62,9 @@ export function shouldRing(
   settings: LinkSettings,
   onCall = false,
 ): boolean {
-  if (foreground || onCall) return false;
+  if (onCall) return false;
   if (reason === "callback") return true;
+  if (foreground) return false;
   return reason === "approval" ? settings.ringApprovals : settings.ringFinished;
 }
 
