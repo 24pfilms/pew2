@@ -95,7 +95,7 @@ export class VoiceManager {
       const oldest = this.live.values().next().value;
       if (!oldest) break;
       this.live.delete(oldest.liveSessionId);
-      void oldest.close();
+      void oldest.close("a newer call");
     }
 
     const openedAt = Date.now();
@@ -133,7 +133,7 @@ export class VoiceManager {
   }
 
   async stop(liveSessionId: string): Promise<void> {
-    await this.live.get(liveSessionId)?.close();
+    await this.live.get(liveSessionId)?.close("the phone (hang-up pressed)");
   }
 
   observe(observation: VoiceObservation) {
@@ -141,7 +141,7 @@ export class VoiceManager {
   }
 
   closeAll() {
-    for (const session of [...this.live.values()]) void session.close();
+    for (const session of [...this.live.values()]) void session.close("pew2 shutting down");
   }
 
   /** Where coding work goes until the user says otherwise. */

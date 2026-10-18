@@ -357,6 +357,34 @@ test("voice.stop sends session.close and cleans up on session.closed", async () 
   expect(broadcasts.at(-1)).toMatchObject({ state: "closed", liveSessionId: "live_1" });
 });
 
+test("the log says what was said, line by line, and who ended the call", async () => {
+  const logged: string[] = [];
+  const original = console.log;
+  console.log = (...parts: unknown[]) => logged.push(parts.join(" "));
+  try {
+    const { manager, socket } = await started();
+    socket!.open();
+    for (const delta of ["Ask OrcaCoder to ", "test it, ", "call me back."]) {
+      socket!.emit({ type: "session.input_transcript.delta", delta });
+    }
+    socket!.emit({ type: "session.output_transcript.delta", delta: "Sending that to " });
+    socket!.emit({ type: "session.output_transcript.delta", delta: "OrcaCoder now." });
+    const stopping = manager.stop("live_1");
+    socket!.emit({ type: "session.closed" });
+    await stopping;
+  } finally {
+    console.log = original;
+  }
+  const voice = logged.filter((line) => line.startsWith("[voice] live_1 "));
+  expect(voice).toContain('[voice] live_1 you: "Ask OrcaCoder to test it, call me back."');
+  expect(voice).toContain('[voice] live_1 orca: "Sending that to OrcaCoder now."');
+  expect(voice).toContain("[voice] live_1 ended by the phone (hang-up pressed)");
+  // In the order they were said.
+  expect(voice.findIndex((line) => line.includes(" you: "))).toBeLessThan(
+    voice.findIndex((line) => line.includes(" orca: ")),
+  );
+});
+
 test("the maximum duration closes the session", async () => {
   const env = home({ OPENAI_API_KEY: KEY });
   await mkdir(env.PEW2_HOME!, { recursive: true });

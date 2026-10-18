@@ -124,6 +124,8 @@ export class LiveVoiceSession {
    * projects instead, and the call carries on. 12 s of silence got calls hung up.
    */
   static STATUS_AGENT_MS = 1500;
+  /** Longest spoken line written to the log. */
+  static LINE_LOG_MAX = 400;
   private hangupTimer?: ReturnType<typeof setTimeout>;
   private timer?: ReturnType<typeof setTimeout>;
   private closing?: Promise<void>;
@@ -132,8 +134,18 @@ export class LiveVoiceSession {
   private closeFallback?: ReturnType<typeof setTimeout>;
   private finished = false;
   private sequence = 0;
-  /** How many of each kind of message OpenAI sent this call: kinds only, never content. */
+  /** How many of each kind of message OpenAI sent this call. */
   private readonly seenKinds = new Map<string, number>();
+  /**
+   * The line being said right now, written to the log when the other side
+   * speaks, a tool runs, or the call ends. A call that "did nothing" was
+   * undiagnosable from kinds and counts alone: whether Orca misheard, asked
+   * a question, or promised work she never sent only shows in the words.
+   * Local log only; never sent anywhere.
+   */
+  private line?: { speaker: "you" | "orca"; text: string };
+  /** What ended the call, when this side ended it; otherwise OpenAI or the connection did. */
+  private endedBy?: string;
   usageSeconds = 0;
 
   constructor(
@@ -173,7 +185,7 @@ export class LiveVoiceSession {
     };
     socket.onerror = () => {};
     socket.onclose = () => this.finish();
-    this.timer = setTimeout(() => void this.close(), this.options.maxMs);
+    this.timer = setTimeout(() => void this.close("the call time limit"), this.options.maxMs);
     this.timer.unref?.();
   }
 
@@ -218,6 +230,7 @@ export class LiveVoiceSession {
         if (inner?.type === "response.output_item.done" && inner.item?.type === "function_call") {
           const { call_id, name } = inner.item;
           if (typeof call_id !== "string" || typeof name !== "string") return;
+          this.flushLine();
           console.log(`[voice] ${this.liveSessionId} tool call received: ${name}`);
           const args = typeof inner.item.arguments === "string" ? inner.item.arguments : "{}";
           const list = this.pending.get(key) ?? [];
@@ -249,6 +262,12 @@ export class LiveVoiceSession {
         return;
       }
       case "session.started":
+        return;
+      case "session.input_transcript.delta":
+      case "session.output_transcript.delta":
+        if (typeof event.delta === "string") {
+          this.hear(event.type === "session.input_transcript.delta" ? "you" : "orca", event.delta);
+        }
         return;
       case "session.closed":
         console.log(`[voice] ${this.liveSessionId} closed after ${this.usageSeconds}s`);
@@ -303,7 +322,7 @@ export class LiveVoiceSession {
       case "answer_approval":
         return this.toolAnswer(typeof args.option === "string" ? args.option : "");
       case "hang_up":
-        this.hangupTimer ??= setTimeout(() => void this.close(), LiveVoiceSession.HANGUP_DELAY_MS);
+        this.hangupTimer ??= setTimeout(() => void this.close("Orca (hang_up)"), LiveVoiceSession.HANGUP_DELAY_MS);
         this.hangupTimer.unref?.();
         return { status: "closing", note: "The call will end in a few seconds. Say a short goodbye now." };
       case "stop_agent":
@@ -585,9 +604,15 @@ export class LiveVoiceSession {
 
   // ------------------------------------------------------------- closing
 
-  /** Ask OpenAI to end the session, and wait briefly for it to confirm. */
-  close(): Promise<void> {
+  /**
+   * Ask OpenAI to end the session, and wait briefly for it to confirm.
+   *
+   * @param by What is ending it, for the log line: a call that ends without
+   *   the work being sent reads very differently if the user hung up.
+   */
+  close(by = "pew2"): Promise<void> {
     if (this.finished) return Promise.resolve();
+    this.endedBy ??= by;
     this.closing ??= new Promise<void>((resolve) => {
       if (!this.socket || this.socket.readyState !== 1) {
         this.finish();
@@ -619,10 +644,28 @@ export class LiveVoiceSession {
     this.seenKinds.set(label, (this.seenKinds.get(label) ?? 0) + 1);
   }
 
+  /** A fragment of what was said; a change of speaker writes the last line out. */
+  private hear(speaker: "you" | "orca", delta: string) {
+    if (this.line && this.line.speaker !== speaker) this.flushLine();
+    this.line ??= { speaker, text: "" };
+    this.line.text += delta;
+  }
+
+  private flushLine() {
+    const line = this.line;
+    this.line = undefined;
+    const text = line?.text.replace(/\s+/g, " ").trim();
+    if (!line || !text) return;
+    const clipped = text.length > LiveVoiceSession.LINE_LOG_MAX ? `${text.slice(0, LiveVoiceSession.LINE_LOG_MAX)}…` : text;
+    console.log(`[voice] ${this.liveSessionId} ${line.speaker}: "${clipped}"`);
+  }
+
   /** Tear down once, whatever ended it. */
   finish() {
     if (this.finished) return;
     this.finished = true;
+    this.flushLine();
+    console.log(`[voice] ${this.liveSessionId} ended by ${this.endedBy ?? "OpenAI or the connection"}`);
     const kinds = [...this.seenKinds].map(([kind, count]) => `${kind}x${count}`).join(" ") || "none";
     console.log(`[voice] ${this.liveSessionId} messages from OpenAI: ${kinds}`);
     if (this.timer) clearTimeout(this.timer);
