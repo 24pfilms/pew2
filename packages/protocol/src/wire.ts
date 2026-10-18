@@ -706,6 +706,42 @@ export const SessionIdle = z.object({
   providerId: z.string().optional(),
   /** Last segment of the session's cwd: the project as people say it. */
   folder: z.string().optional(),
+  /**
+   * Set when this turn kept a promise to call the user back. The call itself
+   * travels as `callback.due`, which is resent until the phone confirms it;
+   * this only stops the same turn ringing twice.
+   */
+  callbackId: z.string().optional(),
+});
+
+/**
+ * Daemon -> app. Call the user: a job they asked to be called about has ended,
+ * stopped, or gone quiet.
+ *
+ * Unlike `session.idle`, which is said once and lost if the phone is not
+ * listening at that moment, this is held by the daemon and resent — on every
+ * `hello` and on a timer — until the phone answers with `callback.ack`. That is
+ * the difference between "usually rings" and "rings": the relay drops for a
+ * minute or two at a time, and a job finishing inside that window used to end
+ * in silence.
+ */
+export const CallbackDue = z.object({
+  t: z.literal("callback.due"),
+  /** Stable across resends, so the phone rings once however often it hears it. */
+  id: z.string(),
+  sessionId: z.string(),
+  /** Finished; ended with an error; or quiet long enough to look stuck. */
+  outcome: z.enum(["done", "failed", "stalled"]),
+  title: z.string(),
+  body: z.string(),
+  providerId: z.string().optional(),
+  folder: z.string().optional(),
+});
+
+/** App -> daemon. The phone has rung (or shown) a `callback.due`; stop resending it. */
+export const CallbackAck = z.object({
+  t: z.literal("callback.ack"),
+  id: z.string(),
 });
 
 /**
@@ -1334,6 +1370,7 @@ export const ClientMessage = z.discriminatedUnion("t", [
   VoiceStart,
   VoiceStop,
   DashRequest,
+  CallbackAck,
 ]);
 
 export const ServerMessage = z.discriminatedUnion("t", [
@@ -1345,6 +1382,7 @@ export const ServerMessage = z.discriminatedUnion("t", [
   ProviderSessions,
   SessionEvent,
   SessionIdle,
+  CallbackDue,
   Replay,
   ImageData,
   VideoData,
@@ -1413,6 +1451,8 @@ export type Workspace = z.output<typeof Workspace>;
 export type SessionEvent = z.output<typeof SessionEvent>;
 export type Replay = z.output<typeof Replay>;
 export type SessionIdle = z.output<typeof SessionIdle>;
+export type CallbackDue = z.output<typeof CallbackDue>;
+export type CallbackAck = z.output<typeof CallbackAck>;
 export type PushRegister = z.output<typeof PushRegister>;
 export type DeviceJoined = z.output<typeof DeviceJoined>;
 export type VoiceStart = z.output<typeof VoiceStart>;

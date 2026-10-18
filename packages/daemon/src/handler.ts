@@ -140,6 +140,9 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
             deviceId: message.deviceId ?? "a device",
             at: Date.now(),
           });
+          // Calls owed to the user, restated to the device that just arrived:
+          // it may have been away for the moment one fell due.
+          for (const due of daemon.callbacks.pending()) reply(due);
         }
         break;
 
@@ -251,6 +254,11 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
         // Deliberately not awaited: a turn can run for minutes, and the client
         // is driven by streamed events rather than this reply.
         const sessionId = message.sessionId;
+        // A job handed over by voice is one the user walked away from expecting
+        // a call: hold that as a promise until the phone confirms it rang.
+        if (message.origin === "voice") {
+          daemon.callbacks.promise(sessionId, { ...daemon.sessionOrigin(sessionId), ...daemon.sessionNotice(sessionId) });
+        }
         runTurn(
           ctx,
           sessionId,
@@ -280,6 +288,11 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
 
       case "session.cancel": {
         await daemon.cancel(message.sessionId);
+        break;
+      }
+
+      case "callback.ack": {
+        daemon.callbacks.ack(message.id);
         break;
       }
 
@@ -610,12 +623,19 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
  */
 function runTurn(ctx: HandlerContext, sessionId: string, turn: Promise<unknown>) {
   const { daemon, reply, broadcast } = ctx;
-  const idle = () => {
+  const idle = (error?: unknown) => {
+    // A promised call-back is kept first, so the call (which is resent until
+    // confirmed) leads and the idle below can say it is handled.
+    const callbackId = daemon.callbacks.settle(
+      sessionId,
+      error === undefined ? { ok: true } : { ok: false, error: humanError(error) },
+      { ...daemon.sessionOrigin(sessionId), ...daemon.sessionNotice(sessionId) },
+    );
     // Tell every client the turn is over, so they can stop showing a working
     // indicator. Broadcast, not reply: other devices watching this session
     // need it too. Carries the project and agent so a client can announce a
     // session it is not showing.
-    broadcast({ t: "session.idle", sessionId, ...daemon.sessionOrigin(sessionId) });
+    broadcast({ t: "session.idle", sessionId, ...daemon.sessionOrigin(sessionId), ...(callbackId ? { callbackId } : {}) });
     // And again, out of band, to phones whose sockets are asleep. Sent
     // unconditionally: whether an app is really watching is only knowable on
     // the device, which applies the same rule to its local banner. Not
@@ -633,7 +653,7 @@ function runTurn(ctx: HandlerContext, sessionId: string, turn: Promise<unknown>)
     },
     (error) => {
       reply(errorMessage("prompt_failed", error));
-      idle();
+      idle(error ?? "the agent failed without saying why");
     },
   );
 }

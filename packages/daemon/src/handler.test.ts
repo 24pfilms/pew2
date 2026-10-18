@@ -435,3 +435,75 @@ test("a video is sent to the asking client from the session's project, and only 
   expect(refused[0].dataUri).toBeUndefined();
   expect(refused[0].error).toContain("outside");
 });
+
+/**
+ * A prompt whose turn the test ends by hand, and everything the daemon said:
+ * replies, broadcasts, and what it sent on its own (the owed calls).
+ */
+async function promptedTurn(origin?: "voice") {
+  const { daemon } = stubbed();
+  let end!: { done: () => void; fail: (error: Error) => void };
+  const turn = new Promise<"ran">((resolve, reject) => {
+    end = { done: () => resolve("ran"), fail: reject };
+  });
+  Object.assign(daemon, { prompt: () => turn });
+  const out: any[] = [];
+  daemon.attach((m) => out.push(m));
+  // Straight into `out`, not through `send`: the idle is broadcast after the
+  // turn ends, long after `send` has returned what it collected.
+  await handleMessage(
+    JSON.stringify({ t: "session.prompt", sessionId: "s1", text: "test the launcher", ...(origin ? { origin } : {}) }),
+    { daemon, reply: (m) => out.push(m), broadcast: (m) => out.push(m), cwd: "/Users/someone/default" },
+  );
+  return {
+    daemon,
+    out,
+    finish: async (error?: Error) => {
+      if (error) end.fail(error);
+      else end.done();
+      await turn.catch(() => {});
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      daemon.closeAll();
+    },
+  };
+}
+
+test("a job sent by voice ends in a call that names itself on the idle, so it rings once", async () => {
+  const { out, finish } = await promptedTurn("voice");
+  await finish();
+
+  const due = out.find((m) => m.t === "callback.due");
+  const idle = out.find((m) => m.t === "session.idle");
+  expect(due).toMatchObject({ sessionId: "s1", outcome: "done" });
+  expect(idle).toMatchObject({ sessionId: "s1", callbackId: due.id });
+  // The call leads: it is the one that is resent until the phone confirms.
+  expect(out.indexOf(due)).toBeLessThan(out.indexOf(idle));
+});
+
+test("a voice job that dies is called about as stopped, and a confirmed call is not owed again", async () => {
+  const { daemon, out, finish } = await promptedTurn("voice");
+  await finish(new Error("ACP connection closed"));
+
+  const due = out.find((m) => m.t === "callback.due");
+  expect(due).toMatchObject({ outcome: "failed" });
+  expect(due.body).toContain("ACP connection closed");
+
+  expect(daemon.callbacks.pending()).toHaveLength(1);
+  await send(daemon, { t: "callback.ack", id: due.id }, "device-1");
+  expect(daemon.callbacks.pending()).toEqual([]);
+});
+
+test("a typed message owes no call: its turn is announced the ordinary way", async () => {
+  const { out, finish } = await promptedTurn();
+  await finish();
+  expect(out.some((m) => m.t === "callback.due")).toBe(false);
+  expect(out.find((m) => m.t === "session.idle")?.callbackId).toBeUndefined();
+});
+
+test("a phone that says hello is handed the calls it missed", async () => {
+  const { daemon, finish } = await promptedTurn("voice");
+  await finish();
+  Object.assign(daemon, { refreshProviders: async () => ({ errors: [] }) });
+  const out = await send(daemon, { t: "hello", wire: 2, role: "app", deviceId: "phone" }, "phone");
+  expect(out.filter((m) => m.t === "callback.due")).toHaveLength(1);
+});

@@ -202,6 +202,9 @@ daemon.attach((message) => {
   relay?.send(message);
 });
 
+// Calls owed from before a restart, read before the phone can reconnect and ask.
+await daemon.callbacks.load();
+
 relay?.start();
 
 const { errors } = await daemon.refreshProviders();

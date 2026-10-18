@@ -8,7 +8,7 @@
  * so the daemon — not the agent — is what lets a phone and a desktop observe the
  * same session at the same time.
  */
-import { loadProviders, isAvailable, unavailableReason } from "./providers/registry.js";
+import { loadProviders, isAvailable, unavailableReason, userProvidersDir } from "./providers/registry.js";
 import type { AskAnswer } from "./acp/connect.js";
 import { SessionLog } from "./session/log.js";
 import { readDisabled } from "./providers/enabled.js";
@@ -21,6 +21,8 @@ import { DaemonConnectSession } from "./daemon/connect-session.js";
 import { VoiceManager } from "./voice/manager.js";
 import { orcaDashFromEnv } from "./orcaDash.js";
 import { daemonHost, type SessionView } from "./voice/host.js";
+import { CallbackLedger, type JobState } from "./callbacks.js";
+import { dirname, join } from "node:path";
 import {
   GG_GOALS_ID,
   ORCA_GOALS_ENGINE_ID,
@@ -51,6 +53,18 @@ export class Daemon extends DaemonConnectSession {
 
   /** The OrcaZeroViva dashboard; undefined unless `PEW2_ORCA_DASHBOARD=1`. */
   readonly dashboard = orcaDashFromEnv(this.env);
+
+  /**
+   * Jobs the user asked (by voice) to be called about, and the calls owed for
+   * them, held until the phone confirms each one rang. See `callbacks.ts`.
+   */
+  readonly callbacks = new CallbackLedger({
+    path: join(dirname(userProvidersDir(this.env)), "callbacks.json"),
+    send: (message) => this.send(message),
+  });
+  private callbackTimer?: NodeJS.Timeout;
+  /** How often unconfirmed calls are resent and quiet jobs checked on. */
+  static readonly CALLBACK_TICK_MS = 30_000;
 
   constructor(...args: ConstructorParameters<typeof DaemonConnectSession>) {
     super(...args);
@@ -130,6 +144,20 @@ export class Daemon extends DaemonConnectSession {
       this.reaper = setInterval(() => this.reapIdleSessions(), Daemon.REAP_INTERVAL_MS);
       this.reaper.unref?.();
     }
+    if (!this.callbackTimer) {
+      this.callbackTimer = setInterval(
+        () => this.callbacks.tick((sessionId) => this.jobState(sessionId)),
+        Daemon.CALLBACK_TICK_MS,
+      );
+      this.callbackTimer.unref?.();
+    }
+  }
+
+  /** Whether a conversation is mid-turn and when its agent last did anything. */
+  jobState(sessionId: string): JobState | undefined {
+    const session = this.sessions.get(sessionId);
+    if (!session) return undefined;
+    return { working: session.working === true, lastActivityAt: session.lastActivityAt };
   }
 
   /** Record a pending update and tell every client at once. */
@@ -382,6 +410,7 @@ export class Daemon extends DaemonConnectSession {
    * `markLive` and the reconnect replay both see the complete history.
    */
   protected record(session: ActiveSession, payload: unknown) {
+    session.lastActivityAt = Date.now();
     rememberTurnText(session, payload);
     const event = session.log.append(payload);
     this.notify({ sessionId: session.log.sessionId, kind: "update", payload });
@@ -753,6 +782,10 @@ export class Daemon extends DaemonConnectSession {
     if (this.reaper) {
       clearInterval(this.reaper);
       this.reaper = undefined;
+    }
+    if (this.callbackTimer) {
+      clearInterval(this.callbackTimer);
+      this.callbackTimer = undefined;
     }
     for (const [sessionId, session] of [...this.sessions]) {
       this.closeSession(sessionId, session);

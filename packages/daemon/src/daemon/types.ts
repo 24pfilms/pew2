@@ -55,6 +55,12 @@ export interface ActiveSession {
    */
   lastUsedAt: number;
   /**
+   * When the agent last said or did anything here. The opposite of
+   * `lastUsedAt`: reading is not activity, the agent working is. A promised
+   * call-back uses it to tell a long job from a dead one.
+   */
+  lastActivityAt?: number;
+  /**
    * A turn is in flight.
    *
    * The agent is working even when it is silent — thinking, or running a long
