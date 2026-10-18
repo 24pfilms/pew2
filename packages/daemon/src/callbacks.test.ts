@@ -107,6 +107,20 @@ test("a confirmed call is remembered once, for a while, so answering it can be b
   expect(book.takeRung("s2")).toBeUndefined(); // too long ago to be an answer
 });
 
+test("when the link comes back, owed calls go at once, not at their next minute", () => {
+  const { book, sent, advance } = ledger();
+  book.promise("s1", WHO);
+  book.settle("s1", { ok: true }, WHO); // sent into an outage
+  advance(5_000);
+  book.resendNow("relay back online");
+  expect(sent).toHaveLength(2);
+  expect(sent[1]?.id).toBe(sent[0]?.id);
+
+  book.ack(sent[0]!.id);
+  book.resendNow("relay back online");
+  expect(sent).toHaveLength(2); // nothing left to send
+});
+
 test("a phone saying hello is handed every call still owed", () => {
   const { book } = ledger();
   book.promise("s1", WHO);

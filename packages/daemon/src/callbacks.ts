@@ -321,6 +321,22 @@ export class CallbackLedger {
     if (changed) this.save();
   }
 
+  /**
+   * Send every unconfirmed call now, rather than at its next minute.
+   *
+   * For the moment the relay lets this daemon back in: a phone that stayed in
+   * the room through the outage never says hello again, so without this the
+   * call waited on the resend timer — up to a minute after the link was back
+   * (2026-10-18 15:19Z: online at :07, rung at :56).
+   */
+  resendNow(why: string) {
+    const now = this.now();
+    for (const call of this.due) {
+      this.noteSent(call, now, why);
+      this.options.send(call.message);
+    }
+  }
+
   /** Waiting jobs and unconfirmed calls, for tests and diagnostics. */
   snapshot(): { waiting: string[]; due: string[] } {
     return { waiting: this.waiting.map((job) => job.id), due: this.due.map((call) => call.message.id) };

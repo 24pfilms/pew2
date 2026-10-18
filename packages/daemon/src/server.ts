@@ -190,8 +190,12 @@ const relay = pairing.relay
       // path a leaked link is actually usable from, so leaving it ungated would
       // make the gate decorative.
       admitDevice,
-      onStatus: (status, detail) =>
-        console.log(`[relay] ${status}${detail ? ` — ${detail}` : ""}`),
+      onStatus: (status, detail) => {
+        console.log(`[relay] ${status}${detail ? ` — ${detail}` : ""}`);
+        // Back after an outage: a call owed while the phone could not be
+        // reached goes now, not at its next minute.
+        if (status === "online") daemon.callbacks.resendNow("relay back online");
+      },
     })
   : null;
 
