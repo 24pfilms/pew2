@@ -90,6 +90,23 @@ test("a call lost while the link was down is resent until the phone confirms it"
   expect(book.snapshot().due).toEqual([]);
 });
 
+test("a confirmed call is remembered once, for a while, so answering it can be briefed", () => {
+  const { book, sent, advance } = ledger();
+  book.promise("s1", WHO);
+  book.settle("s1", { ok: true }, { ...WHO, lastText: "ready" });
+  expect(book.takeRung("s1")).toBeUndefined(); // not confirmed yet: it has not rung
+
+  book.ack(sent[0]!.id);
+  expect(book.takeRung("s1")).toMatchObject({ outcome: "done", body: "ready" });
+  expect(book.takeRung("s1")).toBeUndefined(); // only the first call after the ring
+
+  book.promise("s2", WHO);
+  book.settle("s2", { ok: true }, WHO);
+  book.ack(sent[1]!.id);
+  advance(CallbackLedger.ANSWER_WINDOW_MS + 1);
+  expect(book.takeRung("s2")).toBeUndefined(); // too long ago to be an answer
+});
+
 test("a phone saying hello is handed every call still owed", () => {
   const { book } = ledger();
   book.promise("s1", WHO);

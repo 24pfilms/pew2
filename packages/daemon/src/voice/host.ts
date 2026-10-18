@@ -34,6 +34,11 @@ export interface VoiceHost {
   session(sessionId: string): SessionView | undefined;
   /** The last user request and the agent's reply after it, from the session log. */
   lastExchange(sessionId: string): { request?: string; reply: string } | undefined;
+  /**
+   * The promised call-back that just rang for this conversation, if any, once:
+   * a call started about it is the user answering that ring.
+   */
+  answeredCallback(sessionId: string): { outcome: string; title: string; body: string } | undefined;
   /** Run a client frame through the shared handler, collecting what it sent. */
   dispatch(
     frame: Record<string, unknown>,
@@ -57,6 +62,7 @@ export function daemonHost(daemon: Daemon, env: NodeJS.ProcessEnv): VoiceHost {
     lastWorkspace: (providerId) => daemon.lastWorkspace(providerId),
     session: (sessionId) => daemon.sessionView(sessionId),
     lastExchange: (sessionId) => daemon.lastExchange(sessionId),
+    answeredCallback: (sessionId) => daemon.callbacks.takeRung(sessionId),
     dispatch: async (frame, onReply) => {
       const broadcasts: unknown[] = [];
       const replies: unknown[] = [];

@@ -146,6 +146,12 @@ export class LiveVoiceSession {
   private line?: { speaker: "you" | "orca"; text: string };
   /** What ended the call, when this side ended it; otherwise OpenAI or the connection did. */
   private endedBy?: string;
+  /**
+   * What Orca says first, unprompted, once the call connects: set when the
+   * call is the user answering a ring, who otherwise hears silence and has to
+   * ask what she is calling about.
+   */
+  private opening?: string;
   usageSeconds = 0;
 
   constructor(
@@ -197,6 +203,11 @@ export class LiveVoiceSession {
     const text = JSON.stringify(frame);
     if (this.socket && this.socket.readyState === 1) this.socket.send(text);
     else if (!this.finished) this.outbox.push(text);
+  }
+
+  /** Have Orca open the call with this, as soon as it connects. */
+  openWith(content: string) {
+    this.opening = content;
   }
 
   commentary(content: string) {
@@ -262,6 +273,13 @@ export class LiveVoiceSession {
         return;
       }
       case "session.started":
+        // Said as the call connects, not queued before it: Orca speaks on a
+        // commentary, and words sent ahead of the line opening are lost.
+        if (this.opening) {
+          const opening = this.opening;
+          this.opening = undefined;
+          this.commentary(opening);
+        }
         return;
       case "session.input_transcript.delta":
       case "session.output_transcript.delta":

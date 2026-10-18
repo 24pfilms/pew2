@@ -114,6 +114,8 @@ export class VoiceManager {
       },
     });
     this.live.set(created.liveSessionId, session);
+    const opening = this.answeringRing(target);
+    if (opening) session.openWith(opening);
     session.attach(
       this.io.createSocket ?? defaultCreateSocket,
       attachUrl(created.liveSessionId),
@@ -142,6 +144,24 @@ export class VoiceManager {
 
   closeAll() {
     for (const session of [...this.live.values()]) void session.close("pew2 shutting down");
+  }
+
+  /**
+   * When this call is the user answering a promised call-back, what Orca opens
+   * with: the outcome, said unprompted. Without it the line opened on silence
+   * and the user had to ask what the call was about.
+   */
+  private answeringRing(target: Target): string | undefined {
+    if (!target.sessionId) return undefined;
+    const answered = this.host.answeredCallback(target.sessionId);
+    if (!answered) return undefined;
+    const reply = this.host.lastExchange(target.sessionId)?.reply;
+    const outcome =
+      answered.outcome === "done" && reply
+        ? `${answered.title} has finished. Its reply ends: ${tail(speakable(reply), 1000)}`
+        : `${answered.title}: ${answered.body}`;
+    console.log(`[voice] call opens on the answered call-back for ${answered.title} (${answered.outcome})`);
+    return `The user has just answered the call you promised them about their job. ${outcome}\nTell them the outcome now in one or two sentences, without waiting for them to speak first, then ask if there is anything else.`;
   }
 
   /** Where coding work goes until the user says otherwise. */

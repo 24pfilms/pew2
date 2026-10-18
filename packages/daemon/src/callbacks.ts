@@ -85,6 +85,8 @@ export class CallbackLedger {
    * before the ledger stops waiting for the idle and calls anyway.
    */
   static readonly ENDED_GRACE_MS = 2 * 60 * 1000;
+  /** How long after a ring a call about that conversation is taken as answering it. */
+  static readonly ANSWER_WINDOW_MS = 10 * 60 * 1000;
 
   private waiting: Waiting[] = [];
   private due: Due[] = [];
@@ -213,11 +215,32 @@ export class CallbackLedger {
     this.save();
   }
 
+  /**
+   * Calls the phone confirmed recently, by conversation: answering the ring
+   * opens a call with Orca about that conversation, and she has to know why
+   * she is calling. Memory only; a ring answered after a restart just opens
+   * an ordinary call.
+   */
+  private readonly rung = new Map<string, { message: wire.CallbackDue; at: number }>();
+
+  /**
+   * The call just rung for this conversation, once, if it was confirmed within
+   * `ANSWER_WINDOW_MS`. Taken, not peeked: only the first call after the ring
+   * opens with the result.
+   */
+  takeRung(sessionId: string): wire.CallbackDue | undefined {
+    const rung = this.rung.get(sessionId);
+    this.rung.delete(sessionId);
+    if (!rung || this.now() - rung.at > CallbackLedger.ANSWER_WINDOW_MS) return undefined;
+    return rung.message;
+  }
+
   /** The phone rang or showed it. */
   ack(id: string) {
     const call = this.due.find((entry) => entry.message.id === id);
     if (!call) return;
     this.due = this.due.filter((entry) => entry !== call);
+    this.rung.set(call.message.sessionId, { message: call.message, at: this.now() });
     const seconds = Math.round((this.now() - call.dueAt) / 1000);
     this.log(`phone confirmed ${id} (${call.message.outcome}) ${seconds}s after it was due, ${call.sends} send(s)`);
     this.save();

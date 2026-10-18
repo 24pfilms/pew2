@@ -55,6 +55,8 @@ function fakeHost(env: NodeJS.ProcessEnv) {
   const dispatched: Record<string, unknown>[] = [];
   const broadcasts: Record<string, unknown>[] = [];
   const answered: string[] = [];
+  /** Call-backs that just rang, by conversation; taken once, like the ledger. */
+  const rung = new Map<string, { outcome: string; title: string; body: string }>();
   let n = 0;
   const host: VoiceHost = {
     env,
@@ -70,6 +72,11 @@ function fakeHost(env: NodeJS.ProcessEnv) {
     lastWorkspace: async () => "/src/pew2",
     session: (id) => sessions.get(id),
     lastExchange: (id) => (sessions.has(id) ? { request: "fix tests", reply: "All **green**." } : undefined),
+    answeredCallback: (id) => {
+      const call = rung.get(id);
+      rung.delete(id);
+      return call;
+    },
     dispatch: async (frame) => {
       dispatched.push(frame);
       const out: unknown[] = [];
@@ -92,12 +99,15 @@ function fakeHost(env: NodeJS.ProcessEnv) {
     },
     broadcast: (message) => broadcasts.push(message as Record<string, unknown>),
   };
-  return { host, sessions, dispatched, broadcasts, answered };
+  return { host, sessions, dispatched, broadcasts, answered, rung };
 }
 
-async function started(extra: { fetchStatus?: number } = {}) {
+async function started(
+  extra: { fetchStatus?: number; sessionId?: string; prepare?: (fake: ReturnType<typeof fakeHost>) => void } = {},
+) {
   const env = home({ OPENAI_API_KEY: KEY });
   const fake = fakeHost(env);
+  extra.prepare?.(fake);
   const requests: { url: string; init: RequestInit }[] = [];
   const sockets: FakeSocket[] = [];
   const manager = new VoiceManager(fake.host, {
@@ -115,7 +125,12 @@ async function started(extra: { fetchStatus?: number } = {}) {
       return socket;
     },
   });
-  const answer = await manager.start({ t: "voice.start", requestId: "r1", sdp: "offer-sdp" });
+  const answer = await manager.start({
+    t: "voice.start",
+    requestId: "r1",
+    sdp: "offer-sdp",
+    ...(extra.sessionId ? { sessionId: extra.sessionId } : {}),
+  });
   return { ...fake, manager, requests, sockets, answer, socket: sockets[0] };
 }
 
@@ -383,6 +398,39 @@ test("the log says what was said, line by line, and who ended the call", async (
   expect(voice.findIndex((line) => line.includes(" you: "))).toBeLessThan(
     voice.findIndex((line) => line.includes(" orca: ")),
   );
+});
+
+test("answering a call-back ring opens with the result, said as the call connects", async () => {
+  const { socket } = await started({
+    sessionId: "s9",
+    prepare: (fake) => {
+      fake.sessions.set("s9", { sessionId: "s9", providerId: "claude-code", cwd: "/src/pew2", working: false, permissions: [] });
+      fake.rung.set("s9", { outcome: "done", title: "pew2 · Claude Code", body: "All green." });
+    },
+  });
+  socket!.open();
+  expect(socket!.of("session.commentary.append")).toHaveLength(0);
+
+  socket!.emit({ type: "session.started" });
+  await tick();
+  const said = socket!.of("session.commentary.append");
+  expect(said).toHaveLength(1);
+  expect(String(said[0]?.content)).toContain("pew2 · Claude Code has finished");
+  expect(String(said[0]?.content)).toContain("All green.");
+  expect(String(said[0]?.content)).toContain("without waiting for them to speak first");
+});
+
+test("an ordinary call about a conversation opens on nothing: no ring was answered", async () => {
+  const { socket } = await started({
+    sessionId: "s9",
+    prepare: (fake) => {
+      fake.sessions.set("s9", { sessionId: "s9", providerId: "claude-code", cwd: "/src/pew2", working: false, permissions: [] });
+    },
+  });
+  socket!.open();
+  socket!.emit({ type: "session.started" });
+  await tick();
+  expect(socket!.of("session.commentary.append")).toHaveLength(0);
 });
 
 test("the maximum duration closes the session", async () => {
