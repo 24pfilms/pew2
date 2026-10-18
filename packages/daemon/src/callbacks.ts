@@ -15,7 +15,7 @@
  * for the real ending. A daemon that restarts mid-job reports it rather than
  * forgetting it.
  */
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, rename } from "node:fs/promises";
 import { dirname } from "node:path";
 import { noticeBody, noticeTitle, type wire } from "@pew2/protocol";
 import { writeFileAtomic } from "./atomic-file.js";
@@ -43,6 +43,8 @@ interface Waiting {
   origin: CallbackOrigin;
   /** The "may be stuck" call has been made for this job. */
   warnedStalled?: boolean;
+  /** Stop was pressed: however the turn ends, the job did not finish. */
+  stopped?: boolean;
 }
 
 /** A call to make, held until the phone confirms it. */
@@ -78,6 +80,11 @@ export class CallbackLedger {
    * legitimately sit in one command for many minutes; the call says "may be".
    */
   static readonly STALL_MS = 20 * 60 * 1000;
+  /**
+   * How long a job may sit ended-but-unsettled (its conversation idle or gone)
+   * before the ledger stops waiting for the idle and calls anyway.
+   */
+  static readonly ENDED_GRACE_MS = 2 * 60 * 1000;
 
   private waiting: Waiting[] = [];
   private due: Due[] = [];
@@ -105,16 +112,39 @@ export class CallbackLedger {
    */
   async load(): Promise<void> {
     this.persisting = true;
-    let stored: Stored | undefined;
+    const path = this.options.path;
+    let raw: string;
     try {
-      stored = JSON.parse(await readFile(this.options.path, "utf8")) as Stored;
+      raw = await readFile(path, "utf8");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-      console.error(`[callback] could not read ${this.options.path}; starting empty:`, error);
+      console.error(`[callback] could not read ${path}; starting empty:`, error);
       return;
     }
-    for (const call of stored.due ?? []) this.due.push({ ...call, sentAt: undefined });
-    for (const job of stored.waiting ?? []) {
+    let stored: Partial<Stored> | undefined;
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") stored = parsed as Partial<Stored>;
+    } catch {
+      // Reported below, with the copy kept.
+    }
+    if (!stored) {
+      // Kept aside rather than overwritten by the next save: whatever calls it
+      // held are lost to this daemon, but not to someone looking for them.
+      const aside = `${path}.corrupt-${this.now()}`;
+      try {
+        await rename(path, aside);
+        console.error(`[callback] ${path} was not readable; moved it to ${aside} and started empty`);
+      } catch (error) {
+        // Not worth refusing to start over: the calls in it are lost either way.
+        console.error(`[callback] ${path} was not readable and could not be moved aside; it will be replaced:`, error);
+      }
+      return;
+    }
+    const due = (Array.isArray(stored.due) ? stored.due : []).filter(isDue);
+    const waiting = (Array.isArray(stored.waiting) ? stored.waiting : []).filter(isWaiting);
+    for (const call of due) this.due.push({ ...call, sentAt: undefined });
+    for (const job of waiting) {
       this.makeDue(job, "failed", {
         title: `${noticeTitle(job.origin)} may have stopped`,
         body: "pew2 restarted on the PC while this job was running, so it may not have finished. Have a look.",
@@ -151,7 +181,14 @@ export class CallbackLedger {
     if (!job) return undefined;
     // What the agent said is only known now; who it was came with the promise.
     const about = { ...job.origin, ...defined(origin) };
-    if (result.ok) {
+    if (job.stopped) {
+      // A stop ends the turn cleanly, but the job is not done: what was queued
+      // behind it went back to the composer unsent. "Done" here would be a lie.
+      this.makeDue(job, "failed", {
+        title: `${noticeTitle(about)} stopped`,
+        body: "Stopped before it finished, so the job may not be done. Have a look.",
+      });
+    } else if (result.ok) {
       this.makeDue(job, "done", { title: noticeTitle(about), body: noticeBody(about.lastText) });
     } else {
       this.makeDue(job, "failed", {
@@ -161,6 +198,19 @@ export class CallbackLedger {
     }
     this.save();
     return job.id;
+  }
+
+  /**
+   * Someone pressed stop (or Orca was told to stop) in a conversation with a
+   * promise open. The turn will still end and be settled; this only makes sure
+   * that ending is not reported as done.
+   */
+  stop(sessionId: string) {
+    const job = this.waiting.find((entry) => entry.sessionId === sessionId);
+    if (!job || job.stopped) return;
+    job.stopped = true;
+    this.log(`${job.id} was stopped before it finished`);
+    this.save();
   }
 
   /** The phone rang or showed it. */
@@ -173,38 +223,57 @@ export class CallbackLedger {
     this.save();
   }
 
-  /** Every unconfirmed call, for a phone that has just said hello. */
+  /**
+   * Every unconfirmed call, for a device that has just said hello.
+   *
+   * Not counted as a send: the device saying hello may not be the phone (a
+   * desktop client, the CLI), and counting it would hold the phone's own
+   * resend back by a minute.
+   */
   pending(): wire.CallbackDue[] {
-    const now = this.now();
-    for (const call of this.due) this.noteSent(call, now, "on reconnect");
+    if (this.due.length > 0) this.log(`restating ${this.due.length} owed call(s) to a device that said hello`);
     return this.due.map((call) => call.message);
   }
 
   /**
-   * Run every ~30 s: warn about jobs gone quiet, resend unconfirmed calls,
-   * drop ones too old to matter.
+   * Run every ~30 s: close out jobs that ended without saying so, warn about
+   * jobs gone quiet, resend unconfirmed calls, drop ones too old to matter.
    */
   tick(jobState: (sessionId: string) => JobState | undefined) {
     const now = this.now();
     let changed = false;
     for (const job of [...this.waiting]) {
-      if (job.warnedStalled) continue;
       const state = jobState(job.sessionId);
       const lastSign = Math.max(job.promisedAt, state?.lastActivityAt ?? 0);
-      if (now - lastSign < CallbackLedger.STALL_MS) continue;
-      changed = true;
+      const quiet = now - lastSign;
       const who = job.origin.agentName ?? "the agent";
-      if (!state) {
-        // The conversation is gone from the PC, so nothing is left to finish it:
-        // this is the last call for the job, not a warning.
-        this.makeDue(job, "failed", {
-          title: `${noticeTitle(job.origin)} stopped`,
-          body: `${who}'s conversation closed on the PC without saying it finished. Have a look.`,
-        });
+      // Ended without the turn settling the promise: the conversation closed, or
+      // a turn ran outside the prompt path (an agent handing text back at turn
+      // end). Nothing will ever settle it now, so this is the last call, not a
+      // warning — and it is made after a warning too, so no job is stranded on
+      // "I'll still call". The grace covers the moment between a turn ending
+      // and the idle that settles it.
+      if (quiet >= CallbackLedger.ENDED_GRACE_MS && (!state || !state.working)) {
+        changed = true;
+        if (!state) {
+          this.makeDue(job, "failed", {
+            title: `${noticeTitle(job.origin)} stopped`,
+            body: `${who}'s conversation closed on the PC without saying it finished. Have a look.`,
+          });
+        } else {
+          this.makeDue(job, job.stopped ? "failed" : "done", {
+            title: job.stopped ? `${noticeTitle(job.origin)} stopped` : noticeTitle(job.origin),
+            body: job.stopped
+              ? "Stopped before it finished, so the job may not be done. Have a look."
+              : `${who} is no longer working on it but never said how it went. Have a look.`,
+          });
+        }
         continue;
       }
+      if (job.warnedStalled || quiet < CallbackLedger.STALL_MS) continue;
+      changed = true;
       job.warnedStalled = true;
-      const minutes = Math.round((now - lastSign) / 60_000);
+      const minutes = Math.round(quiet / 60_000);
       this.enqueue({
         id: `${job.id}_stalled`,
         sessionId: job.sessionId,
@@ -236,6 +305,9 @@ export class CallbackLedger {
 
   private makeDue(job: Waiting, outcome: "done" | "failed", words: { title: string; body: string }) {
     this.waiting = this.waiting.filter((entry) => entry !== job);
+    // A "may be stuck" still unconfirmed is out of date now the real ending is
+    // known; ringing it after a reconnect, just before the ending, is noise.
+    this.due = this.due.filter((entry) => entry.message.id !== `${job.id}_stalled`);
     this.enqueue({
       id: job.id,
       sessionId: job.sessionId,
@@ -283,6 +355,29 @@ export class CallbackLedger {
   flush(): Promise<void> {
     return this.writes;
   }
+}
+
+/** A stored call with what resending and confirming it needs. */
+function isDue(value: unknown): value is Due {
+  const call = value as Partial<Due> | null;
+  return (
+    typeof call?.dueAt === "number" &&
+    typeof call.sends === "number" &&
+    typeof call.message?.id === "string" &&
+    typeof call.message.sessionId === "string"
+  );
+}
+
+/** A stored promise with what reporting it needs. */
+function isWaiting(value: unknown): value is Waiting {
+  const job = value as Partial<Waiting> | null;
+  return (
+    typeof job?.id === "string" &&
+    typeof job.sessionId === "string" &&
+    typeof job.promisedAt === "number" &&
+    typeof job.origin === "object" &&
+    job.origin !== null
+  );
 }
 
 /** Drop undefined fields, so a spread never overwrites a known value with nothing. */

@@ -451,13 +451,20 @@ async function promptedTurn(origin?: "voice") {
   daemon.attach((m) => out.push(m));
   // Straight into `out`, not through `send`: the idle is broadcast after the
   // turn ends, long after `send` has returned what it collected.
-  await handleMessage(
-    JSON.stringify({ t: "session.prompt", sessionId: "s1", text: "test the launcher", ...(origin ? { origin } : {}) }),
-    { daemon, reply: (m) => out.push(m), broadcast: (m) => out.push(m), cwd: "/Users/someone/default" },
-  );
+  const say = async (message: unknown) => {
+    await handleMessage(JSON.stringify(message), {
+      daemon,
+      reply: (m) => out.push(m),
+      broadcast: (m) => out.push(m),
+      cwd: "/Users/someone/default",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+  await say({ t: "session.prompt", sessionId: "s1", text: "test the launcher", ...(origin ? { origin } : {}) });
   return {
     daemon,
     out,
+    say,
     finish: async (error?: Error) => {
       if (error) end.fail(error);
       else end.done();
@@ -491,6 +498,34 @@ test("a voice job that dies is called about as stopped, and a confirmed call is 
   expect(daemon.callbacks.pending()).toHaveLength(1);
   await send(daemon, { t: "callback.ack", id: due.id }, "device-1");
   expect(daemon.callbacks.pending()).toEqual([]);
+});
+
+test("a request turned away while the voice job runs does not settle the job's call", async () => {
+  const { daemon, out, say, finish } = await promptedTurn("voice");
+  let working = true;
+  const realPrompt = daemon.prompt.bind(daemon);
+  Object.assign(daemon, {
+    jobState: () => ({ working }),
+    prompt: () => Promise.reject(new Error("The agent is still working; decide the plan when it stops.")),
+  });
+  await say({ t: "session.prompt", sessionId: "s1", text: "a photo too big to queue" });
+  expect(out.some((m) => m.t === "callback.due")).toBe(false);
+
+  // The job's own ending is the one that calls.
+  Object.assign(daemon, { prompt: realPrompt });
+  working = false;
+  await finish();
+  expect(out.filter((m) => m.t === "callback.due").map((m) => m.outcome)).toEqual(["done"]);
+});
+
+test("a voice job stopped mid-way is called about as stopped, never as done", async () => {
+  const { daemon, out, say, finish } = await promptedTurn("voice");
+  Object.assign(daemon, { cancel: async () => {} });
+  await say({ t: "session.cancel", sessionId: "s1" });
+  await finish();
+  const due = out.find((m) => m.t === "callback.due");
+  expect(due).toMatchObject({ outcome: "failed" });
+  expect(due.body).toContain("Stopped before it finished");
 });
 
 test("a typed message owes no call: its turn is announced the ordinary way", async () => {

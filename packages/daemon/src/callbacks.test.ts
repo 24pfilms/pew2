@@ -4,9 +4,9 @@
  * without ever ending. These pin that the call is held, resent and confirmed.
  */
 import { expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { wire } from "@pew2/protocol";
 import { CallbackLedger, type JobState } from "./callbacks.js";
 
@@ -175,11 +175,81 @@ test("a ledger that never loaded never writes, so a test cannot touch the live f
   expect(existsSync(path)).toBe(false);
 });
 
-test("a corrupt file is reported and replaced, never fatal", async () => {
+test("a corrupt file is moved aside and replaced, never fatal", async () => {
   const { book, path } = ledger();
   writeFileSync(path, "{not json");
   await book.load();
   book.promise("s1", WHO);
   await book.flush();
   expect(JSON.parse(readFileSync(path, "utf8")).waiting).toHaveLength(1);
+  expect(readdirSync(dirname(path)).some((name) => name.startsWith("callbacks.json.corrupt-"))).toBe(true);
+});
+
+test("a file of the wrong shape cannot stop the daemon starting", async () => {
+  for (const content of ["null", "42", JSON.stringify({ due: "x", waiting: [{ id: 1 }, null] })]) {
+    const { book, path } = ledger();
+    writeFileSync(path, content);
+    await book.load();
+    expect(book.pending()).toEqual([]);
+    expect(() => book.tick(working())).not.toThrow();
+  }
+});
+
+test("a stopped job is called about as stopped, never as done", () => {
+  const { book, sent } = ledger();
+  book.promise("s1", WHO);
+  book.stop("s1");
+  book.settle("s1", { ok: true }, { ...WHO, lastText: "The previous answer." });
+  expect(sent[0]).toMatchObject({ outcome: "failed", title: "Voiceprompter · OrcaCoder stopped" });
+  expect(sent[0]?.body).toContain("Stopped before it finished");
+});
+
+test("a job that ended without its idle settling it gets its call once the grace is up", () => {
+  const { book, sent, advance } = ledger();
+  book.promise("s1", WHO);
+  const idle = () => ({ working: false });
+
+  advance(CallbackLedger.ENDED_GRACE_MS - 1);
+  book.tick(idle);
+  expect(sent).toEqual([]);
+
+  advance(1);
+  book.tick(idle);
+  expect(sent[0]).toMatchObject({ outcome: "done" });
+  expect(sent[0]?.body).toContain("never said how it went");
+  expect(book.snapshot().waiting).toEqual([]);
+});
+
+test("a job warned as stuck still gets a last call when its conversation goes", () => {
+  const { book, sent, advance } = ledger();
+  const id = book.promise("s1", WHO);
+  advance(CallbackLedger.STALL_MS);
+  book.tick(working());
+  expect(sent.at(-1)?.outcome).toBe("stalled");
+
+  advance(CallbackLedger.RESEND_MS);
+  book.tick(() => undefined);
+  expect(sent.at(-1)).toMatchObject({ id, outcome: "failed" });
+  expect(book.snapshot().waiting).toEqual([]);
+});
+
+test("an unconfirmed 'may be stuck' is withdrawn once the real ending is known", () => {
+  const { book, advance } = ledger();
+  const id = book.promise("s1", WHO);
+  advance(CallbackLedger.STALL_MS);
+  book.tick(working());
+  expect(book.snapshot().due).toEqual([`${id}_stalled`]);
+  book.settle("s1", { ok: true }, WHO);
+  expect(book.snapshot().due).toEqual([id]);
+});
+
+test("restating calls to a device saying hello does not hold the phone's resend back", () => {
+  const { book, sent, advance } = ledger();
+  book.promise("s1", WHO);
+  book.settle("s1", { ok: true }, WHO);
+  advance(CallbackLedger.RESEND_MS / 2);
+  book.pending(); // a desktop client says hello
+  advance(CallbackLedger.RESEND_MS / 2);
+  book.tick(working());
+  expect(sent).toHaveLength(2);
 });

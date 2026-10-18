@@ -287,6 +287,9 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
       }
 
       case "session.cancel": {
+        // Before the cancel: it ends the turn, and that ending must not be
+        // reported as a promised job done.
+        daemon.callbacks.stop(message.sessionId);
         await daemon.cancel(message.sessionId);
         break;
       }
@@ -626,11 +629,20 @@ function runTurn(ctx: HandlerContext, sessionId: string, turn: Promise<unknown>)
   const idle = (error?: unknown) => {
     // A promised call-back is kept first, so the call (which is resent until
     // confirmed) leads and the idle below can say it is handled.
-    const callbackId = daemon.callbacks.settle(
-      sessionId,
-      error === undefined ? { ok: true } : { ok: false, error: humanError(error) },
-      { ...daemon.sessionOrigin(sessionId), ...daemon.sessionNotice(sessionId) },
-    );
+    //
+    // Only once the conversation has really stopped working. A request turned
+    // away while a turn runs ("decide the plan when it stops", an attachment
+    // over the limit) rejects straight away and lands here too; settling on it
+    // would call "stopped" about a job that is still going, and leave its real
+    // ending unannounced.
+    const stillWorking = daemon.jobState(sessionId)?.working === true;
+    const callbackId = stillWorking
+      ? undefined
+      : daemon.callbacks.settle(
+          sessionId,
+          error === undefined ? { ok: true } : { ok: false, error: humanError(error) },
+          { ...daemon.sessionOrigin(sessionId), ...daemon.sessionNotice(sessionId) },
+        );
     // Tell every client the turn is over, so they can stop showing a working
     // indicator. Broadcast, not reply: other devices watching this session
     // need it too. Carries the project and agent so a client can announce a

@@ -55,9 +55,10 @@ export interface ActiveSession {
    */
   lastUsedAt: number;
   /**
-   * When the agent last said or did anything here. The opposite of
-   * `lastUsedAt`: reading is not activity, the agent working is. A promised
-   * call-back uses it to tell a long job from a dead one.
+   * When anything was last recorded in this conversation — the agent's updates,
+   * mostly, plus the user's own decisions. The opposite of `lastUsedAt`:
+   * reading is not activity. A promised call-back uses it to tell a long job
+   * from a dead one.
    */
   lastActivityAt?: number;
   /**
