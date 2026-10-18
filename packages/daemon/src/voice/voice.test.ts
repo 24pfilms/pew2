@@ -433,6 +433,43 @@ test("an ordinary call about a conversation opens on nothing: no ring was answer
   expect(socket!.of("session.commentary.append")).toHaveLength(0);
 });
 
+test("Orca saying goodbye ends the call even when she never asks to hang up", async () => {
+  const { LiveVoiceSession } = await import("./session.js");
+  const saved = LiveVoiceSession.HANGUP_DELAY_MS;
+  LiveVoiceSession.HANGUP_DELAY_MS = 10;
+  try {
+    const { socket } = await started();
+    socket!.open();
+    for (const delta of ["Okay, hanging up ", "now. Goodbye."]) {
+      socket!.emit({ type: "session.output_transcript.delta", delta });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(socket!.of("session.close")).toHaveLength(1);
+  } finally {
+    LiveVoiceSession.HANGUP_DELAY_MS = saved;
+  }
+});
+
+test("a goodbye she talks on past, or one that is not the end of her line, leaves the call open", async () => {
+  const { LiveVoiceSession } = await import("./session.js");
+  const saved = LiveVoiceSession.HANGUP_DELAY_MS;
+  LiveVoiceSession.HANGUP_DELAY_MS = 10;
+  try {
+    const { socket } = await started();
+    socket!.open();
+    socket!.emit({ type: "session.output_transcript.delta", delta: "Goodbye" });
+    socket!.emit({ type: "session.output_transcript.delta", delta: " — oh, one more thing: the tests pass." });
+    socket!.emit({ type: "session.output_transcript.delta", delta: " Want me to say bye to Claude Code for you?" });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(socket!.of("session.close")).toHaveLength(0);
+  } finally {
+    LiveVoiceSession.HANGUP_DELAY_MS = saved;
+  }
+  expect(LiveVoiceSession.GOODBYE.test("All done. Bye for now!")).toBe(true);
+  expect(LiveVoiceSession.GOODBYE.test("Okay, hanging up. Bye.")).toBe(true);
+  expect(LiveVoiceSession.GOODBYE.test("Shall I hang up now?")).toBe(false);
+});
+
 test("the maximum duration closes the session", async () => {
   const env = home({ OPENAI_API_KEY: KEY });
   await mkdir(env.PEW2_HOME!, { recursive: true });

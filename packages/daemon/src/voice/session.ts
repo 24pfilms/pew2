@@ -126,6 +126,10 @@ export class LiveVoiceSession {
   static STATUS_AGENT_MS = 1500;
   /** Longest spoken line written to the log. */
   static LINE_LOG_MAX = 400;
+  /** A line of Orca's that ends the call: it finishes on a goodbye or "hanging up". */
+  static GOODBYE = /(?:hanging up(?: now)?|good-?bye|bye(?: for now| then)?)[.!]*$/i;
+  /** The pending close is Orca's goodbye, not the `hang_up` tool: more words cancel it. */
+  private goodbyeArmed = false;
   private hangupTimer?: ReturnType<typeof setTimeout>;
   private timer?: ReturnType<typeof setTimeout>;
   private closing?: Promise<void>;
@@ -340,6 +344,9 @@ export class LiveVoiceSession {
       case "answer_approval":
         return this.toolAnswer(typeof args.option === "string" ? args.option : "");
       case "hang_up":
+        // Asked for outright: a close her goodbye already scheduled now stands
+        // whatever she says next.
+        this.goodbyeArmed = false;
         this.hangupTimer ??= setTimeout(() => void this.close("Orca (hang_up)"), LiveVoiceSession.HANGUP_DELAY_MS);
         this.hangupTimer.unref?.();
         return { status: "closing", note: "The call will end in a few seconds. Say a short goodbye now." };
@@ -667,6 +674,31 @@ export class LiveVoiceSession {
     if (this.line && this.line.speaker !== speaker) this.flushLine();
     this.line ??= { speaker, text: "" };
     this.line.text += delta;
+    if (speaker === "orca") this.watchForGoodbye(this.line.text);
+  }
+
+  /**
+   * End the call when Orca says goodbye, whether or not she asked for it.
+   *
+   * Ending a call is a tool her backend has to call, and she does not always:
+   * on 2026-10-18 15:12Z she said "Okay, hanging up now. Goodbye." twice and the
+   * line stayed open until the user pressed the button. Her own goodbye is the
+   * plainest sign the call is over, so it closes the call after the same pause
+   * `hang_up` uses. Anything more she says stands it down.
+   */
+  private watchForGoodbye(line: string) {
+    const saidGoodbye = LiveVoiceSession.GOODBYE.test(line.trim());
+    if (saidGoodbye && !this.hangupTimer) {
+      this.goodbyeArmed = true;
+      console.log(`[voice] ${this.liveSessionId} Orca said goodbye; ending the call in ${LiveVoiceSession.HANGUP_DELAY_MS / 1000}s`);
+      this.hangupTimer = setTimeout(() => void this.close("Orca saying goodbye"), LiveVoiceSession.HANGUP_DELAY_MS);
+      this.hangupTimer.unref?.();
+    } else if (!saidGoodbye && this.goodbyeArmed) {
+      // She carried on past it ("Goodbye — oh, one more thing"): not over yet.
+      this.goodbyeArmed = false;
+      clearTimeout(this.hangupTimer);
+      this.hangupTimer = undefined;
+    }
   }
 
   private flushLine() {
