@@ -155,6 +155,31 @@ export interface ProjectTabItem {
   a11y: string;
 }
 
+/** Lower case with spaces, dashes and underscores gone: "orca work" finds "OrcaWork_Fix". */
+function searchable(text: string): string {
+  return text.toLowerCase().replace(/[\s_\-.]+/g, "");
+}
+
+/**
+ * Projects whose name matches what was typed in the drawer's project search.
+ *
+ * Names that start with it come first, then names that merely contain it; each
+ * group keeps the newest-first order it came in. An empty search is every
+ * project, so the search opens on the whole list.
+ */
+export function matchProjects(projects: readonly Project[], query: string): Project[] {
+  const q = searchable(query);
+  if (!q) return [...projects];
+  const starts: Project[] = [];
+  const contains: Project[] = [];
+  for (const project of projects) {
+    const name = searchable(project.name);
+    if (name.startsWith(q)) starts.push(project);
+    else if (name.includes(q)) contains.push(project);
+  }
+  return [...starts, ...contains];
+}
+
 /**
  * Which project chips the drawer shows: "All", then the newest `limit`
  * projects, plus how many more are folded behind "+N more".

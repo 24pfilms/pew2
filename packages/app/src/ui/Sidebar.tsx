@@ -9,7 +9,7 @@
  * panel itself is static. App owns the motion.
  */
 import { memo, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Alert, Dimensions, FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Alert, Dimensions, FlatList, Keyboard, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { theme } from "../theme";
@@ -21,7 +21,7 @@ import { orderProvidersByRecency } from "../providerRecency";
 import type { DrawerRow } from "../historyMetadata";
 import { recentSessionsForProvider } from "../sessionHistory";
 import { useAppActive } from "./useAppActive";
-import { projectChips, sessionsInProject, type Project } from "../projects";
+import { matchProjects, projectChips, sessionsInProject, type Project } from "../projects";
 import type { Provider, Status } from "../useDaemon";
 import { lastActiveLabel, sortGoals, type GoalSummary } from "../ggState";
 import { goalDrawerRow } from "../goalsAgent";
@@ -381,8 +381,8 @@ const ProjectTab = memo(function ProjectTab({ path, label, a11y, selected, onSel
   );
 });
 
-/** "+12 more" / "Show fewer": a chip that changes how many projects show, not which. */
-function MoreChip({ label, a11y, onPress }: { label: string; a11y: string; onPress: () => void }) {
+/** "+12 more" / "Show fewer" / "Search": a chip that changes which projects show, not which is chosen. */
+function MoreChip({ label, a11y, icon, onPress }: { label: string; a11y: string; icon?: "search-outline"; onPress: () => void }) {
   return (
     <Pressable
       accessibilityRole="button"
@@ -392,8 +392,9 @@ function MoreChip({ label, a11y, onPress }: { label: string; a11y: string; onPre
         haptics.tap();
         onPress();
       }}
-      style={({ pressed }) => [styles.tab, styles.moreTab, pressed && styles.pressed]}
+      style={({ pressed }) => [styles.tab, styles.moreTab, icon && styles.iconTab, pressed && styles.pressed]}
     >
+      {icon ? <Ionicons name={icon} size={14} color={theme.color.text} /> : null}
       <Text style={[styles.tabText, styles.moreText]} numberOfLines={1}>{label}</Text>
     </Pressable>
   );
@@ -453,18 +454,35 @@ function SidebarView({
   const selectedProject = useMemo(() => projects.find((project) => project.path === selectedProjectPath), [projects, selectedProjectPath]);
   // Every project, opened from "+N more"; folded again on another agent or a pick.
   const [allProjects, setAllProjects] = useState(false);
-  useEffect(() => setAllProjects(false), [activeProviderId]);
-  const chips = useMemo(
-    () => projectChips(projects, selectedProjectPath, VISIBLE_PROJECTS, allProjects),
-    [projects, selectedProjectPath, allProjects],
-  );
+  // What is typed in the project search, or undefined when it is shut.
+  const [search, setSearch] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    setAllProjects(false);
+    setSearch(undefined);
+  }, [activeProviderId]);
+  const chips = useMemo(() => {
+    if (search === undefined) return projectChips(projects, selectedProjectPath, VISIBLE_PROJECTS, allProjects);
+    // Searching: the matches only, every one of them, without "All".
+    const items = matchProjects(projects, search).map((project) => ({
+      path: project.path,
+      label: project.name,
+      a11y: `Project ${project.name}`,
+    }));
+    return { items, hidden: 0 };
+  }, [projects, selectedProjectPath, allProjects, search]);
   const pickProject = useCallback(
     (path?: string) => {
       setAllProjects(false);
+      setSearch(undefined);
+      Keyboard.dismiss();
       onSelectProject(path);
     },
-    [onSelectProject, setAllProjects],
+    [onSelectProject, setAllProjects, setSearch],
   );
+  const closeSearch = useCallback(() => {
+    setSearch(undefined);
+    Keyboard.dismiss();
+  }, [setSearch]);
   // Narrowed before the recent-work cap, or a project's older conversations
   // would be cut away by a window they were never in.
   const visible = useMemo(
@@ -575,13 +593,41 @@ function SidebarView({
                   drawer's swipe-to-close, which took the swipe, so projects past
                   the edge could not be reached. The newest show; "+N more"
                   opens the rest in a capped area that scrolls up and down. */}
+              {search !== undefined && (
+                <View style={styles.searchBox}>
+                  <Ionicons name="search-outline" size={16} color={theme.color.textDim} />
+                  <TextInput
+                    value={search}
+                    onChangeText={setSearch}
+                    placeholder="Search projects"
+                    placeholderTextColor={theme.color.textDim}
+                    style={styles.searchInput}
+                    autoFocus
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    returnKeyType="search"
+                    accessibilityLabel="Search projects"
+                  />
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Close project search"
+                    hitSlop={touchSlop(theme.space(2))}
+                    onPress={closeSearch}
+                    style={({ pressed }) => pressed && styles.pressed}
+                  >
+                    <Ionicons name="close" size={18} color={theme.color.textDim} />
+                  </Pressable>
+                </View>
+              )}
               {projects.length > 0 && (
                 <ScrollView
                   key={activeProviderId ?? "all-providers"}
-                  style={[styles.chipArea, allProjects && styles.chipAreaOpen]}
+                  style={[styles.chipArea, (allProjects || search !== undefined) && styles.chipAreaOpen]}
                   contentContainerStyle={styles.chips}
-                  scrollEnabled={allProjects}
-                  showsVerticalScrollIndicator={allProjects}
+                  scrollEnabled={allProjects || search !== undefined}
+                  showsVerticalScrollIndicator={allProjects || search !== undefined}
+                  // A tap on a match picks it on the first touch, keyboard up or not.
+                  keyboardShouldPersistTaps="handled"
                 >
                   {chips.items.map((item) => (
                     <ProjectTab
@@ -600,8 +646,14 @@ function SidebarView({
                       onPress={() => setAllProjects(true)}
                     />
                   )}
-                  {allProjects && (
+                  {allProjects && search === undefined && (
                     <MoreChip label="Show fewer" a11y="Show only recent projects" onPress={() => setAllProjects(false)} />
+                  )}
+                  {search === undefined && (
+                    <MoreChip label="Search" a11y="Search projects" icon="search-outline" onPress={() => setSearch("")} />
+                  )}
+                  {search !== undefined && chips.items.length === 0 && (
+                    <Text style={styles.empty}>{`No project matches “${search.trim()}”.`}</Text>
                   )}
                 </ScrollView>
               )}
@@ -757,6 +809,19 @@ const styles = StyleSheet.create({
   tabText: { color: theme.color.textDim, fontSize: theme.font.small },
   moreTab: { borderStyle: "solid", borderColor: theme.color.textDim },
   moreText: { color: theme.color.text },
+  iconTab: { flexDirection: "row", alignItems: "center", gap: theme.space(1) },
+  searchBox: {
+    ...dashedOutline,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.space(2),
+    borderRadius: theme.radius.md,
+    paddingHorizontal: theme.space(3),
+    minHeight: theme.size.touch,
+    marginHorizontal: COLUMN_PAD,
+    marginTop: theme.space(3),
+  },
+  searchInput: { flex: 1, color: theme.color.text, fontSize: theme.font.body, paddingVertical: theme.space(2) },
 
   listHead: {
     flexDirection: "row",

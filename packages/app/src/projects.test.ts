@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  matchProjects,
   projectChips,
   projectLabel,
   projectsForProvider,
@@ -148,6 +149,31 @@ test("the memo key separates fields so neighbouring values cannot merge", () => 
   const b = [session({ id: "1", cwd: "/a1", startedAt: 1 })];
 
   expect(projectSourceKey(a, "claude-code")).not.toBe(projectSourceKey(b, "claude-code"));
+});
+
+describe("matchProjects", () => {
+  const projects = [
+    { path: "/p/web", name: "website" },
+    { path: "/p/fix", name: "OrcaWork Fix" },
+    { path: "/p/vp", name: "Voiceprompter" },
+    { path: "/p/orca", name: "orcacoder-v5" },
+  ];
+
+  test("names that start with it first, then names that contain it, newest first within each", () => {
+    expect(matchProjects(projects, "orca").map((p) => p.name)).toEqual(["OrcaWork Fix", "orcacoder-v5"]);
+    expect(matchProjects(projects, "prompt").map((p) => p.name)).toEqual(["Voiceprompter"]);
+    expect(matchProjects(projects, "e").map((p) => p.name)).toEqual(["website", "Voiceprompter", "orcacoder-v5"]);
+  });
+
+  test("case, spaces, dashes and underscores do not matter", () => {
+    expect(matchProjects(projects, "ORCA WORK").map((p) => p.name)).toEqual(["OrcaWork Fix"]);
+    expect(matchProjects(projects, "coder v5").map((p) => p.name)).toEqual(["orcacoder-v5"]);
+  });
+
+  test("an empty search is every project; no match is an empty list", () => {
+    expect(matchProjects(projects, "  ")).toHaveLength(4);
+    expect(matchProjects(projects, "zzz")).toEqual([]);
+  });
 });
 
 describe("projectChips", () => {
