@@ -39,6 +39,13 @@ test("a call the user asked for rings off screen whatever the switches say, neve
   expect(shouldRing("callback", true, DEFAULT_LINK_SETTINGS)).toBe(false);
 });
 
+test("nothing rings during a call with Orca, even with the screen locked: she says it herself", () => {
+  for (const reason of ["callback", "finished", "approval"] as const) {
+    expect(shouldRing(reason, false, DEFAULT_LINK_SETTINGS, true)).toBe(false);
+    expect(shouldRing(reason, false, DEFAULT_LINK_SETTINGS, false)).toBe(true);
+  }
+});
+
 test("an approval rings once, not again when a reconnect restates it", () => {
   const seen = new Set<string>();
   expect(firstSighting(seen, "r1")).toBe(true);

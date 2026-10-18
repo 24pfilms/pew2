@@ -110,9 +110,13 @@ export function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => 
   const [pendingVoice, setPendingVoice] = useState<string | undefined>(undefined);
   const offerIncomingRef = useRef<((turn: IncomingCall) => void) | undefined>(undefined);
 
+  // Whether a call with Orca is open, as a live check. Filled in once the voice
+  // hook below exists; its function reads the call itself, so it is never stale.
+  const onCallRef = useRef<() => boolean>(() => false);
   const { choice, setChoice, pushExpected, announceTurn, announceApproval, announceCallback } = useTurnBanners(
     linkSettingsRef,
     voiceOfferRef,
+    onCallRef,
   );
 
   // The relay identifies devices by this, and it must match the id baked into
@@ -810,6 +814,7 @@ export function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => 
   });
   voiceOfferRef.current = daemon.voice?.available === true;
   offerIncomingRef.current = voice.offerIncoming;
+  onCallRef.current = voice.onCall;
 
   // A ring answered with "Talk to Orca": once the connection is back, show the
   // conversation and start a call briefed on it.

@@ -50,9 +50,18 @@ export type RingReason = "approval" | "finished" | "callback";
  * A promised call-back ignores the switches: the user asked for that call in so
  * many words ("call me when it's done"), and a setting chosen weeks ago for
  * every finished turn is not a reason to break that promise.
+ *
+ * Never during a call with Orca, screen locked or not: she tells the user
+ * herself, and a ring screen over the call is silent anyway (the call holds
+ * the audio) — it only reads as the ring having failed.
  */
-export function shouldRing(reason: RingReason, foreground: boolean, settings: LinkSettings): boolean {
-  if (foreground) return false;
+export function shouldRing(
+  reason: RingReason,
+  foreground: boolean,
+  settings: LinkSettings,
+  onCall = false,
+): boolean {
+  if (foreground || onCall) return false;
   if (reason === "callback") return true;
   return reason === "approval" ? settings.ringApprovals : settings.ringFinished;
 }

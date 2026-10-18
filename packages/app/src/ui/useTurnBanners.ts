@@ -16,8 +16,14 @@ import * as PewLink from "../../modules/pew-link";
  *   the callbacks the socket handler holds.
  * @param voiceOffered Whether the computer can host a call with Orca right
  *   now, so a ring can be answered by talking. Read the same way.
+ * @param onCall Whether a call with Orca is open right now. While it is, she
+ *   says what happened and nothing rings; a banner is still left behind.
  */
-export function useTurnBanners(linkSettings: RefObject<LinkSettings>, voiceOffered: RefObject<boolean>) {
+export function useTurnBanners(
+  linkSettings: RefObject<LinkSettings>,
+  voiceOffered: RefObject<boolean>,
+  onCall: RefObject<() => boolean>,
+) {
   // Whether the app is the thing on screen. A ref, not state: it is read when a
   // turn finishes, and re-rendering the whole screen because the app was
   // backgrounded would be work nobody can see.
@@ -55,7 +61,7 @@ export function useTurnBanners(linkSettings: RefObject<LinkSettings>, voiceOffer
    * cannot be raised still leaves the ordinary notification.
    */
   const announceTurn = useCallback((turn: TurnFinished) => {
-    const ringing = shouldRing("finished", foreground.current, linkSettings.current);
+    const ringing = shouldRing("finished", foreground.current, linkSettings.current, onCall.current());
     const notice = finishedNotice({
       ...turn,
       foreground: foreground.current,
@@ -78,7 +84,7 @@ export function useTurnBanners(linkSettings: RefObject<LinkSettings>, voiceOffer
       console.warn("[pew2] could not ring for a finished turn; notifying instead");
     }
     void notify(notice);
-  }, [linkSettings, voiceOffered]);
+  }, [linkSettings, voiceOffered, onCall]);
 
   /**
    * An agent somewhere is blocked on an approval. With the app off screen it
@@ -89,7 +95,7 @@ export function useTurnBanners(linkSettings: RefObject<LinkSettings>, voiceOffer
   const announceApproval = useCallback(
     (approval: { requestId: string; sessionId: string; title: string }) => {
       if (!firstSighting(seenApprovals.current, approval.requestId)) return;
-      if (!shouldRing("approval", foreground.current, linkSettings.current)) return;
+      if (!shouldRing("approval", foreground.current, linkSettings.current, onCall.current())) return;
       const rang = PewLink.ring(
         `approval:${approval.requestId}`,
         "Approval needed",
@@ -101,7 +107,7 @@ export function useTurnBanners(linkSettings: RefObject<LinkSettings>, voiceOffer
       console.warn("[pew2] could not ring for an approval; notifying instead");
       void notify({ title: "Approval needed", body: approval.title, sessionId: approval.sessionId });
     },
-    [linkSettings, voiceOffered],
+    [linkSettings, voiceOffered, onCall],
   );
 
   /**
@@ -115,7 +121,7 @@ export function useTurnBanners(linkSettings: RefObject<LinkSettings>, voiceOffer
       if (!firstSighting(seenCallbacks.current, call.id)) return;
       const notice = callbackNotice(call, foreground.current, activeSessionId);
       if (!notice) return;
-      if (shouldRing("callback", foreground.current, linkSettings.current)) {
+      if (shouldRing("callback", foreground.current, linkSettings.current, onCall.current())) {
         const rang = PewLink.ring(
           `callback:${call.id}`,
           notice.title,
@@ -128,7 +134,7 @@ export function useTurnBanners(linkSettings: RefObject<LinkSettings>, voiceOffer
       }
       void notify(notice);
     },
-    [linkSettings, voiceOffered],
+    [linkSettings, voiceOffered, onCall],
   );
 
   return { choice, setChoice, pushExpected, announceTurn, announceApproval, announceCallback };

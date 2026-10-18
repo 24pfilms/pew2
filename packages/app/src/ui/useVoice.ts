@@ -89,6 +89,8 @@ export interface Voice {
   offerIncoming: (turn: IncomingCall) => void;
   acceptIncoming: () => void;
   declineIncoming: () => void;
+  /** A call with Orca is open right now, read live; stable across renders. */
+  onCall: () => boolean;
   /** A call is running, even minimized: the banner shows on this. */
   active: boolean;
   minimized: boolean;
@@ -452,6 +454,14 @@ export function useVoice(options: UseVoiceOptions): Voice {
     if (turn) startCall(turn.sessionId);
   }, [incoming, declineIncoming, startCall]);
 
+  /**
+   * Whether a call with Orca is open right now. Read from the call itself, not
+   * from rendered state: a ring is decided with the screen locked, where a
+   * render can lag the call ending, and a stale "still on the call" would hold
+   * back exactly the ring the user hung up to wait for.
+   */
+  const onCall = useCallback(() => call.current !== undefined && !call.current.done, []);
+
   const providerName = options.providerName;
   return useMemo(() => ({
     offered: options.voice !== undefined,
@@ -473,7 +483,8 @@ export function useVoice(options: UseVoiceOptions): Voice {
     acceptIncoming,
     declineIncoming,
     dismiss,
-  }), [options.voice, state, now, incoming, providerName, start, startFor, end, toggleMute, minimize, expand, offerIncoming, acceptIncoming, declineIncoming, dismiss]);
+    onCall,
+  }), [options.voice, state, now, incoming, providerName, start, startFor, end, toggleMute, minimize, expand, offerIncoming, acceptIncoming, declineIncoming, dismiss, onCall]);
 }
 
 /** Stop and release a call's ringtone. Safe to call twice. */
