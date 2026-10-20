@@ -95,7 +95,36 @@ async function countFile(filePath: string, expectedSessionId: string): Promise<n
   return count;
 }
 
+/**
+ * Where GG Coder-family agents keep their chats, most specific first.
+ *
+ * GG Coder writes to `~/.gg/sessions`; OrcaCoder V5, the build pew2 runs as
+ * "GG Coder" on this machine, is pointed at `~/.orcacoder-v4` by its launch
+ * preload (`ORCA_DATA_DIR`), which the daemon never sees. Reading only `~/.gg`
+ * meant every OrcaCoder chat row went without a count. A session is looked for
+ * in each root in turn; the first that holds it wins.
+ */
+export function ggcoderSessionRoots(env: NodeJS.ProcessEnv = process.env): string[] {
+  const roots = [
+    env.ORCA_DATA_DIR ? path.join(env.ORCA_DATA_DIR, "sessions") : undefined,
+    path.join(homedir(), ".orcacoder-v4", "sessions"),
+    path.join(homedir(), ".gg", "sessions"),
+  ].filter((root): root is string => root !== undefined);
+  return [...new Set(roots)];
+}
+
 async function countSession(
+  session: AgentSession,
+  sessionsRoots: string[],
+): Promise<number | undefined> {
+  for (const root of sessionsRoots) {
+    const count = await countSessionIn(session, root);
+    if (count !== undefined) return count;
+  }
+  return undefined;
+}
+
+async function countSessionIn(
   session: AgentSession,
   sessionsRoot: string,
 ): Promise<number | undefined> {
@@ -128,8 +157,9 @@ async function countSession(
  */
 export async function hydrateGgCoderMessageCounts(
   sessions: AgentSession[],
-  sessionsRoot = path.join(homedir(), ".gg", "sessions"),
+  sessionsRoot: string | string[] = ggcoderSessionRoots(),
 ): Promise<void> {
+  const roots = Array.isArray(sessionsRoot) ? sessionsRoot : [sessionsRoot];
   const pending = sessions.filter((session) => session.messageCount === undefined);
   let next = 0;
   const worker = async () => {
@@ -137,7 +167,7 @@ export async function hydrateGgCoderMessageCounts(
       const session = pending[next++];
       if (!session) return;
       try {
-        const count = await countSession(session, sessionsRoot);
+        const count = await countSession(session, roots);
         if (count !== undefined) session.messageCount = count;
       } catch {
         // ACP replay below remains the compatibility fallback for raced/corrupt files.

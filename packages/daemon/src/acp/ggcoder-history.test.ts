@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AgentSession } from "./connect";
-import { hydrateGgCoderMessageCounts, loadGgCoderDisplayHistory } from "./ggcoder-history";
+import { ggcoderSessionRoots, hydrateGgCoderMessageCounts, loadGgCoderDisplayHistory } from "./ggcoder-history";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -57,6 +57,38 @@ test("counts the unopened GG Coder lineage exactly as ACP replay renders it", as
 
   // a1 and a2 coalesce because invisible tool updates do not create a row.
   expect(sessions[0]!.messageCount).toBe(4);
+});
+
+test("a chat kept in the second store (OrcaCoder's, not GG Coder's) is still counted", async () => {
+  const empty = await mkdtemp(path.join(tmpdir(), "pew2-gg-empty-"));
+  const orca = await mkdtemp(path.join(tmpdir(), "pew2-orca-store-"));
+  roots.push(empty, orca);
+  const cwd = "/Users/test/studio";
+  const directory = path.join(orca, "Users_test_studio");
+  await mkdir(directory, { recursive: true });
+  const sessionId = "abcdef12-1234-1234-1234-123456789abc";
+  const entries = [
+    { type: "session", id: sessionId, cwd, leafId: "a1" },
+    { type: "message", id: "u1", parentId: null, message: { role: "user", content: "Hi" } },
+    { type: "message", id: "a1", parentId: "u1", message: { role: "assistant", content: "Hello" } },
+  ];
+  await writeFile(
+    path.join(directory, `2026-10-20T12-00-00-000Z_${sessionId.slice(0, 8)}.jsonl`),
+    `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+  );
+  const sessions: AgentSession[] = [{ sessionId, cwd, title: "Studio chat" }];
+
+  await hydrateGgCoderMessageCounts(sessions, [empty, orca]);
+
+  expect(sessions[0]!.messageCount).toBe(2);
+});
+
+test("the stores are looked in most specific first, without repeats", () => {
+  const roots = ggcoderSessionRoots({ ORCA_DATA_DIR: path.join("C:", "data", "orca") });
+  expect(roots[0]).toBe(path.join("C:", "data", "orca", "sessions"));
+  expect(roots.some((root) => root.endsWith(path.join(".orcacoder-v4", "sessions")))).toBe(true);
+  expect(roots.at(-1)!.endsWith(path.join(".gg", "sessions"))).toBe(true);
+  expect(new Set(roots).size).toBe(roots.length);
 });
 
 test("loads a compacted GG Coder chain locally without the child summary or overlap", async () => {
