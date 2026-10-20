@@ -241,6 +241,25 @@ export const AgentSession = z.object({
   updatedAt: z.string().optional(),
   /** Message rows available before the transcript is opened on the app. */
   messageCount: z.number().int().nonnegative().optional(),
+  /**
+   * The studio projects this conversation worked in, most-worked first (see
+   * `StudioProject`). Only for a conversation in a studio; absent elsewhere.
+   */
+  topics: z.array(z.string()).optional(),
+});
+
+/**
+ * A project inside a "studio": a project folder whose `projects/` folder holds
+ * one folder per piece of work (Orcastrator keeps 38). Chats always run at the
+ * studio's top level, where its tools live, and are aimed at these.
+ */
+export const StudioProject = z.object({
+  /** The folder's name, as people say it ("EverestChris_Components"). */
+  name: z.string(),
+  /** Absolute path of the folder. */
+  path: z.string(),
+  /** ISO 8601: the newest change to the folder or anything directly in it. */
+  updatedAt: z.string().optional(),
 });
 
 /**
@@ -331,6 +350,11 @@ export const ProviderSessions = z.object({
   sessions: z.array(AgentSession),
   /** Same gate as capabilities: rows that cannot be reopened are not listed. */
   canResume: z.boolean(),
+  /**
+   * The projects inside this one when it is a studio, newest first. Absent for
+   * an ordinary project, and from a daemon that predates studios.
+   */
+  studio: z.array(StudioProject).optional(),
 });
 
 /**
@@ -1475,6 +1499,7 @@ export type Envelope = z.output<typeof Envelope>;
 export type ProviderAnnounce = z.output<typeof ProviderAnnounce>;
 export type ConfigOption = z.output<typeof ConfigOption>;
 export type AgentSession = z.output<typeof AgentSession>;
+export type StudioProject = z.output<typeof StudioProject>;
 export type ResumeSession = z.output<typeof ResumeSession>;
 export type ProviderCapabilitiesRequest = z.output<typeof ProviderCapabilitiesRequest>;
 export type ProviderCapabilities = z.output<typeof ProviderCapabilities>;

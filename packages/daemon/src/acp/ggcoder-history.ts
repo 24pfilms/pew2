@@ -19,7 +19,7 @@ interface StoredMessage {
 }
 
 /** GG Coder's stable cwd-to-directory encoding, shared by every persisted session. */
-function encodeCwd(cwd: string): string {
+export function encodeCwd(cwd: string): string {
   return cwd
     .replace(/^\\\\\?\\UNC\\/i, "\\\\")
     .replace(/^\\\\\?\\/i, "")

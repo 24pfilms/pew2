@@ -118,6 +118,8 @@ export interface AgentSession {
   updatedAt?: string;
   /** Number of message rows the app will render before this session is opened. */
   messageCount?: number;
+  /** The studio projects it worked in, most-worked first (`ggcoder-topics.ts`). */
+  topics?: string[];
 }
 
 /**

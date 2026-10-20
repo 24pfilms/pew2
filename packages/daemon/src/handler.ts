@@ -11,7 +11,8 @@
  * client, which is the point of the daemon owning the log: a phone and a
  * desktop watching one session both need the update.
  */
-import { GG_GOALS_ID, ORCA_GOALS_ENGINE_ID, type Daemon } from "./index.js";
+import { GG_GOALS_ID, GG_PROVIDER_ID, ORCA_GOALS_ENGINE_ID, type Daemon } from "./index.js";
+import { hydrateStudioTopics } from "./acp/ggcoder-topics.js";
 import { humanError } from "./errors.js";
 import { loadImage, loadVideo } from "./images.js";
 import { workspaceStatus } from "./git.js";
@@ -19,6 +20,7 @@ import { resolveWorkspace } from "./workspace.js";
 import { suggestionRoots, discoverRepos, listDirectory } from "./workspaces.js";
 import { wire } from "@pew2/protocol";
 import { pushFinishedTurn } from "./push.js";
+import { studioProjects } from "./studio.js";
 import { storeGoalFiles } from "./goalFiles";
 import { readKnownProjects } from "./known-projects.js";
 import { DASH_ERRORS } from "./orcaDash.js";
@@ -169,6 +171,12 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
         const providerId = message.providerId;
         const projectCwd = await namedProject(daemon, providerId, message.cwd);
         const sessions = await daemon.sessionsForProject(providerId, projectCwd);
+        // The projects inside it, when it is a studio: sent with the chats the
+        // phone is already asking for, so opening one costs no extra round trip.
+        const studio = await studioProjects(projectCwd);
+        // And which of them each chat worked in, read from the agent's own
+        // store: only GG Coder's (OrcaCoder's) is known well enough to read.
+        if (studio && providerId === GG_PROVIDER_ID) await hydrateStudioTopics(sessions, studio);
         reply({
           t: "provider.sessions",
           providerId,
@@ -177,6 +185,7 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
           // These come from the same list the probe answered from, so they are
           // reopenable on exactly the same terms.
           canResume: (await daemon.probeProvider(providerId)).canResume,
+          ...(studio ? { studio } : {}),
         });
         break;
       }
