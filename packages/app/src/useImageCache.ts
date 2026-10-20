@@ -4,7 +4,7 @@
  * and the request guard that must always move with it. See `imageCache.ts`.
  */
 import { useCallback, useRef, useState } from "react";
-import { emptyImageCache, putImage, type ImageCache } from "./imageCache";
+import { emptyImageCache, loadingUris, putImage, type ImageCache } from "./imageCache";
 import type { ImageEntry } from "./daemonTypes";
 
 export function useImageCache() {
@@ -55,5 +55,18 @@ export function useImageCache() {
     setImages({});
   }, []);
 
-  return { images, requestedImages, storeImage, clearImages };
+  /** One picture's entry as it stands now, read from the source of truth. */
+  const imageEntry = useCallback((uri: string): ImageEntry | undefined => imagesCache.current.images[uri], []);
+
+  /**
+   * Pictures still waiting on an answer.
+   *
+   * A request rides one socket: when that socket is replaced, its answer is
+   * gone with it, and a picture left "loading" would spin for the rest of the
+   * app's life — the guard above stops it ever being asked for again. These
+   * are what a new connection re-asks for.
+   */
+  const loadingImages = useCallback((): string[] => loadingUris(imagesCache.current), []);
+
+  return { images, requestedImages, storeImage, clearImages, imageEntry, loadingImages };
 }

@@ -141,3 +141,13 @@ export function touchImage<T extends CachedImage>(
   order.push(uri);
   return { ...cache, order };
 }
+
+/**
+ * Pictures still waiting on an answer, in the order they were asked for.
+ *
+ * A request rides one socket, so a replaced socket takes its answers with it;
+ * these are what a new connection has to ask for again.
+ */
+export function loadingUris<T extends CachedImage>(cache: ImageCache<T>): string[] {
+  return cache.order.filter((uri) => cache.images[uri]?.status === "loading");
+}

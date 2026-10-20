@@ -74,6 +74,12 @@ export type { PushAddress, TurnFinished, VoiceFrame } from "./daemonState";
  */
 /** Longest a tapped video may take to arrive: a 7MB clip measured 12-15 s over the relay. */
 const VIDEO_FETCH_TIMEOUT_MS = 90_000;
+/**
+ * Longest a picture may stay "loading" before it says so and offers a retry.
+ * Pictures had no bound at all: one whose answer was lost with a dropped
+ * socket spun for the rest of the app's life (2026-10-20, an Orcastrator chat).
+ */
+const IMAGE_FETCH_TIMEOUT_MS = 45_000;
 
 export function useDaemon(
   url: string,
@@ -119,7 +125,7 @@ export function useDaemon(
   const [gg, setGg] = useState<GgState>(EMPTY_GG);
   // Counter behind goal request ids.
   const goalCounter = useRef(0);
-  const { images, requestedImages, storeImage, clearImages } = useImageCache();
+  const { images, requestedImages, storeImage, clearImages, imageEntry, loadingImages } = useImageCache();
   // Commands per provider, kept outside the session so opening a conversation
   // does not blank the menu for agents that never send the ACP notification and
   // are served from their project's files instead.
@@ -450,6 +456,16 @@ export function useDaemon(
     return true;
   }, []);
 
+  // One timer per picture in flight: what turns a lost answer into a retry.
+  const imageTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  useEffect(() => {
+    const timers = imageTimers.current;
+    return () => {
+      for (const timer of timers.values()) clearTimeout(timer);
+      timers.clear();
+    };
+  }, []);
+
   // Sent outside any state updater: React may invoke an updater twice, and a
   // socket write in one would ask the daemon for the same picture twice.
   const sendImageRequest = useCallback(
@@ -468,9 +484,26 @@ export function useDaemon(
             // never written to a socket.
             { status: "error", message: "Not connected to your computer" },
       );
+      if (!sent) return;
+      clearTimeout(imageTimers.current.get(uri));
+      imageTimers.current.set(
+        uri,
+        setTimeout(() => {
+          imageTimers.current.delete(uri);
+          if (imageEntry(uri)?.status !== "loading") return;
+          storeImage(uri, { status: "error", message: "The picture took too long to arrive. Tap to try again." });
+        }, IMAGE_FETCH_TIMEOUT_MS),
+      );
     },
-    [post, storeImage],
+    [post, storeImage, imageEntry],
   );
+
+  // A new connection re-asks for every picture still waiting: their answers
+  // rode the socket that was replaced, and nothing else would ever ask again.
+  useEffect(() => {
+    if (state.status !== "online") return;
+    for (const uri of loadingImages()) sendImageRequest(uri);
+  }, [state.status, loadingImages, sendImageRequest]);
 
   /**
    * Ask the computer for a video, once the user taps its card.

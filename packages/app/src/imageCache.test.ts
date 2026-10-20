@@ -11,6 +11,7 @@ import {
   DEFAULT_IMAGE_CACHE_BYTES,
   emptyImageCache,
   imageBytes,
+  loadingUris,
   putImage,
   touchImage,
   type CachedImage,
@@ -136,4 +137,16 @@ test("an empty cache reports nothing held", () => {
   expect(cache.images).toEqual({});
   expect(cache.bytes).toBe(0);
   expect(cache.limit).toBe(DEFAULT_IMAGE_CACHE_BYTES);
+});
+
+test("the pictures still loading are the ones a new connection must ask for again", () => {
+  let cache = emptyImageCache<CachedImage>();
+  cache = putImage(cache, "a.png", { status: "loading" }).cache;
+  cache = putImage(cache, "b.png", ready(10)).cache;
+  cache = putImage(cache, "c.png", { status: "error" }).cache;
+  cache = putImage(cache, "d.png", { status: "loading" }).cache;
+  expect(loadingUris(cache)).toEqual(["a.png", "d.png"]);
+  // An answer that lands takes it off the list.
+  cache = putImage(cache, "a.png", ready(10)).cache;
+  expect(loadingUris(cache)).toEqual(["d.png"]);
 });
