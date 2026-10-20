@@ -20,7 +20,7 @@ export function formatHistoryMetadata(
 }
 
 /** Sidebar's complete data contract, deliberately excluding transcript/config. */
-export type DrawerRow = Pick<Session, "id" | "providerId" | "title" | "startedAt" | "cwd" | "folder" | "messageCount" | "busy" | "unread" | "permission">;
+export type DrawerRow = Pick<Session, "id" | "providerId" | "title" | "startedAt" | "cwd" | "folder" | "messageCount" | "topics" | "busy" | "unread" | "permission">;
 
 /** Bounded by the retained session list; no second transcript cache. Pure so it
  * remains safe when React retries a render or state updater. */
@@ -31,6 +31,8 @@ export function projectDrawerRows(previous: DrawerRow[], sessions: readonly Sess
       id: session.id, providerId: session.providerId, title: session.title,
       startedAt: session.startedAt, cwd: session.cwd, folder: session.folder,
       messageCount: session.turns.length || session.messageCount,
+      // Kept by reference: `mergeAgentSessions` replaces the array only when it changed.
+      topics: session.topics,
       busy: session.busy === true, unread: session.unread === true, permission: session.permission,
     };
     const old = byId.get(row.id);

@@ -21,7 +21,10 @@ import { orderProvidersByRecency } from "../providerRecency";
 import type { DrawerRow } from "../historyMetadata";
 import { recentSessionsForProvider } from "../sessionHistory";
 import { useAppActive } from "./useAppActive";
-import { matchProjects, projectChips, sessionsInProject, type Project } from "../projects";
+import { matchProjects, projectChips, sessionsInProject, sessionsInStudioProject, type Project } from "../projects";
+import type { wire } from "@pew2/protocol";
+
+type StudioProject = wire.StudioProject;
 import type { Provider, Status } from "../useDaemon";
 import { lastActiveLabel, sortGoals, type GoalSummary } from "../ggState";
 import { goalDrawerRow } from "../goalsAgent";
@@ -71,6 +74,15 @@ interface SidebarProps {
   selectedProjectPath?: string;
   /** `undefined` clears the filter back to every project. */
   onSelectProject: (path?: string) => void;
+  /**
+   * The projects inside the chosen project when it is a studio (a `projects/`
+   * folder of folders, like Orcastrator), newest first. Absent otherwise.
+   */
+  studio?: readonly StudioProject[];
+  /** The studio project picked, if any: chats narrow to those that worked in it. */
+  selectedStudioPath?: string;
+  /** `undefined` goes back to every chat in the studio. Optional with `studio`. */
+  onSelectStudio?: (path?: string) => void;
   /** Host and port, retained for accessible detail and the Forget confirmation. */
   machineLabel: string;
   /** True when reached via a relay, so it works away from home. */
@@ -403,6 +415,121 @@ function MoreChip({ label, a11y, icon, onPress }: { label: string; a11y: string;
 /** Projects shown before "+N more": the newest, on two or three wrapped lines. */
 const VISIBLE_PROJECTS = 9;
 
+interface ChipRowProps {
+  projects: readonly Project[];
+  selectedPath?: string;
+  onSelect: (path?: string) => void;
+  /** Shown before "+N more". */
+  limit: number;
+  /** What the row holds, for labels: "project", "studio project". */
+  noun: string;
+  /** The first chip, which clears the choice. */
+  all: { label: string; a11y: string };
+}
+
+/**
+ * A set of project chips: wrapped, never a sideways strip (that lived under the
+ * drawer's swipe-to-close, which took the swipe), the newest few with "+N more"
+ * for the rest in a capped area that scrolls up and down, and a search. Used
+ * for an agent's projects and for the projects inside a studio, so both behave
+ * the same. Keyed by its caller: a new key starts it folded with no search.
+ */
+function ChipRow({ projects, selectedPath, onSelect, limit, noun, all }: ChipRowProps) {
+  const [expanded, setExpanded] = useState(false);
+  // What is typed in the search, or undefined when it is shut.
+  const [search, setSearch] = useState<string | undefined>(undefined);
+  const chips = useMemo(() => {
+    if (search === undefined) return projectChips(projects, selectedPath, limit, expanded, all);
+    // Searching: the matches only, every one of them, without "All".
+    const items = matchProjects(projects, search).map((project) => ({
+      path: project.path,
+      label: project.name,
+      a11y: `${noun} ${project.name}`,
+    }));
+    return { items, hidden: 0 };
+  }, [projects, selectedPath, limit, expanded, all, search, noun]);
+  const pick = useCallback(
+    (path?: string) => {
+      setExpanded(false);
+      setSearch(undefined);
+      Keyboard.dismiss();
+      onSelect(path);
+    },
+    [onSelect, setExpanded, setSearch],
+  );
+  const closeSearch = useCallback(() => {
+    setSearch(undefined);
+    Keyboard.dismiss();
+  }, [setSearch]);
+  const open = expanded || search !== undefined;
+  return (
+    <>
+      {search !== undefined && (
+        <View style={styles.searchBox}>
+          <Ionicons name="search-outline" size={16} color={theme.color.textDim} />
+          <TextInput
+            value={search}
+            onChangeText={setSearch}
+            placeholder={`Search ${noun}s`}
+            placeholderTextColor={theme.color.textDim}
+            style={styles.searchInput}
+            autoFocus
+            autoCapitalize="none"
+            autoCorrect={false}
+            returnKeyType="search"
+            accessibilityLabel={`Search ${noun}s`}
+          />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Close ${noun} search`}
+            hitSlop={touchSlop(theme.space(2))}
+            onPress={closeSearch}
+            style={({ pressed }) => pressed && styles.pressed}
+          >
+            <Ionicons name="close" size={18} color={theme.color.textDim} />
+          </Pressable>
+        </View>
+      )}
+      <ScrollView
+        style={[styles.chipArea, open && styles.chipAreaOpen]}
+        contentContainerStyle={styles.chips}
+        scrollEnabled={open}
+        showsVerticalScrollIndicator={open}
+        // A tap on a match picks it on the first touch, keyboard up or not.
+        keyboardShouldPersistTaps="handled"
+      >
+        {chips.items.map((item) => (
+          <ProjectTab
+            key={item.path ?? ALL_TAB}
+            path={item.path}
+            label={item.label}
+            a11y={item.a11y}
+            selected={item.path === selectedPath}
+            onSelect={pick}
+          />
+        ))}
+        {chips.hidden > 0 && (
+          <MoreChip label={`+${chips.hidden} more`} a11y={`Show all ${projects.length} ${noun}s`} onPress={() => setExpanded(true)} />
+        )}
+        {expanded && search === undefined && (
+          <MoreChip label="Show fewer" a11y={`Show only recent ${noun}s`} onPress={() => setExpanded(false)} />
+        )}
+        {search === undefined && (
+          <MoreChip label="Search" a11y={`Search ${noun}s`} icon="search-outline" onPress={() => setSearch("")} />
+        )}
+        {search !== undefined && chips.items.length === 0 && (
+          <Text style={styles.empty}>{`No ${noun} matches “${search.trim()}”.`}</Text>
+        )}
+      </ScrollView>
+    </>
+  );
+}
+
+/** The first chip of each row. Stable objects, so the rows' memos hold. */
+const ALL_PROJECTS = { label: "All", a11y: "All projects" };
+/** A studio row with nowhere to report a pick (previews): nothing happens. */
+const noStudioPick = () => {};
+
 function SidebarView({
   open,
   providers,
@@ -417,6 +544,9 @@ function SidebarView({
   projects,
   selectedProjectPath,
   onSelectProject,
+  studio,
+  selectedStudioPath,
+  onSelectStudio,
   machineLabel,
   machineRemote,
   connectionStatus,
@@ -452,42 +582,23 @@ function SidebarView({
   }, [sessions]);
 
   const selectedProject = useMemo(() => projects.find((project) => project.path === selectedProjectPath), [projects, selectedProjectPath]);
-  // Every project, opened from "+N more"; folded again on another agent or a pick.
-  const [allProjects, setAllProjects] = useState(false);
-  // What is typed in the project search, or undefined when it is shut.
-  const [search, setSearch] = useState<string | undefined>(undefined);
-  useEffect(() => {
-    setAllProjects(false);
-    setSearch(undefined);
-  }, [activeProviderId]);
-  const chips = useMemo(() => {
-    if (search === undefined) return projectChips(projects, selectedProjectPath, VISIBLE_PROJECTS, allProjects);
-    // Searching: the matches only, every one of them, without "All".
-    const items = matchProjects(projects, search).map((project) => ({
-      path: project.path,
-      label: project.name,
-      a11y: `Project ${project.name}`,
-    }));
-    return { items, hidden: 0 };
-  }, [projects, selectedProjectPath, allProjects, search]);
-  const pickProject = useCallback(
-    (path?: string) => {
-      setAllProjects(false);
-      setSearch(undefined);
-      Keyboard.dismiss();
-      onSelectProject(path);
-    },
-    [onSelectProject, setAllProjects, setSearch],
+  // A studio (a project whose `projects/` holds projects, like Orcastrator):
+  // its own projects, and the one picked, if any.
+  const inStudio = selectedProject !== undefined && (studio?.length ?? 0) > 0;
+  const studioProject = inStudio ? studio?.find((project) => project.path === selectedStudioPath) : undefined;
+  const allOfStudio = useMemo(
+    () => ({ label: "All", a11y: `Every chat in ${selectedProject?.name ?? "this project"}` }),
+    [selectedProject?.name],
   );
-  const closeSearch = useCallback(() => {
-    setSearch(undefined);
-    Keyboard.dismiss();
-  }, [setSearch]);
   // Narrowed before the recent-work cap, or a project's older conversations
   // would be cut away by a window they were never in.
   const visible = useMemo(
-    () => recentSessionsForProvider(sessionsInProject(sessions, selectedProject), activeProviderId),
-    [sessions, selectedProject, activeProviderId],
+    () =>
+      recentSessionsForProvider(
+        sessionsInStudioProject(sessionsInProject(sessions, selectedProject), studioProject?.name),
+        activeProviderId,
+      ),
+    [sessions, selectedProject, studioProject?.name, activeProviderId],
   );
 
   const openRow = useCallback(
@@ -593,74 +704,51 @@ function SidebarView({
                   drawer's swipe-to-close, which took the swipe, so projects past
                   the edge could not be reached. The newest show; "+N more"
                   opens the rest in a capped area that scrolls up and down. */}
-              {search !== undefined && (
-                <View style={styles.searchBox}>
-                  <Ionicons name="search-outline" size={16} color={theme.color.textDim} />
-                  <TextInput
-                    value={search}
-                    onChangeText={setSearch}
-                    placeholder="Search projects"
-                    placeholderTextColor={theme.color.textDim}
-                    style={styles.searchInput}
-                    autoFocus
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    returnKeyType="search"
-                    accessibilityLabel="Search projects"
-                  />
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Close project search"
-                    hitSlop={touchSlop(theme.space(2))}
-                    onPress={closeSearch}
-                    style={({ pressed }) => pressed && styles.pressed}
-                  >
-                    <Ionicons name="close" size={18} color={theme.color.textDim} />
-                  </Pressable>
-                </View>
-              )}
               {projects.length > 0 && (
-                <ScrollView
+                <ChipRow
                   key={activeProviderId ?? "all-providers"}
-                  style={[styles.chipArea, (allProjects || search !== undefined) && styles.chipAreaOpen]}
-                  contentContainerStyle={styles.chips}
-                  scrollEnabled={allProjects || search !== undefined}
-                  showsVerticalScrollIndicator={allProjects || search !== undefined}
-                  // A tap on a match picks it on the first touch, keyboard up or not.
-                  keyboardShouldPersistTaps="handled"
-                >
-                  {chips.items.map((item) => (
-                    <ProjectTab
-                      key={item.path ?? ALL_TAB}
-                      path={item.path}
-                      label={item.label}
-                      a11y={item.a11y}
-                      selected={item.path === selectedProject?.path}
-                      onSelect={pickProject}
-                    />
-                  ))}
-                  {chips.hidden > 0 && (
-                    <MoreChip
-                      label={`+${chips.hidden} more`}
-                      a11y={`Show all ${projects.length} projects`}
-                      onPress={() => setAllProjects(true)}
-                    />
-                  )}
-                  {allProjects && search === undefined && (
-                    <MoreChip label="Show fewer" a11y="Show only recent projects" onPress={() => setAllProjects(false)} />
-                  )}
-                  {search === undefined && (
-                    <MoreChip label="Search" a11y="Search projects" icon="search-outline" onPress={() => setSearch("")} />
-                  )}
-                  {search !== undefined && chips.items.length === 0 && (
-                    <Text style={styles.empty}>{`No project matches “${search.trim()}”.`}</Text>
-                  )}
-                </ScrollView>
+                  projects={projects}
+                  selectedPath={selectedProject?.path}
+                  onSelect={onSelectProject}
+                  // Inside a studio its own projects take the room: this row
+                  // folds to the chosen one (the rest stay a tap away).
+                  limit={inStudio ? 1 : VISIBLE_PROJECTS}
+                  noun="project"
+                  all={ALL_PROJECTS}
+                />
               )}
 
-              {/* Names the project when one is chosen, so "am I in the right
-                  place?" is answered before reading a single row. */}
-              <ListHead label={selectedProject ? `${selectedProject.name} chats` : "Latest chats"}>
+              {/* A studio's own projects: chats there always run at the top,
+                  where its tools live, so picking one narrows the chats to
+                  those that worked in it, and aims new work at it. */}
+              {inStudio && studio && (
+                <>
+                  <View style={styles.studioHead}>
+                    <Led tone="dim">{`${selectedProject.name} projects`}</Led>
+                  </View>
+                  <ChipRow
+                    key={`${activeProviderId ?? ""}:${selectedProject.path}`}
+                    projects={studio}
+                    selectedPath={studioProject?.path}
+                    onSelect={onSelectStudio ?? noStudioPick}
+                    limit={VISIBLE_PROJECTS}
+                    noun="studio project"
+                    all={allOfStudio}
+                  />
+                </>
+              )}
+
+              {/* Names what the list holds, so "am I in the right place?" is
+                  answered before reading a single row. */}
+              <ListHead
+                label={
+                  studioProject
+                    ? `${studioProject.name} chats`
+                    : selectedProject
+                      ? `${selectedProject.name} chats`
+                      : "Latest chats"
+                }
+              >
                 {/* Always here, like New goal for GG Goals. With a project tab
                     chosen it opens there; on All it opens where this agent
                     last worked (the composer names the project, and it can be
@@ -675,8 +763,8 @@ function SidebarView({
 
               {/* Windowed: a provider can hold hundreds of conversations. */}
               <FlatList
-                // Remount on agent or project: scroll resets and rows enter once.
-                key={`${activeProviderId ?? "all-providers"}:${selectedProjectPath ?? "all"}`}
+                // Remount on agent, project or studio project: scroll resets and rows enter once.
+                key={`${activeProviderId ?? "all-providers"}:${selectedProjectPath ?? "all"}:${studioProject?.path ?? "all"}`}
                 style={styles.list}
                 contentContainerStyle={styles.listContent}
                 showsVerticalScrollIndicator={false}
@@ -706,14 +794,19 @@ function SidebarView({
                     <HistorySkeleton />
                   ) : (
                     <Text style={styles.empty} numberOfLines={2}>
-                      {selectedProject ? `No chats in ${selectedProject.name} yet.` : "No chats yet. Send a message to start one."}
+                      {studioProject
+                        ? `No chat has worked in ${studioProject.name} yet. New chat starts one aimed at it.`
+                        : selectedProject
+                          ? `No chats in ${selectedProject.name} yet.`
+                          : "No chats yet. Send a message to start one."}
                     </Text>
                   )
                 }
                 renderItem={({ item: session, index }) => (
                   <SessionRow
                     session={session}
-                    project={selectedProject ? undefined : rowProject(session)}
+                    // In a studio, the projects it worked in; on All, the project it is in.
+                    project={inStudio ? session.topics?.join(", ") : selectedProject ? undefined : rowProject(session)}
                     index={index}
                     active={session.id === activeSessionId}
                     reduceMotion={reduceMotion}
@@ -807,6 +900,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   tabText: { color: theme.color.textDim, fontSize: theme.font.small },
+  studioHead: { paddingHorizontal: COLUMN_PAD, marginTop: theme.space(4) },
   moreTab: { borderStyle: "solid", borderColor: theme.color.textDim },
   moreText: { color: theme.color.text },
   iconTab: { flexDirection: "row", alignItems: "center", gap: theme.space(1) },

@@ -217,6 +217,12 @@ export interface State {
    * landed, which is the flash this exists to prevent.
    */
   loadingProject?: string;
+  /**
+   * The projects inside each studio project (one with a `projects/` folder of
+   * folders, like Orcastrator), by `providerId:cwd`, as the daemon listed them
+   * with that project's chats. Absent until a studio has been opened.
+   */
+  studios?: Record<string, VoiceWire.StudioProject[]>;
 }
 
 /**

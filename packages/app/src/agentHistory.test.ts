@@ -51,6 +51,38 @@ test("conversations from the agent's disk appear in the list", () => {
   expect(merged[0]!.messageCount).toBe(12);
 });
 
+test("a studio chat's topics arrive with it, and later lists update them on a chat already held", () => {
+  const first = mergeAgentSessions(
+    [],
+    "ggcoder",
+    [{ sessionId: "s1", cwd: "/studio", title: "Main", topics: ["globe", "atlas"] }],
+    true,
+    NOW,
+  );
+  expect(first[0]!.topics).toEqual(["globe", "atlas"]);
+
+  // The chat went on working in another project; the next list says so.
+  const second = mergeAgentSessions(
+    first,
+    "ggcoder",
+    [{ sessionId: "s1", cwd: "/studio", title: "Main", topics: ["everest", "globe"] }],
+    true,
+    NOW,
+  );
+  expect(second).toHaveLength(1);
+  expect(second[0]!.topics).toEqual(["everest", "globe"]);
+
+  // Unchanged topics leave the row exactly as it was, so nothing re-renders.
+  const third = mergeAgentSessions(
+    second,
+    "ggcoder",
+    [{ sessionId: "s1", cwd: "/studio", title: "Main", topics: ["everest", "globe"] }],
+    true,
+    NOW,
+  );
+  expect(third[0]).toBe(second[0]);
+});
+
 test("a session started here is not listed again as the agent's own", () => {
   // The daemon reports the agent's id for sessions this app started, so the
   // next history probe recognises the conversation already on screen. Without

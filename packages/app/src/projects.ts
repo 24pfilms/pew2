@@ -196,15 +196,19 @@ export function projectChips(
   selectedPath: string | undefined,
   limit: number,
   expanded = false,
+  all: Omit<ProjectTabItem, "path"> = { label: "All", a11y: "All projects" },
 ): { items: ProjectTabItem[]; hidden: number } {
   let shown = expanded ? [...projects] : projects.slice(0, limit);
   const selected = selectedPath ? projects.find((project) => project.path === selectedPath) : undefined;
   if (selected && !shown.includes(selected)) shown = [...shown.slice(0, Math.max(0, limit - 1)), selected];
   return {
-    items: [
-      { label: "All", a11y: "All projects" },
-      ...shown.map((project) => ({ path: project.path, label: project.name, a11y: `Project ${project.name}` })),
-    ],
+    items: [all, ...shown.map((project) => ({ path: project.path, label: project.name, a11y: `Project ${project.name}` }))],
     hidden: projects.length - shown.length,
   };
+}
+
+/** The chats of a studio that worked in one of its projects (see `wire.AgentSession.topics`). */
+export function sessionsInStudioProject<T extends { topics?: string[] }>(sessions: T[], studioProject: string | undefined): T[] {
+  if (!studioProject) return sessions;
+  return sessions.filter((session) => session.topics?.includes(studioProject));
 }

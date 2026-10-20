@@ -17,6 +17,8 @@ export interface WireAgentSession {
   title?: string;
   updatedAt?: string;
   messageCount?: number;
+  /** In a studio: the studio projects it worked in (see `wire.AgentSession.topics`). */
+  topics?: string[];
 }
 
 /** Stable local id for a conversation owned by an agent rather than this app. */
@@ -94,6 +96,16 @@ export function mergeAgentSessions(
 ): Session[] {
   if (!providerId || !canResume || !incoming?.length) return existing;
 
+  // Topics move as a chat goes on working, so a chat already listed takes the
+  // latest; everything else about it stays as this client knows it. A row
+  // whose topics did not change keeps its identity, so the list re-renders
+  // nothing for it.
+  const topicsByAgentId = new Map(incoming.filter((s) => s.topics).map((s) => [s.sessionId, s.topics!]));
+  existing = existing.map((s) => {
+    const topics = s.agentSessionId ? topicsByAgentId.get(s.agentSessionId) : undefined;
+    return topics && topics.join("\u0000") !== s.topics?.join("\u0000") ? { ...s, topics } : s;
+  });
+
   // Match on the agent's id as well as ours: once a stub is resumed it is
   // tracked under a daemon session id, and must not reappear as a duplicate.
   const seen = new Set(existing.map((s) => s.agentSessionId ?? s.id));
@@ -109,6 +121,7 @@ export function mergeAgentSessions(
       startedAt: parseUpdatedAt(s.updatedAt) ?? now,
       turns: [],
       messageCount: s.messageCount,
+      ...(s.topics ? { topics: s.topics } : {}),
       configOptions: [],
       agentSessionId: s.sessionId,
       cwd: s.cwd,

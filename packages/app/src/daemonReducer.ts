@@ -87,6 +87,10 @@ export function reduceMessage(prev: State, message: any, scope: MessageScope): S
           prev.loadingProject === `${message.providerId}:${message.cwd}`
             ? undefined
             : prev.loadingProject,
+        // A studio's own projects ride along with its chats.
+        studios: Array.isArray(message.studio)
+          ? { ...prev.studios, [`${message.providerId}:${message.cwd}`]: message.studio }
+          : prev.studios,
       };
     }
 

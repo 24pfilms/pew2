@@ -6,6 +6,7 @@ import {
   projectsForProvider,
   projectSourceKey,
   sessionsInProject,
+  sessionsInStudioProject,
 } from "./projects";
 import type { Session } from "./useDaemon";
 
@@ -176,8 +177,37 @@ describe("matchProjects", () => {
   });
 });
 
+describe("sessionsInStudioProject", () => {
+  const chats = [
+    { id: "a", topics: ["EverestChris_Components", "atlas-samples"] },
+    { id: "b", topics: ["internet-message-globe-v2"] },
+    { id: "c" },
+  ];
+
+  test("only the chats that worked in that studio project, by exact name", () => {
+    expect(sessionsInStudioProject(chats, "atlas-samples").map((c) => c.id)).toEqual(["a"]);
+    // "internet-message-globe" is not "internet-message-globe-v2".
+    expect(sessionsInStudioProject(chats, "internet-message-globe")).toEqual([]);
+  });
+
+  test("no studio project picked: every chat", () => {
+    expect(sessionsInStudioProject(chats, undefined)).toHaveLength(3);
+  });
+});
+
 describe("projectChips", () => {
   const many = Array.from({ length: 30 }, (_, i) => ({ path: `/p/${i}`, name: `p${i}` }));
+
+  test("the first chip can name what it clears to, as a studio's does", () => {
+    const studioAll = { label: "All", a11y: "Every chat in Orcastrator" };
+    expect(projectChips(many, undefined, 3, false, studioAll).items[0]).toEqual(studioAll);
+  });
+
+  test("folded to one, the row shows the chosen project and counts the rest", () => {
+    const { items, hidden } = projectChips(many, "/p/20", 1);
+    expect(items.map((item) => item.label)).toEqual(["All", "p20"]);
+    expect(hidden).toBe(29);
+  });
 
   test("All first, then one chip per project in order, nothing hidden when they fit", () => {
     const { items, hidden } = projectChips(

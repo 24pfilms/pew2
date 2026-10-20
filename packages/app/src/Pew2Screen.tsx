@@ -392,6 +392,21 @@ export function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => 
     },
     [activeId, selectDaemonProject],
   );
+  // A studio's own projects (Orcastrator's `projects/` folders), listed by the
+  // daemon with the studio's chats, and the one picked. The pick belongs to the
+  // studio it was made in: choosing another project or agent leaves it behind.
+  const studio = activeId && selectedProjectPath ? daemon.studios?.[`${activeId}:${selectedProjectPath}`] : undefined;
+  const [studioPick, setStudioPick] = useState<{ providerId: string; project: string; path: string }>();
+  const selectedStudioPath =
+    studioPick && studioPick.providerId === activeId && studioPick.project === selectedProjectPath
+      ? studioPick.path
+      : undefined;
+  const selectStudio = useCallback(
+    (path?: string) => {
+      setStudioPick(path && activeId && selectedProjectPath ? { providerId: activeId, project: selectedProjectPath, path } : undefined);
+    },
+    [activeId, selectedProjectPath],
+  );
 
   // A goal just launched from the New goal sheet opens straight into its
   // conversation, empty and "Starting" until the kickoff turn arrives. Before
@@ -915,6 +930,9 @@ export function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => 
         projects={projects}
         selectedProjectPath={selectedProjectPath}
         onSelectProject={selectProject}
+        studio={studio}
+        selectedStudioPath={selectedStudioPath}
+        onSelectStudio={selectStudio}
         historyLoading={daemon.loadingSessions}
         onRefreshChats={daemon.refreshList}
         refreshingChats={daemon.refreshingList}

@@ -96,6 +96,8 @@ export interface Session {
   turns: Turn[];
   /** Message rows available before this transcript is opened. */
   messageCount?: number;
+  /** In a studio: the studio projects this chat worked in, most-worked first. */
+  topics?: string[];
   /** The selectors this session was running with, restored when reopened. */
   configOptions: ConfigOption[];
   /**
