@@ -18,6 +18,7 @@ import { homedir, tmpdir } from "node:os";
 import { delimiter, isAbsolute, resolve, sep, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { keepDriveRoot } from "./drive-root.js";
+import { phoneSizedVideo } from "./phone-video.js";
 
 /**
  * Formats React Native's `Image` can actually paint. SVG is deliberately absent:
@@ -236,6 +237,8 @@ export interface LoadedImage {
  */
 export interface ImageFile {
   size: number;
+  /** When it last changed: part of what identifies a video's phone-sized copy. */
+  mtimeMs?: number;
   isFile: () => boolean;
   read: () => Promise<Buffer>;
   close: () => Promise<void>;
@@ -261,6 +264,7 @@ export const nodeImageFs: ImageFs = {
     const info = await handle.stat();
     return {
       size: info.size,
+      mtimeMs: info.mtimeMs,
       isFile: () => info.isFile(),
       read: () => handle.readFile(),
       close: () => handle.close(),
@@ -295,6 +299,16 @@ interface MediaKind {
   maxBytes: number;
   /** Finishes "'<uri>' is not ...". */
   unsupported: string;
+  /**
+   * What to send instead of a file over `maxBytes`, when there is a way to make
+   * it smaller. Absent: an oversized file is refused with its size.
+   */
+  shrink?: (
+    path: string,
+    size: number,
+    mtimeMs: number,
+    env: NodeJS.ProcessEnv,
+  ) => Promise<{ bytes: Buffer; mimeType: string }>;
 }
 
 const IMAGE_KIND: MediaKind = {
@@ -307,6 +321,11 @@ const VIDEO_KIND: MediaKind = {
   mimeType: videoMimeType,
   maxBytes: MAX_VIDEO_BYTES,
   unsupported: "a video this app can play",
+  // A video over the ceiling goes as a phone-sized copy (see `phone-video.ts`).
+  shrink: async (path, size, mtimeMs, env) => ({
+    bytes: await phoneSizedVideo(path, size, mtimeMs, env),
+    mimeType: "video/mp4",
+  }),
 };
 
 async function loadMedia(uri: string, options: MediaOptions, kind: MediaKind): Promise<LoadedImage> {
@@ -361,9 +380,17 @@ async function loadMedia(uri: string, options: MediaOptions, kind: MediaKind): P
   try {
     if (!file.isFile()) throw new Error(`'${uri}' is not a file`);
     if (file.size > kind.maxBytes) {
-      throw new Error(
-        `'${uri}' is ${Math.round(file.size / 1024 / 1024)}MB, too large to send to the app`,
-      );
+      const tooLarge = `'${uri}' is ${Math.round(file.size / 1024 / 1024)}MB, too large to send to the app`;
+      if (!kind.shrink) throw new Error(tooLarge);
+      let smaller: { bytes: Buffer; mimeType: string };
+      try {
+        // The path checked above, by name: ffmpeg cannot be handed a descriptor.
+        smaller = await kind.shrink(real, file.size, file.mtimeMs ?? 0, options.env ?? process.env);
+      } catch (error) {
+        throw new Error(`${tooLarge}. ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+      }
+      if (smaller.bytes.length > kind.maxBytes) throw new Error(`${tooLarge}, even as a phone-sized copy`);
+      return { mimeType: smaller.mimeType, dataUri: `data:${smaller.mimeType};base64,${smaller.bytes.toString("base64")}` };
     }
 
     const bytes = await file.read();
