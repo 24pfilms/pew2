@@ -12,6 +12,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   generatePairing,
+  loadResumeKey,
+  resumeKeyPath,
   loadPairing,
   pairingFromToken,
   pairingPath,
@@ -467,4 +469,17 @@ test("a placeholder claim left by a pre-gate app is overwritten", async () => {
   await claimPairing("phone-aaaa", env);
 
   expect((await loadPairing(env)).claimedBy).toBe("phone-aaaa");
+});
+
+test("the relay reconnect key is made once, kept, and reused across restarts", async () => {
+  const env = { PEW2_HOME: await mkdtemp(join(tmpdir(), "pew2-resume-")) } as NodeJS.ProcessEnv;
+  const first = await loadResumeKey(env);
+  expect(first).toMatch(/^[0-9a-f]{64}$/);
+  expect((await readFile(resumeKeyPath(env), "utf8")).trim()).toBe(first!);
+  expect(await loadResumeKey(env)).toBe(first);
+  // A damaged file is replaced with a fresh key rather than sent as-is.
+  await writeFile(resumeKeyPath(env), "not a key");
+  const fresh = await loadResumeKey(env);
+  expect(fresh).toMatch(/^[0-9a-f]{64}$/);
+  expect(fresh).not.toBe(first);
 });

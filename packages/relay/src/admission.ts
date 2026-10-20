@@ -88,6 +88,17 @@ export function isPairingToken(token: string | null): token is string {
 export const DAEMON_STALE_MS = 90_000;
 
 /**
+ * The header a daemon sends its reconnect key in. The relay keeps only a hash
+ * of it, on the socket, for as long as that socket is attached.
+ */
+export const RESUME_HEADER = "x-pew2-resume";
+
+/** A reconnect key `pew2` could have produced: 64 hex characters. */
+export function isResumeKey(value: string | null): value is string {
+  return value !== null && /^[0-9a-f]{64}$/.test(value);
+}
+
+/**
  * Decide whether a connection may join a room.
  *
  * `daemons` and `total` describe the room as it is right now, counted from the
@@ -101,6 +112,12 @@ export function admit(input: {
   total: number;
   daemonLastSeen?: number | null;
   now?: number;
+  /**
+   * The newcomer showed the reconnect key the attached daemon registered
+   * (`RESUME_HEADER`): the same machine coming back. Only that machine has
+   * the key, so it may replace its own lingering socket at once.
+   */
+  resumes?: boolean;
 }): Admission {
   const role = input.role;
   const deviceId = input.deviceId;
@@ -135,6 +152,16 @@ export function admit(input: {
     // Silence is the one thing the relay can judge without a key. A daemon still
     // answering keepalives keeps its place; one that has gone quiet is past
     // saving anyway, and evicting it is what makes reconnection reliable.
+    //
+    // The one exception is the machine itself coming back (`resumes`): a
+    // network blip or a restart left its old socket attached and still
+    // looking alive, and it was locked out of its own room for up to
+    // DAEMON_STALE_MS, a dozen refusals in a row. It proves who it is with a
+    // key nobody else holds (not the room id, not the pairing token, which
+    // every paired phone has), so a stranger still can't take the room.
+    if (input.daemons > 0 && input.resumes === true) {
+      return { ok: true, role, deviceId, evictDaemons: true };
+    }
     if (input.daemons > 0) {
       const lastSeen = input.daemonLastSeen;
       const now = input.now ?? Date.now();

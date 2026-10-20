@@ -21,6 +21,7 @@ import { dirname, join } from "node:path";
 import { e2e } from "@pew2/protocol";
 import { userProvidersDir } from "./providers/registry.js";
 import { isRealClaim } from "./device-claim.js";
+import { writeFileAtomic } from "./atomic-file.js";
 
 export interface Pairing {
   /**
@@ -384,6 +385,40 @@ export async function qrCode(content: string, quiet = 2): Promise<string | undef
   } catch {
     // A missing or broken encoder must not stop pairing: the URL alone is
     // enough to pair by hand.
+    return undefined;
+  }
+}
+
+/** `~/.pew2/relay-resume.key`: this machine's own reconnect key for the relay. */
+export function resumeKeyPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(dirname(userProvidersDir(env)), "relay-resume.key");
+}
+
+/**
+ * This machine's reconnect key for the relay, made once and kept beside the
+ * pairing (owner-only). The relay keeps only its hash on the daemon's socket,
+ * and a later connection showing the same key replaces that socket at once: a
+ * restart or a network blip used to lock the machine out of its own room for
+ * up to 90 s while the old socket still looked alive (2026-10-20: a dozen 409
+ * refusals after each drop). Never sent to a phone, never logged; not derived
+ * from the pairing, which every paired phone holds. Undefined if it can't be
+ * read or written: the relay then admits as before. (From upstream pew2 0.9.24.)
+ */
+export async function loadResumeKey(env: NodeJS.ProcessEnv = process.env): Promise<string | undefined> {
+  const path = resumeKeyPath(env);
+  try {
+    const existing = (await readFile(path, "utf8")).trim();
+    if (/^[0-9a-f]{64}$/.test(existing)) return existing;
+  } catch {
+    // Not made yet.
+  }
+  try {
+    const key = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex");
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    await writeFileAtomic(path, key + "\n");
+    return key;
+  } catch (error) {
+    console.error("[relay] could not keep a reconnect key; reconnecting the old way:", error);
     return undefined;
   }
 }

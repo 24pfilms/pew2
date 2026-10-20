@@ -12,7 +12,7 @@
  * conversation at once.
  */
 import { Daemon } from "./index.js";
-import { claimPairing, loadPairing, pairingPath, pairingUrl, qrCode, tokenMatches } from "./pairing.js";
+import { claimPairing, loadPairing, loadResumeKey, pairingPath, pairingUrl, qrCode, tokenMatches } from "./pairing.js";
 import { watchPairing } from "./pairing-watch.js";
 import { decideClaim, type ClaimDecision } from "./device-claim.js";
 import { SecureChannel, e2e, envelopeHeader, wire } from "@pew2/protocol";
@@ -183,6 +183,8 @@ const relay = pairing.relay
       token: pairing.token,
       key: pairing.key,
       deviceId: hostname(),
+      // Lets this machine back into its relay room at once after a blip.
+      resumeKey: await loadResumeKey(),
       // Relay traffic is fanned out locally too, so a desktop client and a
       // phone on 5G genuinely see the same conversation.
       onBroadcast: (message) => broadcast(message),

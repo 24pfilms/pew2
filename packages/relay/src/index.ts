@@ -19,6 +19,8 @@ import {
   admit,
   DAEMON_STALE_MS,
   isPairingToken,
+  isResumeKey,
+  RESUME_HEADER,
   MIN_PAIRING_TOKEN_LENGTH,
 } from "./admission.js";
 
@@ -51,6 +53,11 @@ interface Attachment {
    * because the object is already awake to have received it.
    */
   lastMessageAt?: number;
+  /**
+   * SHA-256 of the reconnect key this daemon connected with, if it sent one:
+   * the same machine coming back with that key replaces this socket at once.
+   */
+  resumeHash?: string;
 }
 
 /**
@@ -89,6 +96,12 @@ const SEEN_WRITE_INTERVAL_MS = 20_000;
  */
 const SWEEP_INTERVAL_MS = 5 * 60_000;
 
+/** Hex SHA-256: the relay keeps a reconnect key's hash, never the key. */
+async function sha256Hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 export class PairingRoom extends DurableObject {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -113,7 +126,13 @@ export class PairingRoom extends DurableObject {
     // without a Workers runtime. The validated role and deviceId come back out,
     // so what gets attached below is what was actually checked.
     const daemons = this.peers("daemon");
+    const resumeKey = url.searchParams.get("role") === "daemon" ? request.headers.get(RESUME_HEADER) : null;
+    const resumeHash = isResumeKey(resumeKey) ? await sha256Hex(resumeKey) : undefined;
     const decision = admit({
+      resumes:
+        resumeHash !== undefined &&
+        daemons.length > 0 &&
+        daemons.every((peer) => (peer.deserializeAttachment() as Attachment | null)?.resumeHash === resumeHash),
       role: url.searchParams.get("role"),
       deviceId: url.searchParams.get("deviceId"),
       daemons: daemons.length,
@@ -150,6 +169,7 @@ export class PairingRoom extends DurableObject {
       role: decision.role,
       deviceId: decision.deviceId,
       connectedAt: Date.now(),
+      ...(decision.role === "daemon" && resumeHash ? { resumeHash } : {}),
     } satisfies Attachment);
 
     server.send(JSON.stringify({ t: "ready", wire: 1, now: Date.now() }));

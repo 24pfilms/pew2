@@ -52,7 +52,13 @@ export interface RelayClientOptions {
    */
   admitDevice?: (deviceId: string) => { ok: boolean; message?: string };
   /** Injectable for tests. Defaults to the global WebSocket. */
-  createSocket?: (url: string) => WebSocket;
+  createSocket?: (url: string, headers: Record<string, string>) => WebSocket;
+  /**
+   * This machine's reconnect key (`loadResumeKey`), sent so the relay lets it
+   * replace its own lingering socket at once instead of refusing it for up to
+   * 90 s. Absent: admitted as before. (Ported from upstream pew2 0.9.24.)
+   */
+  resumeKey?: string;
   /** Injectable for tests. Defaults to {@link HEARTBEAT_MS}. */
   heartbeatMs?: number;
   /** Injectable for tests. Defaults to {@link CONNECT_TIMEOUT_MS}. */
@@ -84,6 +90,9 @@ export type RelayRefusal =
  * read and thrown away, and they are the only part that explains anything.
  */
 const UPGRADE_REFUSED = 1002;
+
+/** The header the reconnect key travels in; the relay's `RESUME_HEADER`. */
+const RESUME_HEADER = "x-pew2-resume";
 
 /** How long the second look at a refused upgrade may take. */
 const PROBE_TIMEOUT_MS = 5_000;
@@ -161,6 +170,8 @@ export class RelayClient {
    * `stop`, `rekey` or a newer attempt knows it has nothing left to report to.
    */
   private generation = 0;
+  /** Another daemon on this machine took the room: reconnect without the key. */
+  private yielded = false;
 
   constructor(private readonly options: RelayClientOptions) {}
 
@@ -240,7 +251,16 @@ export class RelayClient {
 
     let socket: WebSocket;
     try {
-      socket = (this.options.createSocket ?? ((url) => new WebSocket(url)))(this.endpoint);
+      // The reconnect key goes in a header, never the URL (which is what
+      // request logs keep), and stops once another daemon on this machine has
+      // taken the room (`yielded`).
+      const headers: Record<string, string> =
+        this.options.resumeKey && !this.yielded ? { [RESUME_HEADER]: this.options.resumeKey } : {};
+      socket = (
+        this.options.createSocket ??
+        // Bun's WebSocket takes headers as a second argument; the DOM type does not know it.
+        ((url, extra) => new WebSocket(url, { headers: extra } as never))
+      )(this.endpoint, headers);
     } catch (error) {
       // A malformed URL throws synchronously. Treat it as any other failure so
       // a typo'd relay does not kill the daemon.
@@ -445,6 +465,11 @@ export class RelayClient {
 
     socket.onclose = (event?: { code?: number; reason?: string }) => {
       this.clearTimers();
+      // Replaced while this socket was up: another pew2 on this machine (the
+      // same key) took the room. Stop pressing the key, or the two would evict
+      // each other in turn for ever; plain admission then waits until that one
+      // goes quiet, as it did before.
+      if (event?.code === 1012 && this.socket === socket && opened) this.yielded = true;
       // Only tear down state that still belongs to *this* socket. `rekey`
       // closes the old one and immediately opens a new one, and `onclose`
       // arrives after that \u2014 so an unconditional reset here would null the new

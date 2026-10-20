@@ -11,6 +11,7 @@ import {
   admit,
   DAEMON_STALE_MS,
   isPairingToken,
+  isResumeKey,
   MAX_SOCKETS_PER_ROOM,
   MIN_PAIRING_TOKEN_LENGTH,
 } from "./admission.js";
@@ -173,4 +174,30 @@ test("the socket cap is checked before the daemon rules, so neither can bypass i
   const full = admit({ role: "daemon", deviceId: "mac", daemons: 1, total: MAX_SOCKETS_PER_ROOM });
   expect(full.ok).toBe(false);
   expect(full).toMatchObject({ status: 429 });
+});
+
+test("the machine itself coming back replaces its lingering socket at once", () => {
+  // A blip or a restart leaves the old socket attached and still looking
+  // alive; the machine used to be refused for up to DAEMON_STALE_MS. With the
+  // reconnect key only it holds, it is let straight back in.
+  const now = Date.now();
+  expect(
+    admit({ role: "daemon", deviceId: "mac", daemons: 1, total: 2, daemonLastSeen: now - 5_000, now, resumes: true }),
+  ).toEqual({ ok: true, role: "daemon", deviceId: "mac", evictDaemons: true });
+  // Without the key (a stranger, or an older daemon) nothing changes.
+  expect(admit({ role: "daemon", deviceId: "mac", daemons: 1, total: 2, daemonLastSeen: now - 5_000, now, resumes: false }).ok).toBe(false);
+  // An app can never use it.
+  expect(admit({ role: "app", deviceId: "phone", daemons: 1, total: 2, now, resumes: true })).toEqual({
+    ok: true,
+    role: "app",
+    deviceId: "phone",
+    evictDaemons: false,
+  });
+});
+
+test("a reconnect key is exactly 64 hex characters", () => {
+  expect(isResumeKey("a".repeat(64))).toBe(true);
+  expect(isResumeKey("A".repeat(64))).toBe(false);
+  expect(isResumeKey("a".repeat(63))).toBe(false);
+  expect(isResumeKey(null)).toBe(false);
 });
