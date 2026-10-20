@@ -530,6 +530,12 @@ export const ImageRequest = z.object({
   /** Which session's working directory relative paths resolve against. */
   sessionId: z.string().optional(),
   uri: z.string(),
+  /**
+   * Send the bytes as `media.part` pieces instead of one message. Set by apps
+   * that can put them back together; an older app leaves it out and gets the
+   * single message it always got.
+   */
+  chunked: z.boolean().optional(),
 });
 
 /**
@@ -547,6 +553,8 @@ export const ImageData = z.object({
   dataUri: z.string().optional(),
   mimeType: z.string().optional(),
   error: z.string().optional(),
+  /** Sent as this many `media.part` pieces, which now make up the whole; `dataUri` is absent. */
+  parts: z.number().int().positive().optional(),
 });
 
 /**
@@ -563,6 +571,12 @@ export const VideoRequest = z.object({
   /** Which session's working directory relative paths resolve against. */
   sessionId: z.string().optional(),
   uri: z.string(),
+  /**
+   * Send the bytes as `media.part` pieces instead of one message. Set by apps
+   * that can put them back together; an older app leaves it out and gets the
+   * single message it always got.
+   */
+  chunked: z.boolean().optional(),
 });
 
 /**
@@ -577,6 +591,35 @@ export const VideoData = z.object({
   dataUri: z.string().optional(),
   mimeType: z.string().optional(),
   error: z.string().optional(),
+  /** Sent as this many `media.part` pieces, which now make up the whole; `dataUri` is absent. */
+  parts: z.number().int().positive().optional(),
+});
+
+/**
+ * Daemon -> app. One piece of a picture or video asked for with `chunked`.
+ *
+ * A whole picture or clip in one message was megabytes of base64 in a single
+ * relay frame, and twice on 2026-10-20 the relay link dropped right after one
+ * (about 20 pictures at once; an 8.2 MB video), taking the phone offline for a
+ * minute and a half. Pieces are small, and the daemon sends only a few ahead of
+ * what the phone has confirmed (`media.ack`), so the link is never flooded.
+ * The `image` / `video` reply that follows says how many there were.
+ */
+export const MediaPart = z.object({
+  t: z.literal("media.part"),
+  requestId: z.string(),
+  /** 0-based position of this piece. */
+  index: z.number().int().nonnegative(),
+  count: z.number().int().positive(),
+  /** A slice of the base64 text; the pieces joined in order are the whole of it. */
+  data: z.string(),
+});
+
+/** App -> daemon. How many pieces of a `chunked` transfer have arrived, in order. */
+export const MediaAck = z.object({
+  t: z.literal("media.ack"),
+  requestId: z.string(),
+  received: z.number().int().nonnegative(),
 });
 
 /**
@@ -1371,6 +1414,7 @@ export const ClientMessage = z.discriminatedUnion("t", [
   VoiceStop,
   DashRequest,
   CallbackAck,
+  MediaAck,
 ]);
 
 export const ServerMessage = z.discriminatedUnion("t", [
@@ -1386,6 +1430,7 @@ export const ServerMessage = z.discriminatedUnion("t", [
   Replay,
   ImageData,
   VideoData,
+  MediaPart,
   Workspace,
   Workspaces,
   DeviceJoined,
@@ -1446,6 +1491,8 @@ export type ImageRequest = z.output<typeof ImageRequest>;
 export type ImageData = z.output<typeof ImageData>;
 export type VideoRequest = z.output<typeof VideoRequest>;
 export type VideoData = z.output<typeof VideoData>;
+export type MediaPart = z.output<typeof MediaPart>;
+export type MediaAck = z.output<typeof MediaAck>;
 export type WorkspaceRequest = z.output<typeof WorkspaceRequest>;
 export type Workspace = z.output<typeof Workspace>;
 export type SessionEvent = z.output<typeof SessionEvent>;

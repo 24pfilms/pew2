@@ -22,6 +22,7 @@ import { VoiceManager } from "./voice/manager.js";
 import { orcaDashFromEnv } from "./orcaDash.js";
 import { daemonHost, type SessionView } from "./voice/host.js";
 import { CallbackLedger, type JobState } from "./callbacks.js";
+import { MediaSender } from "./media-sender.js";
 import { dirname, join } from "node:path";
 import {
   GG_GOALS_ID,
@@ -63,6 +64,9 @@ export class Daemon extends DaemonConnectSession {
     send: (message) => this.send(message),
   });
   private callbackTimer?: NodeJS.Timeout;
+
+  /** Pictures and videos going to a phone in pieces (`media.part`). See `media-sender.ts`. */
+  readonly media = new MediaSender();
   /** How often unconfirmed calls are resent and quiet jobs checked on. */
   static readonly CALLBACK_TICK_MS = 30_000;
 

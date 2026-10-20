@@ -542,3 +542,32 @@ test("a phone that says hello is handed the calls it missed", async () => {
   const out = await send(daemon, { t: "hello", wire: 2, role: "app", deviceId: "phone" }, "phone");
   expect(out.filter((m) => m.t === "callback.due")).toHaveLength(1);
 });
+
+test("a video asked for in pieces arrives as pieces that join into exactly the single-message bytes", async () => {
+  const { daemon } = stubbed();
+  const project = mkdtempSync(join(tmpdir(), "pew2-video-chunked-"));
+  mkdirSync(join(project, "renders"));
+  const clip = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from("ftypmp42"), Buffer.alloc(40_000, 7)]);
+  writeFileSync(join(project, "renders", "clip.mp4"), clip);
+  Object.assign(daemon, { sessionCwd: () => project });
+
+  const whole = await send(daemon, { t: "video.fetch", requestId: "v1", sessionId: "s1", uri: "renders/clip.mp4" }, "device-1");
+  const { MediaSender } = await import("./media-sender.js");
+  const saved = MediaSender.PART_CHARS;
+  MediaSender.PART_CHARS = 16_000; // ~53k characters of base64 -> 4 pieces, inside the window
+  try {
+    const pieces = await send(
+      daemon,
+      { t: "video.fetch", requestId: "v2", sessionId: "s1", uri: "renders/clip.mp4", chunked: true },
+      "device-1",
+    );
+    const parts = pieces.filter((m) => m.t === "media.part");
+    expect(parts.length).toBe(4);
+    const close = pieces.at(-1);
+    expect(close).toMatchObject({ t: "video", requestId: "v2", uri: "renders/clip.mp4", mimeType: "video/mp4", parts: 4 });
+    expect(close.dataUri).toBeUndefined();
+    expect(`data:video/mp4;base64,${parts.map((p) => p.data).join("")}`).toBe(whole[0].dataUri);
+  } finally {
+    MediaSender.PART_CHARS = saved;
+  }
+});

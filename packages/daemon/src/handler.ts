@@ -294,6 +294,11 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
         break;
       }
 
+      case "media.ack": {
+        daemon.media.ack(message.requestId, message.received);
+        break;
+      }
+
       case "callback.ack": {
         daemon.callbacks.ack(message.id);
         break;
@@ -339,8 +344,12 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
         const started = Date.now();
         try {
           const image = await loadImage(uri, { cwd: root });
-          reply({ t: "image", requestId, uri, ...image });
-          logMediaSent("picture", uri, image.dataUri, started);
+          if (message.chunked) {
+            await daemon.media.send(requestId, image.dataUri, reply, { t: "image", uri, mimeType: image.mimeType });
+          } else {
+            reply({ t: "image", requestId, uri, ...image });
+          }
+          logMediaSent("picture", uri, image.dataUri, started, message.chunked);
         } catch (error) {
           // A failure is part of the answer, not a transport error: the app
           // shows the reason in place of the picture instead of a blank frame.
@@ -361,8 +370,12 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
         const started = Date.now();
         try {
           const video = await loadVideo(uri, { cwd: root });
-          reply({ t: "video", requestId, uri, ...video });
-          logMediaSent("video", uri, video.dataUri, started);
+          if (message.chunked) {
+            await daemon.media.send(requestId, video.dataUri, reply, { t: "video", uri, mimeType: video.mimeType });
+          } else {
+            reply({ t: "video", requestId, uri, ...video });
+          }
+          logMediaSent("video", uri, video.dataUri, started, message.chunked);
         } catch (error) {
           reply({ t: "video", requestId, uri, error: humanError(error) });
           console.log(`[media] video ${mediaName(uri)} refused: ${humanError(error)}`);
@@ -637,11 +650,12 @@ function mediaName(uri: string): string {
  * 2026-10-20 two drops followed large sends (about 20 pictures at 14:18, one
  * 8.2 MB video at 14:39), and the log held nothing to tie them together.
  */
-function logMediaSent(kind: "picture" | "video", uri: string, dataUri: string, started: number) {
+function logMediaSent(kind: "picture" | "video", uri: string, dataUri: string, started: number, chunked = false) {
   const mb = (bytes: number) => (bytes / 1024 / 1024).toFixed(2);
   // base64 inflates by 4/3; the message on the wire is the encoded size.
   const file = Math.round((dataUri.length - dataUri.indexOf(",") - 1) * 0.75);
-  console.log(`[media] ${kind} ${mediaName(uri)} ${mb(file)} MB (${mb(dataUri.length)} MB on the wire) in ${Date.now() - started} ms`);
+  const how = chunked ? "in pieces" : "as one message";
+  console.log(`[media] ${kind} ${mediaName(uri)} ${mb(file)} MB (${mb(dataUri.length)} MB ${how}) in ${Date.now() - started} ms`);
 }
 
 /**
