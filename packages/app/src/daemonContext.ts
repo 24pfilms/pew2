@@ -19,6 +19,7 @@ import type { DaemonOptions, State, TurnFinished, VoiceFrame } from "./daemonSta
 import type { CapabilityProbes } from "./capabilityProbes";
 import type { ConnectionWatch } from "./connectionWatch";
 import type { ListRefresh } from "./listRefresh";
+import type { MediaAssembly } from "./mediaParts";
 
 export interface DaemonRefs {
   setState: Dispatch<SetStateAction<State>>;
@@ -74,6 +75,8 @@ export interface DaemonRefs {
   voiceListener: RefObject<((message: VoiceFrame) => void) | undefined>;
   /** Video requests waiting for the computer's answer, by request id: a card is waiting on each. */
   videoReplies: RefObject<Map<string, (reply: wire.VideoData) => void>>;
+  /** Pictures and videos arriving in pieces, put back together. See `mediaParts.ts`. */
+  mediaParts: RefObject<MediaAssembly>;
   /** Dashboard requests waiting for the computer's answer, by request id: the open dashboard waits on each. */
   dashReplies: RefObject<Map<string, (reply: wire.Dash) => void>>;
 }

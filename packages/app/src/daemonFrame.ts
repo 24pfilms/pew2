@@ -85,6 +85,7 @@ export type FrameRefs = Pick<
   | "onTurnFinished"
   | "voiceListener"
   | "videoReplies"
+  | "mediaParts"
   | "dashReplies"
 >;
 
@@ -121,6 +122,7 @@ export function handleSealedFrame(refs: FrameRefs, connection: FrameConnection, 
     onTurnFinished,
     voiceListener,
     videoReplies,
+    mediaParts,
     dashReplies,
   } = refs;
   const { ws, secure, resetStream, batch, flushOutbox, watch } = connection;
@@ -760,10 +762,32 @@ export function handleSealedFrame(refs: FrameRefs, connection: FrameConnection, 
 
   // A video the user asked for by tapping its card: handed to that card, never
   // held in state, since the bytes are megabytes and one card wants them once.
+  // One piece of a picture or video: held, and confirmed at once, because the
+  // daemon sends only a few pieces ahead of what this phone has confirmed.
+  if (message.t === "media.part" && typeof message.requestId === "string") {
+    const received = mediaParts.current.add(message);
+    ws.send(JSON.stringify(secure.seal({ t: "media.ack", requestId: message.requestId, received })));
+    return;
+  }
+
+  // A reply sent in pieces names how many; they become its `dataUri` here, so
+  // everything below sees the same shape a single-message reply always had.
+  const assembled =
+    (message.t === "video" || message.t === "image") && typeof message.parts === "number"
+      ? mediaParts.current.finish(message.requestId, message.parts, message.mimeType)
+      : undefined;
+  const incomplete = typeof message.parts === "number" && assembled === undefined;
+
   if (message.t === "video" && typeof message.requestId === "string") {
     const waiting = videoReplies.current.get(message.requestId);
     videoReplies.current.delete(message.requestId);
-    waiting?.(message);
+    waiting?.(
+      incomplete
+        ? { ...message, error: "The video arrived incomplete. Tap to try again." }
+        : assembled
+          ? { ...message, dataUri: assembled }
+          : message,
+    );
     return;
   }
 
@@ -771,11 +795,17 @@ export function handleSealedFrame(refs: FrameRefs, connection: FrameConnection, 
   // here and kept out of the transcript state entirely.
   if (message.t === "image" && typeof message.uri === "string") {
     const uri: string = message.uri;
+    const dataUri: string | undefined = assembled ?? message.dataUri;
     storeImage(
       uri,
-      message.dataUri
-        ? { status: "ready", dataUri: message.dataUri, mimeType: message.mimeType }
-        : { status: "error", message: message.error ?? "Could not load this image" },
+      dataUri
+        ? { status: "ready", dataUri, mimeType: message.mimeType }
+        : {
+            status: "error",
+            message: incomplete
+              ? "The picture arrived incomplete. Tap to try again."
+              : (message.error ?? "Could not load this image"),
+          },
     );
     return;
   }

@@ -62,6 +62,7 @@ import { useImageCache } from "./useImageCache";
 import { openConnection } from "./daemonConnection";
 import { CapabilityProbes } from "./capabilityProbes";
 import { ListRefresh } from "./listRefresh";
+import { MediaAssembly } from "./mediaParts";
 import { DASH_REPLY_TIMEOUT_MS, DASH_TEXT } from "./dashboard";
 import type { ConnectionWatch } from "./connectionWatch";
 import { createActions, deliverPrompt as deliverPromptVia } from "./daemonActions";
@@ -214,6 +215,8 @@ export function useDaemon(
   const voiceListener = useRef<((message: VoiceFrame) => void) | undefined>(undefined);
   // Video requests waiting on an answer, by id: each belongs to a card that was tapped.
   const videoReplies = useRef(new Map<string, (reply: wire.VideoData) => void>());
+  // Pictures and videos arriving in pieces, until their closing reply.
+  const mediaParts = useRef(new MediaAssembly());
   // Dashboard requests waiting on an answer, by id: the open dashboard's.
   const dashReplies = useRef(new Map<string, (reply: wire.Dash) => void>());
   const dashCounter = useRef(0);
@@ -421,6 +424,7 @@ export function useDaemon(
           streamGeneration,
           turnText,
           videoReplies,
+          mediaParts,
           dashReplies,
           viewingRef,
           voiceListener,
@@ -475,6 +479,8 @@ export function useDaemon(
         requestId: uri,
         sessionId: sessionRef.current,
         uri,
+        // In pieces, a few at a time: one big message per picture flooded the relay.
+        chunked: true,
       });
       storeImage(
         uri,
@@ -502,6 +508,8 @@ export function useDaemon(
   // rode the socket that was replaced, and nothing else would ever ask again.
   useEffect(() => {
     if (state.status !== "online") return;
+    // Pieces of anything half-received rode the old socket too: start those over.
+    mediaParts.current.clear();
     for (const uri of loadingImages()) sendImageRequest(uri);
   }, [state.status, loadingImages, sendImageRequest]);
 
@@ -527,7 +535,7 @@ export function useDaemon(
           resolve(reply);
         };
         videoReplies.current.set(requestId, finish);
-        const sent = post({ t: "video.fetch", requestId, sessionId: sessionRef.current, uri });
+        const sent = post({ t: "video.fetch", requestId, sessionId: sessionRef.current, uri, chunked: true });
         if (!sent) finish({ t: "video", requestId, uri, error: "Not connected to your computer" });
       });
     },
