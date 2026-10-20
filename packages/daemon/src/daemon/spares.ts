@@ -183,13 +183,38 @@ export abstract class DaemonSpares extends DaemonState {
     if (ext) this.knownExtensions.set(providerId, ext);
   }
 
+  /**
+   * Close a parked process, or, while a call is still running on it, as soon as
+   * that call is done. Only for spares: a session's own process closes at once,
+   * because closing it is what ends the session.
+   */
+  protected retire(handle: AcpSessionHandle): void {
+    if ((this.borrowed.get(handle) ?? 0) > 0) this.retiring.add(handle);
+    else handle.close();
+  }
+
+  /** Run a call on a borrowed process, keeping it alive until the call settles. */
+  protected async onBorrowed<T>(handle: AcpSessionHandle, call: (handle: AcpSessionHandle) => Promise<T>): Promise<T> {
+    this.borrowed.set(handle, (this.borrowed.get(handle) ?? 0) + 1);
+    try {
+      return await call(handle);
+    } finally {
+      const left = (this.borrowed.get(handle) ?? 1) - 1;
+      if (left > 0) this.borrowed.set(handle, left);
+      else {
+        this.borrowed.delete(handle);
+        if (this.retiring.delete(handle)) handle.close();
+      }
+    }
+  }
+
   protected stashSpare(providerId: string, handle: AcpSessionHandle, cwd: string) {
     this.noteExtensions(providerId, handle);
     const key = DaemonSpares.spareKey(providerId, cwd);
     const old = this.spares.get(key);
     if (old) {
       clearTimeout(old.timer);
-      old.handle.close();
+      this.retire(old.handle);
       // Removed as well as closed, so the eviction pass below does not find it
       // and close the same process a second time.
       this.spares.delete(key);
@@ -204,14 +229,14 @@ export abstract class DaemonSpares extends DaemonState {
       const spare = this.spares.get(evict);
       if (spare) {
         clearTimeout(spare.timer);
-        spare.handle.close();
+        this.retire(spare.handle);
         this.spares.delete(evict);
       }
     }
 
     const timer = setTimeout(() => {
       this.spares.delete(key);
-      handle.close();
+      this.retire(handle);
     }, DaemonState.SPARE_TTL_MS);
     // The timer must not keep the daemon process alive on its own.
     timer.unref?.();

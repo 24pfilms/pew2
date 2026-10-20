@@ -290,6 +290,16 @@ export abstract class DaemonState {
 
   /** One shared boot of a GG Coder connection for goal calls, while in flight. */
   protected ggConnecting?: Promise<AcpSessionHandle>;
+  /**
+   * Calls in flight per borrowed agent process, and the processes retired while
+   * one was. Goal calls and the capability probe run on a parked spare that
+   * nothing owns, so evicting that spare (a refresh parks a new one in the same
+   * slot, on every reconnect) killed the process mid-request: "GG Coder stopped
+   * while working (SIGTERM)" on goals, "ACP connection closed" on the probe.
+   * (From upstream pew2 0.9.24.)
+   */
+  protected readonly borrowed = new Map<AcpSessionHandle, number>();
+  protected readonly retiring = new Set<AcpSessionHandle>();
 
   // ── Implemented by a later layer, called from an earlier one ─────────────
   // Type-only declarations: they emit nothing, so every call still goes through

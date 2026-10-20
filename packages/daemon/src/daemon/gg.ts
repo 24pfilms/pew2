@@ -172,8 +172,23 @@ export abstract class DaemonGg extends DaemonProjects {
       }
       return handle;
     };
+    // An exited process still has a handle. A crash, a kill, or a `ggcoder`
+    // linked to a checkout whose build had just wiped `dist/` all leave one
+    // behind, and handing it out failed every goals request with "ACP
+    // connection closed" until the reaper or the spare TTL happened to clear
+    // it. (From upstream pew2 090eb14.)
+    const alive = (handle: AcpSessionHandle) =>
+      handle.child.exitCode === null && handle.child.signalCode === null;
+    for (const [key, spare] of this.spares) {
+      if (alive(spare.handle)) continue;
+      clearTimeout(spare.timer);
+      spare.handle.close();
+      this.spares.delete(key);
+    }
     const live = [...this.sessions.values()]
-      .filter((s) => (s.providerId === engine || s.providerId === GG_GOALS_ID) && s.handle && s.agentSessionId)
+      .filter(
+        (s) => (s.providerId === engine || s.providerId === GG_GOALS_ID) && s.handle && s.agentSessionId && alive(s.handle),
+      )
       .sort((a, b) => b.lastUsedAt - a.lastUsedAt)[0]?.handle;
     if (live) return supports(live);
     const spare = [...this.spares.values()].find((s) => s.providerId === engine || s.providerId === GG_GOALS_ID);
@@ -256,8 +271,9 @@ export abstract class DaemonGg extends DaemonProjects {
    * app opens a goal by starting a ggcoder session with that folder as `cwd`.
    */
   async listGoals(): Promise<wire.GoalSummary[]> {
-    const handle = await this.goalsConnection();
-    const answer = await handle.extRequest<{ goals?: unknown }>("_gg/goals/list", {});
+    const answer = await this.onBorrowed(await this.goalsConnection(), (handle) =>
+      handle.extRequest<{ goals?: unknown }>("_gg/goals/list", {}),
+    );
     const goals = (Array.isArray(answer?.goals) ? answer.goals : []).flatMap((value) => {
       const goal = DaemonGg.readGoal(value);
       return goal ? [goal] : [];
@@ -273,13 +289,14 @@ export abstract class DaemonGg extends DaemonProjects {
     context: string[];
     instructions?: string;
   }): Promise<wire.GoalSummary> {
-    const handle = await this.goalsConnection();
-    const answer = await handle.extRequest<{ goal?: unknown }>("_gg/goals/create", {
-      name: input.name,
-      goal: input.goal,
-      context: input.context,
-      ...(input.instructions !== undefined ? { instructions: input.instructions } : {}),
-    });
+    const answer = await this.onBorrowed(await this.goalsConnection(), (handle) =>
+      handle.extRequest<{ goal?: unknown }>("_gg/goals/create", {
+        name: input.name,
+        goal: input.goal,
+        context: input.context,
+        ...(input.instructions !== undefined ? { instructions: input.instructions } : {}),
+      }),
+    );
     const goal = DaemonGg.readGoal(answer?.goal);
     if (!goal) throw new Error("GG Coder did not return the new goal.");
     this.goalNames.set(__resolve(goal.path), goal.name);
@@ -314,8 +331,7 @@ export abstract class DaemonGg extends DaemonProjects {
     if (action === "delete") {
       const live = this.goalSessionEntry(goal.path);
       if (live?.[1].working) throw new Error("GG Goals is working on this goal. Pause it first.");
-      const handle = await this.goalsConnection();
-      await handle.extRequest("_gg/goals/delete", { id: goalId });
+      await this.onBorrowed(await this.goalsConnection(), (handle) => handle.extRequest("_gg/goals/delete", { id: goalId }));
       return undefined;
     }
     const { sessionId, session } = this.openGoalSession(goal);

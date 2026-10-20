@@ -179,9 +179,16 @@ export abstract class DaemonProbes extends DaemonSpares {
         // and a new conversation needs none of it. Whoever adopts this calls
         // `session/new` on the same process; `listSessions` does not touch the
         // adopted session, so the two can safely overlap.
+        //
+        // Borrowed for the rest of the probe: a spare warmed meanwhile parks in
+        // the same slot and retires this one, which closed it under the probe
+        // ("ACP connection closed") and lost the whole answer. `retire` now
+        // waits until the probe has finished with it. (From upstream 0518418.)
+        this.borrowed.set(booted, (this.borrowed.get(booted) ?? 0) + 1);
         this.stashSpare(providerId, booted, workspace);
         handle = undefined;
         announceSpare();
+        try {
 
         // Needed several times below, and `listSessions` is the slow call:
         // once only.
@@ -238,6 +245,14 @@ export abstract class DaemonProbes extends DaemonSpares {
         // from here until it expires is this moment's view of the agent's disk.
         this.markProbed(providerId, Date.now());
         return capabilities;
+        } finally {
+          const left = (this.borrowed.get(booted) ?? 1) - 1;
+          if (left > 0) this.borrowed.set(booted, left);
+          else {
+            this.borrowed.delete(booted);
+            if (this.retiring.delete(booted)) booted.close();
+          }
+        }
       } catch (error) {
         // A probe is best-effort: this is what the app shows before a session
         // exists, and failing here must not stop the user starting a real one.
