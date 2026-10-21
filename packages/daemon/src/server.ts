@@ -197,6 +197,9 @@ const relay = pairing.relay
         // Back after an outage: a call owed while the phone could not be
         // reached goes now, not at its next minute.
         if (status === "online") daemon.callbacks.resendNow("relay back online");
+        // Pieces in flight to a phone over the relay that just went away will
+        // never be confirmed; the phone asks again once it is back.
+        if (status === "offline") daemon.media.abortAll("The connection to the phone dropped.");
       },
     })
   : null;

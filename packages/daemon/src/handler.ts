@@ -145,6 +145,10 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
           // Calls owed to the user, restated to the device that just arrived:
           // it may have been away for the moment one fell due.
           for (const due of daemon.callbacks.pending()) reply(due);
+          // A device saying hello is on a new connection: pieces still going
+          // to its old one can never be confirmed, and it asks again for what
+          // it still needs. Without this a queue of them blocked new requests.
+          daemon.media.abortAll("The phone reconnected; it asks again for what it needs.");
         }
         break;
 
@@ -354,7 +358,9 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
         try {
           const image = await loadImage(uri, { cwd: root });
           if (message.chunked) {
-            await daemon.media.send(requestId, image.dataUri, reply, { t: "image", uri, mimeType: image.mimeType });
+            const parts = await daemon.media.send(requestId, image.dataUri, reply, { t: "image", uri, mimeType: image.mimeType });
+            // Already queued or on its way for this phone: that one answers both.
+            if (parts === undefined) break;
           } else {
             reply({ t: "image", requestId, uri, ...image });
           }
@@ -380,7 +386,8 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
         try {
           const video = await loadVideo(uri, { cwd: root });
           if (message.chunked) {
-            await daemon.media.send(requestId, video.dataUri, reply, { t: "video", uri, mimeType: video.mimeType });
+            const parts = await daemon.media.send(requestId, video.dataUri, reply, { t: "video", uri, mimeType: video.mimeType });
+            if (parts === undefined) break;
           } else {
             reply({ t: "video", requestId, uri, ...video });
           }
