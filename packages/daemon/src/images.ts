@@ -19,6 +19,7 @@ import { delimiter, isAbsolute, resolve, sep, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { keepDriveRoot } from "./drive-root.js";
 import { phoneSizedVideo } from "./phone-video.js";
+import { phoneSizedPicture, SHRINK_ABOVE as PICTURE_SHRINK_ABOVE } from "./phone-picture.js";
 
 /**
  * Formats React Native's `Image` can actually paint. SVG is deliberately absent:
@@ -300,8 +301,9 @@ interface MediaKind {
   /** Finishes "'<uri>' is not ...". */
   unsupported: string;
   /**
-   * What to send instead of a file over `maxBytes`, when there is a way to make
-   * it smaller. Absent: an oversized file is refused with its size.
+   * What to send instead of a file over `shrinkAbove` (default `maxBytes`),
+   * when there is a way to make it smaller. Absent: an oversized file is
+   * refused with its size.
    */
   shrink?: (
     path: string,
@@ -309,12 +311,23 @@ interface MediaKind {
     mtimeMs: number,
     env: NodeJS.ProcessEnv,
   ) => Promise<{ bytes: Buffer; mimeType: string }>;
+  /** Files above this go as the `shrink` copy; below `maxBytes`, the original is the fallback. */
+  shrinkAbove?: number;
+  /** Files never shrunk even when large (an animated GIF would lose its motion). */
+  keepAsIs?: (path: string) => boolean;
 }
 
 const IMAGE_KIND: MediaKind = {
   mimeType: imageMimeType,
   maxBytes: MAX_IMAGE_BYTES,
   unsupported: "an image this app can display",
+  // A big still goes as a phone-sized WebP (see `phone-picture.ts`).
+  shrink: async (path, size, mtimeMs, env) => ({
+    bytes: await phoneSizedPicture(path, size, mtimeMs, env),
+    mimeType: "image/webp",
+  }),
+  shrinkAbove: PICTURE_SHRINK_ABOVE,
+  keepAsIs: (path) => extname(path).toLowerCase() === ".gif",
 };
 
 const VIDEO_KIND: MediaKind = {
@@ -379,19 +392,25 @@ async function loadMedia(uri: string, options: MediaOptions, kind: MediaKind): P
 
   try {
     if (!file.isFile()) throw new Error(`'${uri}' is not a file`);
-    if (file.size > kind.maxBytes) {
-      const tooLarge = `'${uri}' is ${Math.round(file.size / 1024 / 1024)}MB, too large to send to the app`;
-      if (!kind.shrink) throw new Error(tooLarge);
-      let smaller: { bytes: Buffer; mimeType: string };
+    const tooLarge = `'${uri}' is ${Math.round(file.size / 1024 / 1024)}MB, too large to send to the app`;
+    const shrinkable = kind.shrink && !kind.keepAsIs?.(real);
+    if (shrinkable && file.size > (kind.shrinkAbove ?? kind.maxBytes)) {
       try {
         // The path checked above, by name: ffmpeg cannot be handed a descriptor.
-        smaller = await kind.shrink(real, file.size, file.mtimeMs ?? 0, options.env ?? process.env);
+        const smaller = await kind.shrink!(real, file.size, file.mtimeMs ?? 0, options.env ?? process.env);
+        if (smaller.bytes.length > kind.maxBytes) throw new Error("even the phone-sized copy is too large");
+        // A copy no smaller than a sendable original buys nothing.
+        if (file.size > kind.maxBytes || smaller.bytes.length < file.size) {
+          return { mimeType: smaller.mimeType, dataUri: `data:${smaller.mimeType};base64,${smaller.bytes.toString("base64")}` };
+        }
       } catch (error) {
-        throw new Error(`${tooLarge}. ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+        const reason = error instanceof Error ? error.message : String(error);
+        if (file.size > kind.maxBytes) throw new Error(`${tooLarge}. ${reason}`, { cause: error });
+        // Small enough to send as it is, which is what was always done.
+        console.log(`[media] sending ${uri} as it is: ${reason}`);
       }
-      if (smaller.bytes.length > kind.maxBytes) throw new Error(`${tooLarge}, even as a phone-sized copy`);
-      return { mimeType: smaller.mimeType, dataUri: `data:${smaller.mimeType};base64,${smaller.bytes.toString("base64")}` };
     }
+    if (file.size > kind.maxBytes) throw new Error(tooLarge);
 
     const bytes = await file.read();
     return { mimeType, dataUri: `data:${mimeType};base64,${bytes.toString("base64")}` };

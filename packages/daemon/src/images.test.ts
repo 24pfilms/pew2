@@ -123,7 +123,9 @@ test("a picture too large to send says so instead of stalling the socket", async
     realpath: async (path: string) => path,
     open: async () => openStub(40 * 1024 * 1024),
   };
-  await expect(loadImage("out/plot.png", { cwd: root, fs })).rejects.toThrow(/too large/);
+  // No ffmpeg to make a phone-sized copy with, and the original is over the ceiling.
+  const env = { PEW2_HOME: root, PEW2_FFMPEG: join(root, "no-ffmpeg") };
+  await expect(loadImage("out/plot.png", { cwd: root, fs, env })).rejects.toThrow(/too large/);
 });
 
 test("stored history keeps its pictures, whatever API shape they were saved in", () => {
