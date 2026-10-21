@@ -31,6 +31,27 @@ export interface PhoneCopyKind {
 const making = new Map<string, Promise<Buffer>>();
 
 /**
+ * At most this many ffmpeg runs at once; the rest wait in order. A chat opened
+ * on thirty big pictures otherwise started thirty encoders together.
+ */
+export const MAX_RUNS = 3;
+let running = 0;
+const waiting: (() => void)[] = [];
+
+async function withRunSlot<T>(work: () => Promise<T>): Promise<T> {
+  if (running >= MAX_RUNS) await new Promise<void>((start) => waiting.push(start));
+  else running++;
+  try {
+    return await work();
+  } finally {
+    // The slot passes straight to the next in line, or is given back.
+    const next = waiting.shift();
+    if (next) next();
+    else running--;
+  }
+}
+
+/**
  * The copy of `path`, from the cache or made now by `make`, which writes the
  * copy to the file it is given. Throws whatever `make` throws.
  */
@@ -70,11 +91,14 @@ async function makeOrReuse(
   } catch {
     // Not made yet.
   }
-  const started = Date.now();
   await mkdir(dir, { recursive: true });
   const partial = join(dir, `${key}.${process.pid}.part.${kind.ext}`);
+  let started = 0;
   try {
-    await make(partial);
+    await withRunSlot(() => {
+      started = Date.now();
+      return make(partial);
+    });
   } catch (error) {
     await unlink(partial).catch(() => {});
     throw error;
