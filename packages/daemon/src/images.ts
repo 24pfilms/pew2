@@ -18,6 +18,7 @@ import { homedir, tmpdir } from "node:os";
 import { delimiter, isAbsolute, resolve, sep, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { keepDriveRoot } from "./drive-root.js";
+import { findInProject } from "./find-media.js";
 import { phoneSizedVideo } from "./phone-video.js";
 import { phoneSizedPicture, SHRINK_ABOVE as PICTURE_SHRINK_ABOVE } from "./phone-picture.js";
 
@@ -355,7 +356,18 @@ async function loadMedia(uri: string, options: MediaOptions, kind: MediaKind): P
   try {
     real = resolve(keepDriveRoot(await fs.realpath(path)));
   } catch {
-    throw new Error(`'${uri}' was not found`);
+    // A name without its folder ("render.mp4" for `projects/x/renders/render.mp4`)
+    // is looked for inside the project; the containment check below still applies.
+    const raw = uri.trim();
+    const relative = !isAbsolute(raw) && !raw.startsWith("~") && !raw.startsWith("file://");
+    const found = relative ? await findInProject(raw, options.cwd, (name) => kind.mimeType(name) !== undefined) : undefined;
+    if (!found) throw new Error(`'${uri}' was not found`);
+    try {
+      real = resolve(keepDriveRoot(await fs.realpath(found)));
+    } catch {
+      throw new Error(`'${uri}' was not found`);
+    }
+    console.log(`[media] found ${uri} at ${real}`);
   }
 
   // Roots are resolved the same way as the file. On macOS `/tmp` and
