@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { MAX_VIDEOS_PER_MESSAGE, videoName, videosFromText } from "./videos";
+import { expandBraces, MAX_VIDEOS_PER_MESSAGE, videoName, videosFromText } from "./videos";
 import { VIDEO_CACHE_CAP_BYTES, videoCacheName, videosToEvict, type CachedVideoFile } from "./videoCachePolicy";
 
 const paths = (text: string) => videosFromText(text).map((video) => video.src);
@@ -56,6 +56,21 @@ test("videos come in the order they are written", () => {
     "L:\\b b\\two.mov",
     "L:/c/three.webm",
   ]);
+});
+
+test("shorthand for a set of renders becomes one card per render", () => {
+  // As Orcastrator wrote it on 2026-10-21, which was one card for a file that does not exist.
+  expect(paths("- **Renders:** `renders\\launch-{open,mid,zero,end}.mp4`.")).toEqual([
+    "renders\\launch-open.mp4",
+    "renders\\launch-mid.mp4",
+    "renders\\launch-zero.mp4",
+    "renders\\launch-end.mp4",
+  ]);
+  expect(expandBraces("a-{x,y}-{1,2}.mp4")).toEqual(["a-x-1.mp4", "a-x-2.mp4", "a-y-1.mp4", "a-y-2.mp4"]);
+  // No comma, no set: left as written.
+  expect(expandBraces("L:\\{draft}\\a.mp4")).toEqual(["L:\\{draft}\\a.mp4"]);
+  // Still capped like any long list.
+  expect(paths("`c-{1,2,3,4,5,6}.mp4`")).toHaveLength(MAX_VIDEOS_PER_MESSAGE);
 });
 
 test("a card is titled with the file's own name", () => {

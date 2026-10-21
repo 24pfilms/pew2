@@ -48,6 +48,20 @@ export function videoName(path: string): string {
   return last ?? clean;
 }
 
+/**
+ * Shell-style shorthand spelled out: `cut-{open,end}.mp4` is `cut-open.mp4`
+ * and `cut-end.mp4`. Orcastrator lists a set of renders that way, and as one
+ * name the card asked for a file that does not exist. Groups without a comma,
+ * or nested ones, are left as written.
+ */
+export function expandBraces(path: string): string[] {
+  const group = /\{([^{}]*,[^{}]*)\}/.exec(path);
+  if (!group) return [path];
+  const before = path.slice(0, group.index);
+  const after = path.slice(group.index + group[0].length);
+  return group[1]!.split(",").flatMap((choice) => expandBraces(before + choice.trim() + after));
+}
+
 /** The videos named in a piece of message text, in the order they appear. */
 export function videosFromText(text: string): ChatVideo[] {
   if (!text || !/\.(?:mp4|mov|webm)/i.test(text)) return [];
@@ -61,13 +75,15 @@ export function videosFromText(text: string): ChatVideo[] {
 
   const seen = new Set<string>();
   const videos: ChatVideo[] = [];
-  for (const { path } of found.sort((a, b) => a.index - b.index)) {
-    if (path.length > 500 || isWebAddress(path)) continue;
-    const key = path.replace(/\\/g, "/").toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    videos.push({ src: path, name: videoName(path) });
-    if (videos.length >= MAX_VIDEOS_PER_MESSAGE) break;
+  for (const { path: written } of found.sort((a, b) => a.index - b.index)) {
+    if (written.length > 500 || isWebAddress(written)) continue;
+    for (const path of expandBraces(written)) {
+      const key = path.replace(/\\/g, "/").toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      videos.push({ src: path, name: videoName(path) });
+      if (videos.length >= MAX_VIDEOS_PER_MESSAGE) return videos;
+    }
   }
   return videos;
 }

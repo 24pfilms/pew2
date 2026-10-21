@@ -79,8 +79,10 @@ const VIDEO_FETCH_TIMEOUT_MS = 90_000;
  * Longest a picture may stay "loading" before it says so and offers a retry.
  * Pictures had no bound at all: one whose answer was lost with a dropped
  * socket spun for the rest of the app's life (2026-10-20, an Orcastrator chat).
+ * 90 s, not 45: the PC now sends two files at a time and queues the rest, so
+ * the thirtieth picture of a chat waits its turn before its clock is honest.
  */
-const IMAGE_FETCH_TIMEOUT_MS = 45_000;
+const IMAGE_FETCH_TIMEOUT_MS = 90_000;
 
 export function useDaemon(
   url: string,
