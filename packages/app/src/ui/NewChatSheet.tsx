@@ -501,7 +501,9 @@ function Row({
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={detail ? `${title}, ${detail}` : title}
-        hitSlop={touchSlop(theme.space(1))}
+        // The row's own size: rows are taller than a finger, and the old 20 of
+        // slop reached into the rows above and below and the descend arrow.
+        hitSlop={touchSlop(SHEET_ROW_HEIGHT)}
         onPress={onPress}
         style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
       >

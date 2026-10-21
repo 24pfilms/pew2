@@ -144,6 +144,13 @@ const COLUMN_PAD = theme.space(4);
 const STATUS_COL = 16;
 /** Project chips: below the touch size, with hit slop making up the rest. */
 const CHIP_HEIGHT = 32;
+/**
+ * A chip's touch area reaches half the gap to its neighbour, never into it.
+ * `touchSlop(theme.space(1))` added 20 on every side across a 6 gap, so a tap
+ * near one chip's edge picked the next one (2026-10-21: "the touch point was
+ * slightly offset").
+ */
+const CHIP_SLOP = theme.space(1.5) / 2;
 
 type Mark = "live" | "attention" | "unread" | undefined;
 
@@ -254,7 +261,8 @@ function LedAction({ label, a11y, onPress }: { label: string; a11y: string; onPr
 function ListHead({ label, children }: { label: string; children?: ReactNode }) {
   return (
     <View style={styles.listHead}>
-      <Led tone="dim">{label}</Led>
+      {/* The label gives way, so a long project name never pushes "New chat" off the edge. */}
+      <Led tone="dim" style={styles.listHeadLabel}>{label}</Led>
       {children}
     </View>
   );
@@ -380,7 +388,7 @@ const ProjectTab = memo(function ProjectTab({ path, label, a11y, selected, onSel
       accessibilityRole="button"
       accessibilityLabel={a11y}
       accessibilityState={{ selected }}
-      hitSlop={touchSlop(theme.space(1))}
+      hitSlop={CHIP_SLOP}
       onPress={() => {
         if (selected) return;
         haptics.select();
@@ -399,7 +407,7 @@ function MoreChip({ label, a11y, icon, onPress }: { label: string; a11y: string;
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={a11y}
-      hitSlop={touchSlop(theme.space(1))}
+      hitSlop={CHIP_SLOP}
       onPress={() => {
         haptics.tap();
         onPress();
@@ -525,6 +533,51 @@ function ChipRow({ projects, selectedPath, onSelect, limit, noun, all }: ChipRow
   );
 }
 
+/** Studio projects shown before "+N more" while none is picked: a short row, so the chats show. */
+const VISIBLE_STUDIO_PROJECTS = 3;
+
+/**
+ * The studio project picked, folded into one line: both chip rows took most of
+ * the drawer and buried the chats under them (2026-10-21, Orcastrator). Tapping
+ * the line opens the chips again; the cross goes back to every chat in the studio.
+ */
+function PickedProject({ studio, project, onChange, onClear }: { studio: string; project: string; onChange: () => void; onClear: () => void }) {
+  const agent = useAgentColor();
+  return (
+    <View style={[styles.picked, { borderColor: agent, backgroundColor: withAlpha(agent, 0.1) }]}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${project} in ${studio}. Change project`}
+        onPress={() => {
+          haptics.tap();
+          onChange();
+        }}
+        style={({ pressed }) => [styles.pickedMain, pressed && styles.pressed]}
+      >
+        <Ionicons name="folder-open-outline" size={16} color={agent} />
+        {/* The project alone: two names shared the line and cut each other short. */}
+        <Text style={[styles.pickedText, { color: agent }]} numberOfLines={1}>{project}</Text>
+        {/* An arrow, not the word: at large text sizes "Change" took the name's room. */}
+        <Ionicons name="chevron-down" size={18} color={theme.color.text} />
+
+      </Pressable>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Every chat in ${studio}`}
+        // No slop: both halves are full touch height, and a wider cross took
+        // taps meant for the arrow beside it.
+        onPress={() => {
+          haptics.select();
+          onClear();
+        }}
+        style={({ pressed }) => [styles.pickedClear, pressed && styles.pressed]}
+      >
+        <Ionicons name="close" size={18} color={theme.color.textDim} />
+      </Pressable>
+    </View>
+  );
+}
+
 /** The first chip of each row. Stable objects, so the rows' memos hold. */
 const ALL_PROJECTS = { label: "All", a11y: "All projects" };
 /** A studio row with nowhere to report a pick (previews): nothing happens. */
@@ -590,6 +643,15 @@ function SidebarView({
     () => ({ label: "All", a11y: `Every chat in ${selectedProject?.name ?? "this project"}` }),
     [selectedProject?.name],
   );
+  // With a studio project picked the chips fold to one line, unless reopened to change it.
+  const [choosing, setChoosing] = useState(false);
+  const pickStudio = useCallback(
+    (path?: string) => {
+      setChoosing(false);
+      (onSelectStudio ?? noStudioPick)(path);
+    },
+    [onSelectStudio, setChoosing],
+  );
   // Narrowed before the recent-work cap, or a project's older conversations
   // would be cut away by a window they were never in.
   const visible = useMemo(
@@ -647,7 +709,7 @@ function SidebarView({
               accessibilityLabel={dashboard.available ? "Dashboard" : `Dashboard, unavailable${dashboard.reason ? `. ${dashboard.reason}` : ""}`}
               accessibilityState={{ disabled: !dashboard.available }}
               disabled={!dashboard.available}
-              hitSlop={touchSlop(theme.space(1))}
+              hitSlop={touchSlop(RAIL_BUTTON)}
               onPress={() => {
                 haptics.tap();
                 onOpenDashboard();
@@ -660,7 +722,7 @@ function SidebarView({
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`Connection details for ${machineLabel}${update ? (update.automatic ? ", updating pew2" : ", update available") : ""}`}
-            hitSlop={touchSlop(theme.space(1))}
+            hitSlop={touchSlop(RAIL_BUTTON)}
             onPress={() => {
               haptics.tap();
               onOpenConnection();
@@ -704,6 +766,15 @@ function SidebarView({
                   drawer's swipe-to-close, which took the swipe, so projects past
                   the edge could not be reached. The newest show; "+N more"
                   opens the rest in a capped area that scrolls up and down. */}
+              {selectedProject && studioProject && !choosing ? (
+                <PickedProject
+                  studio={selectedProject.name}
+                  project={studioProject.name}
+                  onChange={() => setChoosing(true)}
+                  onClear={() => pickStudio(undefined)}
+                />
+              ) : (
+              <>
               {projects.length > 0 && (
                 <ChipRow
                   key={activeProviderId ?? "all-providers"}
@@ -730,12 +801,15 @@ function SidebarView({
                     key={`${activeProviderId ?? ""}:${selectedProject.path}`}
                     projects={studio}
                     selectedPath={studioProject?.path}
-                    onSelect={onSelectStudio ?? noStudioPick}
-                    limit={VISIBLE_PROJECTS}
+                    onSelect={pickStudio}
+                    // Reopened to change the pick: room to choose. Otherwise a short row.
+                    limit={studioProject ? VISIBLE_PROJECTS : VISIBLE_STUDIO_PROJECTS}
                     noun="studio project"
                     all={allOfStudio}
                   />
                 </>
+              )}
+              </>
               )}
 
               {/* Names what the list holds, so "am I in the right place?" is
@@ -901,6 +975,18 @@ const styles = StyleSheet.create({
   },
   tabText: { color: theme.color.textDim, fontSize: theme.font.small },
   studioHead: { paddingHorizontal: COLUMN_PAD, marginTop: theme.space(4) },
+  picked: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderRadius: theme.radius.pill,
+    marginHorizontal: COLUMN_PAD,
+    marginTop: theme.space(3),
+    minHeight: theme.size.touch,
+  },
+  pickedMain: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: theme.space(2), paddingLeft: theme.space(3), minHeight: theme.size.touch },
+  pickedText: { flex: 1, minWidth: 0, fontSize: theme.font.small },
+  pickedClear: { paddingHorizontal: theme.space(3), minHeight: theme.size.touch, justifyContent: "center" },
   moreTab: { borderStyle: "solid", borderColor: theme.color.textDim },
   moreText: { color: theme.color.text },
   iconTab: { flexDirection: "row", alignItems: "center", gap: theme.space(1) },
@@ -927,7 +1013,8 @@ const styles = StyleSheet.create({
     // Constant height with or without the action, so choosing a project never shoves the list.
     minHeight: theme.size.touch,
   },
-  ledAction: { minHeight: theme.size.touch, justifyContent: "center" },
+  listHeadLabel: { flexShrink: 1 },
+  ledAction: { minHeight: theme.size.touch, justifyContent: "center", flexShrink: 0 },
 
   list: { flex: 1 },
   listContent: { paddingHorizontal: COLUMN_PAD },
